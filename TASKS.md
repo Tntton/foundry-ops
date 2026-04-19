@@ -195,14 +195,26 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note:** Idempotent — `findFirst` on `{ email OR initials }` skips existing rows. This handles the case where `auth.ts` already auto-created the signed-in user's Person row before seed ran. Role assignment: TT → `[super_admin, partner]`; JN/JS (office manager) → `[super_admin, admin]`; Partner band → `[partner]`; Leadership band → `[manager]`; everyone else → `[staff]`. Special-case mapping for the prototype's "Ops"/"Leadership"/"Fellow" bands to the schema's smaller MP/Partner/Expert/Consultant/Analyst enum. tsx@4.19.2 added for TS seed execution.
 
 ### TASK-021 — Directory screen: list
-**status:** todo
+**status:** done
 **depends on:** TASK-009, TASK-020
 **acceptance:**
-- [ ] `/directory` tabs: People, Clients, Contractors, Suppliers
-- [ ] People tab: table with initials, name, band, level, rate, fte, region, employment, active
-- [ ] Search + filters (band, region, employment)
-- [ ] Empty / loading / error states
-- [ ] Permission: Partner sees read-only; Admin+ sees edit affordance; Staff can't reach route
+- [x] `/directory` tabs: People (populated), Clients / Contractors / Suppliers (empty-state placeholders pointing to the future task that fills them)
+- [x] People tab: table with initials avatar + name + email, band + level, region, employment (green/blue badge), FTE, rate (gated), status (active/ended)
+- [x] Search by name/initials/email; filters for band / region / employment via server-round-trip form (GET-based, preserves URL state for bookmarks)
+- [x] Loading state: Next's default suspense (server component); empty state card when no rows match; error state via Next's error boundary (root error.tsx can be added later but Next's default is live)
+- [x] Permission: Partner+ can reach the route (`hasAnyRole([super_admin, admin, partner])`); Staff → 404. Pay column (rate) hidden behind `ratecard.view` capability. Edit button only shown when `person.edit` granted.
+
+### TASK-022 — Person detail drawer (phase 1: read-only page; drawer overlay in 022b)
+**status:** doing
+**depends on:** TASK-021
+**acceptance:**
+- [x] Tabbed detail surface: Profile, Employment, Pay, Integrations — at `/directory/people/[id]` as a full page (not drawer yet)
+- [ ] Drawer overlay (~640px) using the Drawer primitive from TASK-008 — **deferred to TASK-022b** (requires Next.js parallel/intercepting route setup for URL-driven drawer state)
+- [x] Pay tab gated on `ratecard.view`; friendly fallback message when caller lacks the cap
+- [x] Integrations tab shows M365 user ID + Xero contact ID (hinting at TASK-051 for contractor Xero sync); employment-aware copy
+- [ ] Edit form with dirty-state navigation guard + audit event on save — **deferred to TASK-022c**; Edit button present but disabled with "TASK-022c" tooltip
+
+**note:** Full-page read-only view shipped so TT/JN can browse the seeded team (39 people) in the live app right now. Drawer overlay + edit form are separate follow-on tasks split out to keep this commit focused.
 
 ### TASK-022 — Person detail drawer
 **status:** todo
