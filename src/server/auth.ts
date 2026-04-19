@@ -29,7 +29,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     MicrosoftEntraID({
       clientId: requireEnv('ENTRA_CLIENT_ID'),
       clientSecret: requireEnv('ENTRA_CLIENT_SECRET'),
-      issuer: `https://login.microsoftonline.com/${requireEnv('ENTRA_TENANT_ID')}/v2.0`,
+      // tenantId is read at runtime by the provider's customFetch to rewrite
+      // the OIDC issuer from "{tenantid}" → the real tenant. It's in the source
+      // but not yet in @auth/core@0.37.2's public types — fixed on main.
+      // @ts-expect-error — see note above
+      tenantId: requireEnv('ENTRA_TENANT_ID'),
     }),
   ],
   session: {
