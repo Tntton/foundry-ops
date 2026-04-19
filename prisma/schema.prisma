@@ -13,6 +13,24 @@ datasource db {
 }
 
 // ============================================================================
+// AUTH — magic-link tokens for non-Entra (contractor) sign-in (TASK-004b)
+// ============================================================================
+
+model MagicLink {
+  id         String    @id @default(cuid())
+  email      String
+  tokenHash  String    @unique // sha256 hex of the token; raw token only ever lives in the email
+  expiresAt  DateTime
+  consumedAt DateTime? // single-use; set on successful verify
+  createdAt  DateTime  @default(now())
+  ip         String?
+  userAgent  String?
+
+  @@index([email, createdAt]) // rate-limit query: recent sends per email
+  @@index([expiresAt])          // sweep expired rows
+}
+
+// ============================================================================
 // ENUMS
 // ============================================================================
 

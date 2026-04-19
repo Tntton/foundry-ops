@@ -77,15 +77,18 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note:** The contractor magic-link flow was originally part of this task; split out as TASK-004b so TASK-004 can land cleanly with staff SSO. 004b depends on 004 and can land independently. Required env vars (AUTH_SECRET, ENTRA_*) documented in `.env.example`; real values in `.env.local` (gitignored). `src/types/next-auth.d.ts` augments the Session + JWT types with Foundry fields. `src/server/env.ts` provides `requireEnv()` so missing vars fail loudly at startup rather than at first request.
 
 ### TASK-004b — Contractor magic-link via Resend
-**status:** todo
+**status:** done
 **depends on:** TASK-004
 **acceptance:**
-- [ ] `/auth/magic-link/send` server action: accepts a contractor email, generates a 32-byte random token, stores hashed (sha256) in a new `MagicLink` model with 15-min TTL
-- [ ] Email sent via Resend (`RESEND_API_KEY`, `EMAIL_FROM`); subject + body designed for external contractors, with a deep link to `/auth/magic-link/verify?token=…`
-- [ ] `/auth/magic-link/verify` route: verifies hash, burns the token (single-use), issues Auth.js JWT session mapped to a Person row (must already exist; contractors are created via the Directory wizard per A2)
-- [ ] Non-existent / expired / reused tokens return a 401 with generic "invalid or expired link" message
-- [ ] Rate-limit send to 3 per email per hour
-- [ ] Schema migration: `MagicLink` model added
+- [x] POST `/api/auth/magic-link/send`: accepts `{ email }`, validates with Zod, generates 32-byte `base64url` token, stores sha256 hash in `MagicLink` with 15-min TTL. Raw token only lives in the email. Returns generic `{ ok: true }` even on unknown email / send failure to prevent user enumeration.
+- [x] Email rendered via Resend (`RESEND_API_KEY`, `EMAIL_FROM`); green brand-coloured CTA button; 15-min + single-use messaging; plain-text fallback
+- [x] Page `/auth/magic-link/verify?token=…`: calls Auth.js `signIn('magic-link', { token })` which invokes the new **Credentials provider** — `authorize()` calls `verifyMagicLink()`, which burns the link and returns the Person. Invalid/expired/consumed/unknown-email all return null from authorize → Auth.js renders the fallback error page (UI shows "Link invalid or expired").
+- [x] Rate-limited: 3 sends per email per hour (DB count query over `createdAt`); returns 429 when breached
+- [x] Schema migration `20260419142312_magic_link` applied — `MagicLink` model: `tokenHash @unique`, `@@index([email, createdAt])` for rate-limit query, `@@index([expiresAt])` for future sweep job
+- [x] `signIn` callback updated: magic-link provider passes through without `@foundry.health` suffix check (contractors can have any email). `jwt` callback resolves email from either OIDC profile or Credentials `user.email`.
+- [x] 7 unit tests for token primitives (`generateToken` is base64url + 43 chars + unique; `hashToken` is deterministic, 64 hex chars, doesn't leak raw token)
+
+**note on completion:** Custom MagicLink model rather than the Auth.js Email provider (which requires the full Prisma Adapter with User/Account/Session/VerificationToken tables, conflicting with Person-as-identity). Rate-limit check is DB-based; a cleanup job to sweep expired/consumed links is a future chore. Zod added (`3.23.8`) for request body validation — will be reused across future API routes.
 
 **context:** Custom implementation (not Auth.js email provider) because the Auth.js email provider requires the full Prisma Adapter with User/Account/Session/VerificationToken tables, which conflicts with our Person-as-identity model. Our `MagicLink` is a lightweight, single-purpose token table.
 

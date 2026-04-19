@@ -1,8 +1,10 @@
 import NextAuth from 'next-auth';
 import MicrosoftEntraID from 'next-auth/providers/microsoft-entra-id';
+import Credentials from 'next-auth/providers/credentials';
 import type { Role } from '@prisma/client';
 import { prisma } from '@/server/db';
 import { requireEnv } from '@/server/env';
+import { verifyMagicLink } from '@/server/magic-link';
 
 const REQUIRED_EMAIL_SUFFIX = '@foundry.health';
 const SESSION_MAX_AGE_SECONDS = 12 * 60 * 60; // 12 hours
@@ -60,6 +62,30 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // which is rejected with AADSTS50194 for apps not configured as multi-tenant.
       issuer: `https://login.microsoftonline.com/${requireEnv('ENTRA_TENANT_ID')}/v2.0`,
     }),
+    Credentials({
+      id: 'magic-link',
+      name: 'Magic Link',
+      credentials: {
+        token: { label: 'Magic-link token', type: 'text' },
+      },
+      async authorize(credentials) {
+        const token =
+          typeof credentials?.['token'] === 'string' ? credentials['token'] : '';
+        if (!token) return null;
+        try {
+          const identity = await verifyMagicLink(token);
+          // Auth.js's User shape — the signIn/jwt callbacks handle the Foundry-specific fields.
+          return {
+            id: identity.personId,
+            email: identity.email,
+            name: `${identity.firstName} ${identity.lastName}`,
+          };
+        } catch (err) {
+          console.error('[auth/magic-link] verify failed:', err);
+          return null;
+        }
+      },
+    }),
   ],
   session: {
     strategy: 'jwt',
@@ -77,7 +103,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
   },
   callbacks: {
-    async signIn({ profile, account }) {
+    async signIn({ profile, account, user }) {
+      // Magic-link sign-in already verified through authorize() — allow through.
+      // signIn callback still runs; no need to re-check email suffix since
+      // contractors can legitimately have non-@foundry.health addresses.
+      if (account?.provider === 'magic-link') {
+        if (!user?.email) return false;
+        return true;
+      }
+
       const email = extractEmail(profile);
       if (!email) {
         console.error(
@@ -133,8 +167,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       }
     },
 
-    async jwt({ token, profile }) {
-      const email = extractEmail(profile);
+    async jwt({ token, profile, user }) {
+      // Resolve email from either OIDC profile (Entra) or the authorize() user (magic-link).
+      const email = extractEmail(profile) ?? (user?.email ? user.email.toLowerCase() : undefined);
       if (email) {
         const person = await prisma.person.findUnique({
           where: { email },
