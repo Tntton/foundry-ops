@@ -37,17 +37,19 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note on completion:** `prisma/schema.prisma` was copied verbatim from the root `schema.prisma` ahead of TASK-002 so CI's `prisma validate` step passes from day one. TASK-002 should either (a) drop the root copy in favour of `prisma/schema.prisma`, or (b) add a CI check that the two remain byte-identical — current state risks drift. `prisma:validate` script injects a placeholder `DATABASE_URL` since Prisma 5 resolves env vars even for validate-only. `.eslintrc.json` had to explicitly declare `@typescript-eslint` plugin + parser (eslint-config-next's auto-detection wasn't activating the rule).
 
 ### TASK-002 — Postgres + Prisma setup
-**status:** todo
+**status:** done
 **depends on:** TASK-001
 **acceptance:**
-- [x] `prisma/schema.prisma` copied from this bundle (verbatim) — done in TASK-001 to unblock CI prisma validate; root `schema.prisma` remains as the handoff snapshot while `prisma/schema.prisma` becomes the living working copy
-- [ ] `pnpm prisma migrate dev --name init` succeeds against the Supabase DB (not local Docker — see context below)
-- [ ] `pnpm prisma generate` runs in `postinstall`
-- [ ] ~~Docker compose (or devcontainer) provides local Postgres~~ — **dropped per user 2026-04-19; use hosted Supabase instead**
-- [ ] `.env.example` documents `DATABASE_URL` (pooled / pgbouncer-compatible for app runtime) and `DIRECT_URL` (direct connection for migrations) with Supabase URL patterns
-- [ ] `src/server/db.ts` exports a singleton `PrismaClient` with the standard Next.js HMR-safe pattern
+- [x] `prisma/schema.prisma` copied from this bundle (verbatim) — copied in TASK-001; `directUrl = env("DIRECT_URL")` added to the datasource block (required for Supabase pgbouncer — pooler can't run migrations in transaction mode)
+- [x] `pnpm prisma migrate dev --name init` succeeds against the Supabase DB — initial migration `20260419123837_init` applied to Supabase project `epadyqrgutfzvwwxyxjm` (ap-southeast-2)
+- [x] `pnpm prisma generate` runs in `postinstall`
+- [x] ~~Docker compose~~ — dropped; Supabase is the sole Postgres host per user 2026-04-19
+- [x] `.env.example` documents `DATABASE_URL` (pooled, port 6543, `?pgbouncer=true`) and `DIRECT_URL` (direct, port 5432) with Supabase URL patterns; actual values in `.env.local` (gitignored)
+- [x] `src/server/db.ts` exports a singleton `PrismaClient` with the standard Next.js HMR-safe pattern (dev-mode globalThis cache)
 
-**context:** Per user 2026-04-19, Supabase is the sole Postgres host — no local Docker. Implication: `prisma migrate dev` will land migrations directly on the Supabase DB from day one. This is acceptable during the MVP testing phase (TT + JN parallel-run); once real client data lands, schema changes should shift to a review/deploy flow rather than `migrate dev`. TASK-002 will wait on the user providing the Supabase project's connection strings (DATABASE_URL pooler + DIRECT_URL non-pooler).
+**context:** Supabase is the sole Postgres host (no local Docker) per user 2026-04-19. Implication: `prisma migrate dev` lands migrations directly on the Supabase DB from day one — acceptable during the MVP testing phase (TT + JN parallel-run); once real client data lands, schema changes should shift to `prisma migrate deploy` via CI rather than `migrate dev` on a dev workstation.
+
+**note on completion:** `@prisma/client@5.20.0` auto-added as a dependency by `prisma migrate dev` (Prisma installs it if missing). `prisma:validate` script updated to inject placeholder `DIRECT_URL` alongside `DATABASE_URL` (Prisma 5 resolves every env reference on validate, even offline). Migration SQL at `prisma/migrations/20260419123837_init/migration.sql` is committed — reproducible for CI and future clones.
 
 ### TASK-003 — Tailwind theme from design tokens
 **status:** todo
