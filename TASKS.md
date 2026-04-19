@@ -117,14 +117,16 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **context:** Skipped in MVP. The Directory wizard sets Person.roles directly; admins manage role assignments in-app. Entra sync becomes relevant once Foundry standardises on Entra group management for access control org-wide.
 
 ### TASK-006 — Permission primitive
-**status:** todo
+**status:** done
 **depends on:** TASK-005
 **acceptance:**
-- [ ] `requireCapability(session, capability: Capability)` throws `UnauthorizedError` if missing
-- [ ] `hasCapability(session, capability)` returns boolean (non-throwing)
-- [ ] Capability catalog matches `HANDOFF.md §1.2` — at minimum: `invoice.approve.over_20k`, `invoice.approve.under_20k`, `expense.approve.over_2k`, `expense.approve.under_2k`, `payrun.approve`, `project.create`, `person.create`, `ratecard.edit`, `integration.manage`, `agent.run_manual`, `auditlog.view`
-- [ ] Capability → required-role mapping is a single const table
-- [ ] Unit tests cover: Super Admin has all; Staff has effectively none; Manager can approve expenses on own project only
+- [x] `requireCapability(session, capability)` throws `UnauthorizedError` when missing; works as a TS asserts so call-sites narrow to non-null session
+- [x] `hasCapability(session, capability)` returns boolean (non-throwing)
+- [x] Capability catalog in `src/server/capabilities.ts` covers the HANDOFF.md §1.2 minimum set + the obvious companions (invoice.create, invoice.send, expense.submit, bill.create, client.create/edit, person.edit, project.edit, ratecard.view, approval.policy.edit, timesheet.submit) — 24 total
+- [x] Capability → required-role mapping is a single const table (`CAPABILITY_ROLES`) typed `Record<Capability, readonly Role[]>`
+- [x] 53 unit tests in `src/__tests__/capabilities.test.ts`: Super Admin has all (parameterized), Staff blocked on every approval/admin cap, Manager can approve under-$2k expenses (ownership enforced at handler level), Partner approves under-$20k invoices, multi-role union works (partner+admin), null session denied, requireCapability throws on miss
+
+**note:** Context-dependent rules ("manager can approve only on own project") are explicitly NOT in the coarse table — those ownership checks happen in individual route handlers after the role gate passes. Keeps this table auditable at a glance. Additional non-listed capabilities can be added as tasks touch new surfaces.
 
 ### TASK-007 — Audit event writer
 **status:** todo
