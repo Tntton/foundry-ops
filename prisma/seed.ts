@@ -65,6 +65,20 @@ function mapEmployment(emp?: string): Employment {
   return 'ft';
 }
 
+async function ensureUniqueInitials(base: string, excludeId?: string): Promise<string> {
+  let candidate = base;
+  let suffix = 1;
+  // Loop — fixture duplicates get '2', '3', etc.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const clash = await prisma.person.findUnique({ where: { initials: candidate } });
+    if (!clash || (excludeId && clash.id === excludeId)) return candidate;
+    suffix += 1;
+    candidate = `${base}${suffix}`;
+    if (suffix > 99) throw new Error(`Could not generate unique initials for ${base}`);
+  }
+}
+
 function rolesForPerson(initials: string, band: string, title?: string): Role[] {
   if (MANAGING_PARTNER_INITIALS.has(initials)) return ['super_admin', 'partner'];
   if (OFFICE_MANAGER_INITIALS.has(initials) || /office manager|coo|operations/i.test(title ?? ''))
@@ -119,36 +133,66 @@ async function seedTeam() {
       continue;
     }
     const email = row.email.toLowerCase();
-    // Skip if either email or initials already taken (e.g. auth.ts auto-created
-    // the Person row on first sign-in, before seed ran).
-    const existing = await prisma.person.findFirst({
-      where: { OR: [{ email }, { initials: row.initials }] },
-    });
+    // Check whether a row exists by email (auth.ts may have auto-created one
+    // on first sign-in before seed ran). If so, patch key fields from the
+    // fixture — initials, firstName, lastName, band, level, roles — so the
+    // fixture stays authoritative. Don't touch external identities or other
+    // fields the running app may have populated.
+    const existing = await prisma.person.findUnique({ where: { email } });
+
+    const rate = row.rate ?? 0;
+    const rateUnit = row.rateUnit === '/h' ? 'hour' : 'day';
+    const level = row.level ?? '—';
+    const band = mapBand(row.band, row.initials);
+    const roles = rolesForPerson(row.initials, row.band, row.title);
+
     if (existing) {
-      skipped += 1;
+      const needsPatch =
+        existing.firstName !== row.first ||
+        existing.lastName !== row.last ||
+        existing.band !== band ||
+        existing.level !== level ||
+        JSON.stringify(existing.roles.slice().sort()) !== JSON.stringify([...roles].sort());
+      // Prefer the fixture initials; if taken by a different row, keep the existing initials on our row.
+      let nextInitials = existing.initials;
+      if (existing.initials !== row.initials) {
+        nextInitials = await ensureUniqueInitials(row.initials, existing.id);
+      }
+      if (needsPatch || nextInitials !== existing.initials) {
+        await prisma.person.update({
+          where: { id: existing.id },
+          data: {
+            initials: nextInitials,
+            firstName: row.first,
+            lastName: row.last,
+            band,
+            level,
+            roles,
+          },
+        });
+        skipped += 1;
+        console.log(`  patched ${email}: initials=${nextInitials}, roles=[${roles.join(',')}]`);
+      } else {
+        skipped += 1;
+      }
       continue;
     }
 
-    const rate = row.rate ?? 0;
-    // 'salary' rate unit in the prototype → treat as day (rate is 0 in those rows anyway).
-    const rateUnit = row.rateUnit === '/h' ? 'hour' : 'day';
-    // Some rows (e.g. ops staff) have no level code — fall back to '—'.
-    const level = row.level ?? '—';
-
+    const newInitials = await ensureUniqueInitials(row.initials);
     await prisma.person.create({
       data: {
         email,
-        initials: row.initials,
+        initials: newInitials,
         firstName: row.first,
         lastName: row.last,
-        band: mapBand(row.band, row.initials),
+        band,
         level,
         employment: mapEmployment(row.employment),
         fte: row.fte ?? 1.0,
         region: mapRegion(row.region),
         rateUnit,
         rate: toCents(rate),
-        roles: rolesForPerson(row.initials, row.band, row.title),
+        roles,
         startDate,
       },
     });
