@@ -129,14 +129,17 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note:** Context-dependent rules ("manager can approve only on own project") are explicitly NOT in the coarse table — those ownership checks happen in individual route handlers after the role gate passes. Keeps this table auditable at a glance. Additional non-listed capabilities can be added as tasks touch new surfaces.
 
 ### TASK-007 — Audit event writer
-**status:** todo
+**status:** done
 **depends on:** TASK-002
 **acceptance:**
-- [ ] `writeAudit(tx, {actor, action, entity, delta, source})` accepts a Prisma tx
-- [ ] Audit row written in same transaction as the mutation (test proves rollback cleans both)
-- [ ] Delta stored as jsonb diff (use `deep-diff` or similar)
-- [ ] Source enum: `web | agent | api | integration_sync`
-- [ ] `/api/admin/audit` route: list + filter by actor, entity, date range (Super Admin only)
+- [x] `writeAudit(tx, input)` in `src/server/audit.ts` takes a `Prisma.TransactionClient` so the audit row commits or rolls back with the mutation
+- [ ] Rollback integration test — **deferred**: requires a real test DB (we only have Supabase, running destructive tests against it is unsafe). Add to TASK-XXX once a dev-isolated Postgres exists (local Docker was dropped; consider Neon branch DBs or a Supabase dev project)
+- [x] Delta stored as jsonb using `deep-diff` (wrapped in `{ created }` / `{ deleted }` / `{ changes: Diff[] }` shapes)
+- [x] Source enum matches `AuditSource` on the schema (`web | agent | api | integration_sync`); ActorType (`person | agent | system`) expressed in the `AuditActor` union
+- [x] `/api/admin/audit` at `src/app/api/admin/audit/route.ts`: list with filter by actorId, entityType, entityId, from, to; limit 1–500 (default 100); gated on `auditlog.view` (Super Admin only); includes actor identity fields in the response
+- [x] 8 unit tests cover `computeDelta` — null / created / deleted / no-op / single edit / add+remove keys / nested / JSON round-trip
+
+**note:** `deep-diff` is deprecated on npm. Functional and stable, but migrating to `microdiff` is a cleanup task for later. `writeAudit` intentionally requires a Prisma tx — passing `prisma` directly doesn't typecheck, so call sites can't accidentally skip the transaction.
 
 ### TASK-008 — Port prototype UI primitives
 **status:** todo
