@@ -1,0 +1,227 @@
+[
+  {
+    "code": "L4",
+    "label": "Partner",
+    "band": "Partner",
+    "desc": "Key stakeholder, owner and decision-maker in equal partnership. Firm leadership.",
+    "quals": "MD MPH and/or PhD, or industry leadership",
+    "industry": "MBB/D consulting or peak industry experience — may have been a former Partner",
+    "rates": {
+      "AU": null,
+      "NZ": null,
+      "US": null,
+      "UK": null
+    },
+    "tone": "amber"
+  },
+  {
+    "code": "L3",
+    "label": "Associate Partner",
+    "band": "Partner",
+    "desc": "Leads projects and initiatives in areas of expertise. On track to equity partnership.",
+    "quals": "MD MPH and/or PhD, or industry leadership",
+    "industry": "MBB EM experience or peak industry consulting experience",
+    "rates": {
+      "AU": null,
+      "NZ": null,
+      "US": null,
+      "UK": null
+    },
+    "tone": "amber"
+  },
+  {
+    "code": "L2",
+    "label": "Project Director / Senior Manager",
+    "band": "Leadership",
+    "desc": "Leads projects and initiatives with little oversight. Owns client relationships.",
+    "quals": "16+ yrs experience",
+    "industry": "MBB EM / Senior ASC experience or peak industry consulting",
+    "rates": {
+      "AU": 180,
+      "NZ": 180,
+      "US": 130,
+      "UK": 90
+    },
+    "tone": "blue"
+  },
+  {
+    "code": "L1",
+    "label": "Project Manager / Manager",
+    "band": "Leadership",
+    "desc": "Leads key workstreams for projects and initiatives.",
+    "quals": "MD MPH and/or PhD, or industry leadership",
+    "industry": "Significant specialist industry consulting experience",
+    "rates": {
+      "AU": 200,
+      "NZ": 200,
+      "US": 150,
+      "UK": 100
+    },
+    "tone": "blue"
+  },
+  {
+    "code": "E2",
+    "label": "Senior Expert",
+    "band": "Expert",
+    "desc": "Senior industry leader, supporter of FH’s mission. Firm-of-record expert.",
+    "quals": "Emeritus or nationally/internationally recognised expert",
+    "industry": "Highly experienced, high-profile individual",
+    "rates": {
+      "AU": 300,
+      "NZ": 300,
+      "US": 200,
+      "UK": 150
+    },
+    "tone": "accent"
+  },
+  {
+    "code": "E1",
+    "label": "Expert",
+    "band": "Expert",
+    "desc": "Expert in chosen field, supports FH on workstreams.",
+    "quals": "Professor / senior academic",
+    "industry": "Clinical or scientific domain expert with previous experience",
+    "rates": {
+      "AU": 200,
+      "NZ": 200,
+      "US": 140,
+      "UK": 100
+    },
+    "tone": "accent"
+  },
+  {
+    "code": "T3",
+    "label": "Senior Consultant",
+    "band": "Consultant",
+    "desc": "Very experienced consulting team member, leads workstreams.",
+    "quals": "MD / MBBS / PhD and relevant masters",
+    "industry": "Fellowed (eg RACGP), or at least PGY6 · may have MBB/Big4 experience",
+    "rates": {
+      "AU": 150,
+      "NZ": 150,
+      "US": 100,
+      "UK": 75
+    },
+    "tone": "green"
+  },
+  {
+    "code": "F2",
+    "label": "Fellow",
+    "band": "Fellow",
+    "desc": "Recently fellowed in a clinical specialty without consulting experience, but with notable industry or peak body involvement. Supports with deep technical knowledge, with the intent of building exposure to consulting.",
+    "quals": "MD / MBBS / PhD and relevant masters",
+    "industry": "Fellowed (e.g. RANZCR) · no MBB experience",
+    "rates": {
+      "AU": 150,
+      "NZ": 150,
+      "US": 100,
+      "UK": 75
+    },
+    "tone": "teal"
+  },
+  {
+    "code": "F1",
+    "label": "Junior Fellow",
+    "band": "Fellow",
+    "desc": "Nearing fellowship in a clinical specialty and without consulting experience, but with notable industry or peak body involvement.",
+    "quals": "MD / MBBS / PhD and relevant masters",
+    "industry": "Advanced trainee with significant relevant experience · no MBB experience",
+    "rates": {
+      "AU": 120,
+      "NZ": 120,
+      "US": 80,
+      "UK": 60
+    },
+    "tone": "teal"
+  },
+  {
+    "code": "T2",
+    "label": "Consultant",
+    "band": "Consultant",
+    "desc": "Experienced team member, capable of supporting & leading within workstreams.",
+    "quals": "MD / MBBS / PhD and relevant masters",
+    "industry": "Over 4 years of clinical experience · may have MBB Senior BA background",
+    "rates": {
+      "AU": 120,
+      "NZ": 120,
+      "US": 80,
+      "UK": 60
+    },
+    "tone": "green"
+  },
+  {
+    "code": "T1",
+    "label": "Consultant (junior)",
+    "band": "Consultant",
+    "desc": "Experienced consultant, recently graduated from medical school.",
+    "quals": "MD / MBBS, or late-stage PhD candidate",
+    "industry": "Up to 4 yrs clinical/other relevant experience",
+    "rates": {
+      "AU": 80,
+      "NZ": 80,
+      "US": 50,
+      "UK": 40
+    },
+    "tone": "green"
+  },
+  {
+    "code": "A3",
+    "label": "Senior Analyst",
+    "band": "Analyst",
+    "desc": "Experienced analyst, recently graduated from medical school.",
+    "quals": "MD / MBBS",
+    "industry": "Senior undergraduate (final year) · may have several years at FH or other",
+    "rates": {
+      "AU": 65,
+      "NZ": 65,
+      "US": 40,
+      "UK": 30
+    },
+    "tone": ""
+  },
+  {
+    "code": "A2",
+    "label": "Analyst",
+    "band": "Analyst",
+    "desc": "Emerging consulting team member, capable of supporting across work.",
+    "quals": "Undergraduate degree, MD candidate",
+    "industry": "May have 180° training and experience",
+    "rates": {
+      "AU": 50,
+      "NZ": 45,
+      "US": 30,
+      "UK": 25
+    },
+    "tone": ""
+  },
+  {
+    "code": "A1",
+    "label": "Junior Analyst",
+    "band": "Analyst",
+    "desc": "New team member — probationary rate (6–12 months).",
+    "quals": "Undergraduate degree, MD candidate",
+    "industry": "May have some experience or training",
+    "rates": {
+      "AU": 45,
+      "NZ": 27.5,
+      "US": null,
+      "UK": 20
+    },
+    "tone": ""
+  },
+  {
+    "code": "IO",
+    "label": "Intern",
+    "band": "Intern",
+    "desc": "New team member — probationary rate.",
+    "quals": "MD or other relevant degree candidate",
+    "industry": "Non-clinical undergraduate",
+    "rates": {
+      "AU": 0,
+      "NZ": 0,
+      "US": null,
+      "UK": 0
+    },
+    "tone": ""
+  }
+]

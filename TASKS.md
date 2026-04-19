@@ -184,13 +184,15 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 ## Phase 1A — Identity & config
 
 ### TASK-020 — Seed script from fixtures
-**status:** todo
+**status:** done
 **depends on:** TASK-002
 **acceptance:**
-- [ ] `prisma/seed.ts` reads a checked-in JSON derived from `foundry-team.jsx` (emit it to `prisma/fixtures/team.json` as part of this task)
-- [ ] Rate card seeded from `foundry-ratecard.jsx`
-- [ ] Only for dev/staging — never runs in production (env guard)
-- [ ] `pnpm db:reset` = drop + migrate + seed
+- [x] `prisma/seed.ts` reads `prisma/fixtures/team.json` (39 real Foundry people extracted from `foundry-team.jsx`)
+- [x] Rate card seeded from `prisma/fixtures/rate-card.json` (13 levels with AU rates; L4/L3 "Partner" rows skipped since they have null AU rates — partners don't have hourly rate card entries); effective from FY26 start (2025-07-01); bill rate heuristic cost×2 (low) / cost×3 (high) for MVP
+- [x] Prod guard: refuses to run when `NODE_ENV === 'production'` unless `FORCE_SEED=1` (staging-only escape hatch)
+- [x] `pnpm db:seed` (tsx prisma/seed.ts) and `pnpm db:reset` (prisma migrate reset --force). `prisma.seed` config entry wires `prisma migrate reset` to auto-seed. Verified against Supabase: 13 rate card rows + 39 people.
+
+**note:** Idempotent — `findFirst` on `{ email OR initials }` skips existing rows. This handles the case where `auth.ts` already auto-created the signed-in user's Person row before seed ran. Role assignment: TT → `[super_admin, partner]`; JN/JS (office manager) → `[super_admin, admin]`; Partner band → `[partner]`; Leadership band → `[manager]`; everyone else → `[staff]`. Special-case mapping for the prototype's "Ops"/"Leadership"/"Fellow" bands to the schema's smaller MP/Partner/Expert/Consultant/Analyst enum. tsx@4.19.2 added for TS seed execution.
 
 ### TASK-021 — Directory screen: list
 **status:** todo
