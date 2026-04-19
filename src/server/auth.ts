@@ -7,6 +7,32 @@ import { requireEnv } from '@/server/env';
 const REQUIRED_EMAIL_SUFFIX = '@foundry.health';
 const SESSION_MAX_AGE_SECONDS = 12 * 60 * 60; // 12 hours
 
+function extractEmail(profile: unknown): string | undefined {
+  if (!profile || typeof profile !== 'object') return undefined;
+  const p = profile as Record<string, unknown>;
+  // Microsoft work accounts often put the email-shaped UPN in preferred_username,
+  // not email. Check both + upn (legacy claim).
+  for (const key of ['email', 'preferred_username', 'upn'] as const) {
+    const v = p[key];
+    if (typeof v === 'string' && v.includes('@')) return v.toLowerCase();
+  }
+  return undefined;
+}
+
+function extractName(profile: unknown): { firstName: string; lastName: string } {
+  const p = (profile ?? {}) as Record<string, unknown>;
+  const first = typeof p['given_name'] === 'string' ? p['given_name'] : undefined;
+  const last = typeof p['family_name'] === 'string' ? p['family_name'] : undefined;
+  if (first && last) return { firstName: first, lastName: last };
+  // Fallback: parse combined "name" claim
+  const name = typeof p['name'] === 'string' ? p['name'] : '';
+  const parts = name.trim().split(/\s+/);
+  return {
+    firstName: first ?? parts[0] ?? 'Unknown',
+    lastName: last ?? (parts.slice(1).join(' ') || 'User'),
+  };
+}
+
 function deriveInitials(firstName: string, lastName: string): string {
   const first = firstName[0]?.toUpperCase() ?? 'X';
   const last = lastName[0]?.toUpperCase() ?? 'X';
@@ -53,17 +79,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   callbacks: {
     async signIn({ profile, account }) {
-      const email = (profile?.email ?? '').toLowerCase();
-      if (!email.endsWith(REQUIRED_EMAIL_SUFFIX)) return false;
+      const email = extractEmail(profile);
+      if (!email || !email.endsWith(REQUIRED_EMAIL_SUFFIX)) return false;
 
-      const firstName =
-        (profile && typeof profile['given_name'] === 'string'
-          ? profile['given_name']
-          : undefined) ?? 'Unknown';
-      const lastName =
-        (profile && typeof profile['family_name'] === 'string'
-          ? profile['family_name']
-          : undefined) ?? 'User';
+      const { firstName, lastName } = extractName(profile);
       const entraUserId = account?.providerAccountId ?? null;
 
       const existing = await prisma.person.findUnique({ where: { email } });
@@ -100,8 +119,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
 
     async jwt({ token, profile }) {
-      const email =
-        typeof profile?.email === 'string' ? profile.email.toLowerCase() : undefined;
+      const email = extractEmail(profile);
       if (email) {
         const person = await prisma.person.findUnique({
           where: { email },
