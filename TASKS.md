@@ -2,7 +2,7 @@
 
 Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dependencies listed inline. Update status + note on completion. Add new tasks at the bottom of the relevant phase if you discover them — never silently expand scope.
 
-**Status values:** `todo`, `doing`, `blocked`, `done`.
+**Status values:** `todo`, `doing`, `blocked`, `done`, `deferred` (out of current MVP scope; do not auto-pick up in the ralph loop).
 
 **Convention:** commit message format is `feat(TASK-NNN): <short description>` or `chore(TASK-NNN): ...` or `fix(TASK-NNN): ...`.
 
@@ -40,11 +40,14 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **status:** todo
 **depends on:** TASK-001
 **acceptance:**
-- [ ] `prisma/schema.prisma` copied from this bundle (verbatim)
-- [ ] `pnpm prisma migrate dev --name init` succeeds on local Postgres
-- [ ] `pnpm prisma generate` runs in postinstall
-- [ ] Docker compose (or devcontainer) provides local Postgres
-- [ ] `.env.example` documents every env var needed so far
+- [x] `prisma/schema.prisma` copied from this bundle (verbatim) — done in TASK-001 to unblock CI prisma validate; root `schema.prisma` remains as the handoff snapshot while `prisma/schema.prisma` becomes the living working copy
+- [ ] `pnpm prisma migrate dev --name init` succeeds against the Supabase DB (not local Docker — see context below)
+- [ ] `pnpm prisma generate` runs in `postinstall`
+- [ ] ~~Docker compose (or devcontainer) provides local Postgres~~ — **dropped per user 2026-04-19; use hosted Supabase instead**
+- [ ] `.env.example` documents `DATABASE_URL` (pooled / pgbouncer-compatible for app runtime) and `DIRECT_URL` (direct connection for migrations) with Supabase URL patterns
+- [ ] `src/server/db.ts` exports a singleton `PrismaClient` with the standard Next.js HMR-safe pattern
+
+**context:** Per user 2026-04-19, Supabase is the sole Postgres host — no local Docker. Implication: `prisma migrate dev` will land migrations directly on the Supabase DB from day one. This is acceptable during the MVP testing phase (TT + JN parallel-run); once real client data lands, schema changes should shift to a review/deploy flow rather than `migrate dev`. TASK-002 will wait on the user providing the Supabase project's connection strings (DATABASE_URL pooler + DIRECT_URL non-pooler).
 
 ### TASK-003 — Tailwind theme from design tokens
 **status:** todo
@@ -483,15 +486,17 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 
 ## Phase 2 — Firm intelligence
 
+> **Deferred from MVP (scope cut confirmed 2026-04-19).** MVP = Phases 0 + 1 only, for parallel-run testing from 2026-04-24. Phase 2 tasks remain fully specified below and should be picked up once the MVP is in TT/JN's hands and steady-state. The ralph loop should not enter Phase 2 automatically — user will flip individual statuses back to `todo` when ready.
+
 ### TASK-070 — Firm dashboard (Super Admin / Partner views)
-**status:** todo
+**status:** deferred
 **depends on:** TASK-048, TASK-053
 **acceptance:**
 - [ ] `/dashboard`: KPIs + section grid (cash, AR aging, utilisation, partner pool, BD pipeline, milestones due)
 - [ ] Section layout persisted per user in `UserPreference`
 
 ### TASK-071 — P&L overview
-**status:** todo
+**status:** deferred
 **depends on:** TASK-055, TASK-044, TASK-046
 **acceptance:**
 - [ ] `/pnl`: revenue / cost / margin by month
@@ -499,7 +504,7 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Drill-down to project
 
 ### TASK-072 — Forecast sandbox
-**status:** todo
+**status:** deferred
 **depends on:** TASK-071
 **acceptance:**
 - [ ] Editable what-if overlay: add/remove projects, shift start dates, change rates
@@ -507,7 +512,7 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Doesn't touch real project data
 
 ### TASK-073 — Cost planning + OPEX
-**status:** todo
+**status:** deferred
 **depends on:** TASK-071
 **acceptance:**
 - [ ] `/costplan`: OPEX lines with category, vendor, amount monthly, start/end
@@ -515,7 +520,7 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Rolls into P&L
 
 ### TASK-074 — BD pipeline
-**status:** todo
+**status:** deferred
 **depends on:** TASK-009
 **acceptance:**
 - [ ] `/bd`: kanban by stage (lead / qualifying / proposal / negotiation / won / lost)
@@ -523,14 +528,14 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Weighted value rolls up per stage
 
 ### TASK-075 — Deal → Project conversion
-**status:** todo
+**status:** deferred
 **depends on:** TASK-074, TASK-030
 **acceptance:**
 - [ ] "Convert" action on won deal → prefills New Project wizard
 - [ ] `converted_project_id` stored on Deal; can't be undone
 
 ### TASK-076 — Resource planning
-**status:** todo
+**status:** deferred
 **depends on:** TASK-035
 **acceptance:**
 - [ ] `/resource`: matrix of people × weeks, cells = allocation %
@@ -538,7 +543,7 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Drag-to-adjust (phase 2 polish; initial = click-to-edit drawer)
 
 ### TASK-077 — Partner true-up
-**status:** todo
+**status:** deferred
 **depends on:** TASK-071
 **acceptance:**
 - [ ] `/trueup`: period picker, pool computation (revenue × partner-share rules)
@@ -546,7 +551,7 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Approve → generates bill entries for each partner
 
 ### TASK-078 — Manager dashboard + Staff "My week"
-**status:** todo
+**status:** deferred
 **depends on:** TASK-041
 **acceptance:**
 - [ ] `/mgrhome`: team utilisation, project health cards
