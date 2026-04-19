@@ -145,13 +145,15 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note:** `deep-diff` is deprecated on npm. Functional and stable, but migrating to `microdiff` is a cleanup task for later. `writeAudit` intentionally requires a Prisma tx — passing `prisma` directly doesn't typecheck, so call sites can't accidentally skip the transaction.
 
 ### TASK-008 — Port prototype UI primitives
-**status:** todo
+**status:** done
 **depends on:** TASK-003
 **acceptance:**
-- [ ] `Button`, `Badge`, `Icon`, `Avatar`, `KPI`, `Card`, `Table`, `Drawer`, `Modal`, `Tabs` components in `src/components/ui/`
-- [ ] Each has a Storybook or dev-only playground entry
-- [ ] Visual spot-check against `screenshots/01-dashboard-super-admin.png` for density and spacing
-- [ ] Icon component uses lucide-react (or equivalent), not inline SVG strings
+- [x] 10 primitives in `src/components/ui/`: Button + Badge + Input (from TASK-003), plus Icon, Avatar, KPI, Card, Table, Drawer, Modal (`dialog.tsx`), Tabs
+- [x] Dev-only playground at `/playground` (gated on `NODE_ENV !== 'production'` via `notFound()`) renders every primitive with representative Foundry-flavoured content
+- [ ] Visual spot-check against `screenshots/01-dashboard-super-admin.png` — **deferred** to when the full shell (TASK-009) + dashboard (TASK-070 when Phase 2 resumes) are up; pixel-level comparison against a dashboard-level screenshot doesn't make sense on isolated primitives
+- [x] Icon component is a thin wrapper around `lucide-react`'s `LucideIcon`; no inline SVG strings
+
+**note:** Drawer (right-side, ~640px) + Modal (center dialog) both built on Radix Dialog with different slide-in directions. Tabs on Radix Tabs. Avatar on Radix Avatar with initials fallback. KPI is custom (not in shadcn) with trend arrow + subtext. Table uses semantic `<table>` + shadcn's hover/selected row patterns. All CSS classes reference the Foundry Tailwind tokens from TASK-003.
 
 ### TASK-009 — Shell: sidebar + topbar + breadcrumb
 **status:** todo
