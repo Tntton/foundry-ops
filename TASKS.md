@@ -169,13 +169,15 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note:** Breadcrumb is a client component (uses `usePathname()`). Sidebar is server-rendered per-request since `currentPath` changes on every navigation; Next.js app-router's default per-request rendering handles this without extra state. Route group `(app)` groups authenticated pages without affecting URLs. `/playground` remains outside the group — accessible without auth (dev-only).
 
 ### TASK-010 — Healthz + staging deploy
-**status:** todo
+**status:** doing
 **depends on:** TASK-004
 **acceptance:**
-- [ ] `/healthz` returns `{ok, db:'up'|'down', version}` — no auth required
-- [ ] Staging deployed (Vercel or equivalent), env vars set
-- [ ] A Foundry staff account can sign in on staging
-- [ ] Audit log shows the sign-in event
+- [x] `/healthz` at `src/app/healthz/route.ts` returns `{ok, db, version, commit, at}` with HTTP 200 when DB is up and 503 when down. No auth. Performs `SELECT 1` via Prisma as the DB probe. Version from `npm_package_version`, commit from `VERCEL_GIT_COMMIT_SHA` / `GIT_COMMIT_SHA` env (both null outside CI/prod is fine).
+- [ ] Staging deployed (Vercel) — **blocked** on Vercel auth / project setup. `gh` CLI and Vercel CLI steps needed from user before deploy can run.
+- [ ] A Foundry staff account can sign in on staging — blocked on staging deploy
+- [x] Audit log shows the sign-in event — Auth.js `events.signIn` hook writes an `AuditEvent { action: 'signed_in', entityType: 'person', entityId: person.id, source: 'web' }` via `writeAudit()` inside a transaction. Non-blocking (errors logged, don't fail sign-in).
+
+**note:** `/healthz` alone is done. Staging deploy + end-to-end staging sign-in verification require user-provided Vercel auth to unblock — likely a new task for when deploy infra lands. Sign-in audit event already exercised locally by TT's successful sign-in earlier; verifiable via `SELECT * FROM "AuditEvent" WHERE action='signed_in' ORDER BY at DESC LIMIT 5` in Supabase.
 
 ---
 

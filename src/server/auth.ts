@@ -5,6 +5,7 @@ import type { Role } from '@prisma/client';
 import { prisma } from '@/server/db';
 import { requireEnv } from '@/server/env';
 import { verifyMagicLink } from '@/server/magic-link';
+import { writeAudit } from '@/server/audit';
 
 const REQUIRED_EMAIL_SUFFIX = '@foundry.health';
 const SESSION_MAX_AGE_SECONDS = 12 * 60 * 60; // 12 hours
@@ -100,6 +101,30 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         path: '/',
         secure: process.env['NODE_ENV'] === 'production',
       },
+    },
+  },
+  events: {
+    async signIn({ user }) {
+      // Audit every successful sign-in. Non-blocking — errors logged but don't
+      // break the sign-in flow.
+      try {
+        if (!user?.email) return;
+        const person = await prisma.person.findUnique({
+          where: { email: user.email.toLowerCase() },
+          select: { id: true },
+        });
+        if (!person) return;
+        await prisma.$transaction(async (tx) => {
+          await writeAudit(tx, {
+            actor: { type: 'person', id: person.id },
+            action: 'signed_in',
+            entity: { type: 'person', id: person.id },
+            source: 'web',
+          });
+        });
+      } catch (err) {
+        console.error('[auth/events/signIn] audit failed:', err);
+      }
     },
   },
   callbacks: {
