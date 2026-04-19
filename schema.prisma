@@ -1,0 +1,704 @@
+// schema.prisma — Foundry Ops canonical schema
+// This is the source of truth for entity shapes. Every migration starts here.
+// When `HANDOFF.md §2` and this file conflict, treat the mismatch as a bug — open an issue.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum Role {
+  super_admin
+  admin
+  partner
+  manager
+  staff
+}
+
+enum Band {
+  MP
+  Partner
+  Expert
+  Consultant
+  Analyst
+}
+
+enum Employment {
+  ft
+  contractor
+}
+
+enum Region {
+  AU
+  NZ
+}
+
+enum RateUnit {
+  hour
+  day
+}
+
+enum ProjectStage {
+  kickoff
+  delivery
+  closing
+  archived
+}
+
+enum DealStage {
+  lead
+  qualifying
+  proposal
+  negotiation
+  won
+  lost
+}
+
+enum TimesheetStatus {
+  draft
+  submitted
+  approved
+  billed
+}
+
+enum ExpenseStatus {
+  draft
+  submitted
+  approved
+  rejected
+  reimbursed
+  batched_for_payment
+}
+
+enum InvoiceStatus {
+  draft
+  pending_approval
+  approved
+  sent
+  partial
+  paid
+  overdue
+  written_off
+}
+
+enum BillStatus {
+  pending_review
+  approved
+  rejected
+  scheduled_for_payment
+  paid
+}
+
+enum PayRunStatus {
+  draft
+  approved
+  aba_generated
+  uploaded_to_paydotcomau
+  paid
+  reconciled
+}
+
+enum PayRunType {
+  payroll
+  super
+  contractor_ap
+  supplier_ap
+  mixed
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+}
+
+enum ApprovalSubjectType {
+  invoice
+  expense
+  bill
+  pay_run
+  contract
+  new_hire
+  rate_change
+}
+
+enum ActorType {
+  person
+  agent
+  system
+}
+
+enum AuditSource {
+  web
+  agent
+  api
+  integration_sync
+}
+
+enum AgentRunStatus {
+  running
+  succeeded
+  failed
+  awaiting_human
+}
+
+enum AgentKind {
+  receipt_parser
+  ap_intake
+  invoice_drafter
+  contract_drafter
+  ar_chaser
+  timesheet_reconciler
+  xero_reconciler
+}
+
+enum IntegrationKind {
+  m365
+  xero
+  paydotcomau
+  whatsapp
+  docusign
+}
+
+enum IntegrationStatus {
+  disconnected
+  connected
+  configuring
+  pending_approval
+  error
+}
+
+// ============================================================================
+// IDENTITY
+// ============================================================================
+
+model Person {
+  id              String     @id @default(cuid())
+  initials        String     @unique
+  firstName       String
+  lastName        String
+  email           String     @unique
+  phone           String?
+  whatsappNumber  String?    // must match E.164 when present; used for WhatsApp approval auth
+  band            Band
+  level           String     // MP / P / E1 / E2 / T1-T3 / A1-A3
+  employment      Employment
+  fte             Decimal    @db.Decimal(3, 2) // 0.10–1.00
+  region          Region
+  rateUnit        RateUnit
+  rate            Int        // cost rate in AUD cents
+  billRate        Int?       // charge rate in AUD cents (optional)
+  roles           Role[]
+  startDate       DateTime
+  endDate         DateTime?  // null = active
+
+  // External identities
+  entraUserId     String?    @unique // M365 user ID
+  xeroContactId   String?    @unique // for contractors paid via AP
+
+  // Payroll (encrypted at rest — see CLAUDE.md security notes)
+  bankBsb         String?    // encrypted
+  bankAcc         String?    // encrypted
+  superFundId     String?    // encrypted
+  taxFileNumber   String?    // encrypted
+
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  // Relations
+  primaryPartnerOf Client[]       @relation("ClientPrimaryPartner")
+  primaryPartnerOfProjects Project[] @relation("ProjectPrimaryPartner")
+  managerOfProjects Project[]    @relation("ProjectManager")
+  projectTeamMemberships ProjectTeam[]
+  timesheetEntries TimesheetEntry[]
+  expenses         Expense[]
+  approvalsRequested Approval[]  @relation("ApprovalRequestedBy")
+  approvalsDecided   Approval[]  @relation("ApprovalDecidedBy")
+  dealsOwned       Deal[]
+  auditEvents      AuditEvent[]  @relation("AuditActor")
+}
+
+model Client {
+  id               String    @id @default(cuid())
+  code             String    @unique
+  legalName        String
+  tradingName      String?
+  abn              String?
+  billingAddress   String?
+  billingEmail     String?
+  xeroContactId    String?   @unique
+  primaryPartnerId String
+  paymentTerms     String    @default("net-30") // net-14 / net-30 / net-45
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  primaryPartner   Person    @relation("ClientPrimaryPartner", fields: [primaryPartnerId], references: [id])
+  projects         Project[]
+  deals            Deal[]
+  invoices         Invoice[]
+}
+
+// ============================================================================
+// PROJECTS
+// ============================================================================
+
+model Project {
+  id                         String       @id @default(cuid())
+  code                       String       @unique
+  clientId                   String
+  name                       String
+  description                String?      @db.Text
+  stage                      ProjectStage @default(kickoff)
+  contractValue              Int          // AUD cents ex GST
+  currency                   String       @default("AUD")
+  startDate                  DateTime
+  endDate                    DateTime
+  actualEndDate              DateTime?
+  primaryPartnerId           String
+  managerId                  String
+  sharepointFolderUrl        String?
+  xeroTrackingCategoryValue  String?
+  createdAt                  DateTime     @default(now())
+  updatedAt                  DateTime     @updatedAt
+
+  client                     Client       @relation(fields: [clientId], references: [id])
+  primaryPartner             Person       @relation("ProjectPrimaryPartner", fields: [primaryPartnerId], references: [id])
+  manager                    Person       @relation("ProjectManager", fields: [managerId], references: [id])
+  team                       ProjectTeam[]
+  milestones                 Milestone[]
+  timesheetEntries           TimesheetEntry[]
+  expenses                   Expense[]
+  invoices                   Invoice[]
+  bills                      Bill[]
+  risks                      Risk[]
+}
+
+model ProjectTeam {
+  id             String  @id @default(cuid())
+  projectId      String
+  personId       String
+  roleOnProject  String  // free text (e.g. "Lead", "Analyst", "SME")
+  allocationPct  Int     // 0-100
+
+  project        Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  person         Person  @relation(fields: [personId], references: [id])
+
+  @@unique([projectId, personId])
+}
+
+model Milestone {
+  id          String   @id @default(cuid())
+  projectId   String
+  label       String
+  dueDate     DateTime
+  amount      Int      // AUD cents
+  status      String   // not_started / in_progress / delivered / invoiced
+  invoiceId   String?
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id])
+}
+
+model Risk {
+  id          String   @id @default(cuid())
+  projectId   String
+  title       String
+  ownerId     String?
+  severity    String   // low / medium / high
+  status      String   // open / mitigating / closed
+  mitigation  String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================================
+// BD PIPELINE
+// ============================================================================
+
+model Deal {
+  id                 String    @id @default(cuid())
+  code               String    @unique
+  clientId           String?   // may be prospective
+  prospectiveName    String?   // if clientId null
+  name               String
+  stage              DealStage @default(lead)
+  expectedValue      Int       // AUD cents
+  probability        Int       // 0-100
+  ownerId            String
+  targetCloseDate    DateTime?
+  convertedProjectId String?   @unique
+  notes              String?   @db.Text
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  client             Client?   @relation(fields: [clientId], references: [id])
+  owner              Person    @relation(fields: [ownerId], references: [id])
+}
+
+// ============================================================================
+// TIMESHEETS + EXPENSES
+// ============================================================================
+
+model TimesheetEntry {
+  id               String          @id @default(cuid())
+  personId         String
+  projectId        String
+  date             DateTime        @db.Date
+  hours            Decimal         @db.Decimal(4, 2)
+  description      String?
+  status           TimesheetStatus @default(draft)
+  approvedById     String?
+  approvedAt       DateTime?
+  billedInvoiceId  String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  person           Person   @relation(fields: [personId], references: [id])
+  project          Project  @relation(fields: [projectId], references: [id])
+  billedInvoice    Invoice? @relation(fields: [billedInvoiceId], references: [id])
+
+  @@index([personId, date])
+  @@index([projectId, date])
+}
+
+model Expense {
+  id                    String        @id @default(cuid())
+  personId              String
+  projectId             String?       // null = OPEX
+  date                  DateTime      @db.Date
+  amount                Int           // AUD cents inc GST
+  currency              String        @default("AUD")
+  gst                   Int           // AUD cents
+  category              String        // travel / meals / office / tools / subscriptions / other
+  vendor                String?
+  description           String?
+  receiptSharepointUrl  String?
+  parsedByAgentRunId    String?       // null = human-entered
+  status                ExpenseStatus @default(draft)
+  approvedById          String?
+  approvedAt            DateTime?
+  xeroBillId            String?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  person                Person   @relation(fields: [personId], references: [id])
+  project               Project? @relation(fields: [projectId], references: [id])
+  parsedByAgentRun      AgentRun? @relation(fields: [parsedByAgentRunId], references: [id])
+}
+
+// ============================================================================
+// AR (INVOICES) + AP (BILLS)
+// ============================================================================
+
+model Invoice {
+  id                     String        @id @default(cuid())
+  number                 String        @unique // e.g. IFM001-INV-12
+  projectId              String
+  clientId               String
+  issueDate              DateTime      @db.Date
+  dueDate                DateTime      @db.Date
+  amountExGst            Int           // AUD cents
+  gst                    Int
+  amountTotal            Int
+  status                 InvoiceStatus @default(draft)
+  generatedByAgentRunId  String?
+  xeroInvoiceId          String?       @unique
+  sentAt                 DateTime?
+  paidAt                 DateTime?
+  paymentReceivedAmount  Int?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+
+  project                Project       @relation(fields: [projectId], references: [id])
+  client                 Client        @relation(fields: [clientId], references: [id])
+  lineItems              InvoiceLine[]
+  timesheetEntries       TimesheetEntry[]
+  milestones             Milestone[]
+  generatedByAgentRun    AgentRun?     @relation("InvoiceByAgent", fields: [generatedByAgentRunId], references: [id])
+}
+
+model InvoiceLine {
+  id                String    @id @default(cuid())
+  invoiceId         String
+  label             String
+  hours             Decimal?  @db.Decimal(6, 2)
+  rate              Int?      // AUD cents
+  amount            Int       // AUD cents
+  timesheetEntryIds String[]  @default([])
+
+  invoice           Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
+
+model Bill {
+  id                       String     @id @default(cuid())
+  supplierPersonId         String?    // contractor paid as Person
+  supplierName             String?    // for organisations without a Person row
+  supplierInvoiceNumber    String?
+  receivedVia              String     // email / upload / manual
+  originalEmailId          String?    // Graph message ID if parsed by agent
+  attachmentSharepointUrl  String?
+  issueDate                DateTime   @db.Date
+  dueDate                  DateTime   @db.Date
+  amountTotal              Int        // AUD cents inc GST
+  gst                      Int
+  category                 String
+  projectId                String?
+  costCentre               String?
+  status                   BillStatus @default(pending_review)
+  xeroBillId               String?    @unique
+  abaBatchId               String?
+  createdAt                DateTime   @default(now())
+  updatedAt                DateTime   @updatedAt
+
+  project                  Project?   @relation(fields: [projectId], references: [id])
+  payRun                   PayRun?    @relation(fields: [abaBatchId], references: [id])
+}
+
+// ============================================================================
+// PAY RUNS (ABA batches)
+// ============================================================================
+
+model PayRun {
+  id                    String       @id @default(cuid())
+  periodStart           DateTime     @db.Date
+  periodEnd             DateTime     @db.Date
+  type                  PayRunType
+  status                PayRunStatus @default(draft)
+  abaFileUrl            String?
+  xeroBatchRef          String?
+  paydotcomauBatchRef   String?
+  approvedById          String?
+  approvedAt            DateTime?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  lineItems             PayRunLine[]
+  bills                 Bill[]
+}
+
+model PayRunLine {
+  id         String  @id @default(cuid())
+  payRunId   String
+  personId   String?
+  billId     String?
+  amount     Int     // AUD cents
+  bsb        String
+  acc        String
+  reference  String
+
+  payRun     PayRun  @relation(fields: [payRunId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================================
+// APPROVALS
+// ============================================================================
+
+model Approval {
+  id                String              @id @default(cuid())
+  subjectType       ApprovalSubjectType
+  subjectId         String
+  requestedById     String
+  requiredRole      Role
+  status            ApprovalStatus      @default(pending)
+  decidedById       String?
+  decidedAt         DateTime?
+  decisionNote      String?             @db.Text
+  thresholdContext  Json?               // e.g. { invoice_amount_cents: 4800000, threshold_cents: 2000000 }
+  channel           String              @default("web") // web / whatsapp / teams
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  requestedBy       Person              @relation("ApprovalRequestedBy", fields: [requestedById], references: [id])
+  decidedBy         Person?             @relation("ApprovalDecidedBy", fields: [decidedById], references: [id])
+
+  @@index([status, requiredRole])
+  @@index([subjectType, subjectId])
+}
+
+model ApprovalPolicy {
+  id                 String   @id @default(cuid())
+  subjectType        ApprovalSubjectType
+  thresholdCents     Int?     // null = applies to all
+  comparator         String   // gt / gte / lte / lt / any
+  requiredRole       Role
+  channel            String   @default("any") // any / web / whatsapp / teams
+  requireMfa         Boolean  @default(false)
+  active             Boolean  @default(true)
+  effectiveFrom      DateTime @default(now())
+
+  @@index([subjectType, active])
+}
+
+// ============================================================================
+// AUDIT + AGENTS
+// ============================================================================
+
+model AuditEvent {
+  id          String      @id @default(cuid())
+  actorId     String?     // Person.id OR agent run id
+  actorType   ActorType
+  action      String      // created / updated / deleted / approved / rejected / sent / synced
+  entityType  String
+  entityId    String
+  entityDelta Json?
+  at          DateTime    @default(now())
+  ip          String?
+  userAgent   String?
+  source      AuditSource
+
+  actor       Person?     @relation("AuditActor", fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorId, at])
+}
+
+model AgentRun {
+  id                 String         @id @default(cuid())
+  agent              AgentKind
+  trigger            String         // schedule / event / manual
+  status             AgentRunStatus @default(running)
+  inputRef           String?        // e.g. email message ID, receipt upload ID
+  outputEntityIds    String[]       @default([])
+  confidenceScore    Decimal?       @db.Decimal(4, 3)
+  promptVersion      String
+  startedAt          DateTime       @default(now())
+  finishedAt         DateTime?
+  costUsd            Decimal?       @db.Decimal(10, 5)
+  errorMessage       String?        @db.Text
+
+  llmCalls           LLMCall[]
+  invoicesGenerated  Invoice[]      @relation("InvoiceByAgent")
+  expensesParsed     Expense[]
+
+  @@index([agent, status])
+  @@index([startedAt])
+}
+
+model LLMCall {
+  id           String   @id @default(cuid())
+  agentRunId   String
+  model        String   // claude-sonnet-... / claude-haiku-...
+  promptName   String
+  promptVersion String
+  tokensIn     Int
+  tokensOut    Int
+  latencyMs    Int
+  costUsd      Decimal  @db.Decimal(10, 5)
+  validated    Boolean  // did Zod validation pass?
+  retryCount   Int      @default(0)
+  at           DateTime @default(now())
+
+  agentRun     AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================================
+// RATE CARD + OPEX + PARTNER POOL + SUPPORTING
+// ============================================================================
+
+model RateCard {
+  id             String   @id @default(cuid())
+  roleCode       String   // MP / P / E1 / E2 / T1 / T2 / T3 / A1 / A2 / A3
+  effectiveFrom  DateTime @db.Date
+  costRate       Int      // AUD cents per hour
+  billRateLow    Int
+  billRateHigh   Int
+  createdAt      DateTime @default(now())
+
+  @@index([roleCode, effectiveFrom])
+}
+
+model OpexLine {
+  id              String   @id @default(cuid())
+  category        String
+  vendor          String?
+  amountMonthly   Int      // AUD cents
+  startDate       DateTime @db.Date
+  endDate         DateTime? @db.Date
+  xeroBillIds     String[] @default([])
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model PartnerPool {
+  id              String   @id @default(cuid())
+  periodStart     DateTime @db.Date
+  periodEnd       DateTime @db.Date
+  inputs          Json     // computation inputs snapshot
+  outputs         Json     // per-partner payouts
+  status          String   // draft / approved / paid
+  approvedById    String?
+  approvedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([periodStart, periodEnd])
+}
+
+// ============================================================================
+// INTEGRATIONS + NOTIFICATIONS + PREFERENCES
+// ============================================================================
+
+model Integration {
+  id           String            @id @default(cuid())
+  kind         IntegrationKind   @unique
+  status       IntegrationStatus @default(disconnected)
+  authRef      String?           // vault key pointer
+  lastSyncAt   DateTime?
+  config       Json              @default("{}")
+  updatedAt    DateTime          @updatedAt
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  personId    String
+  channel     String   // in_app / email / whatsapp / teams
+  subject     String
+  body        String   @db.Text
+  linkUrl     String?
+  sentAt      DateTime?
+  readAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([personId, readAt])
+}
+
+model UserPreference {
+  id          String @id @default(cuid())
+  personId    String @unique
+  prefs       Json   @default("{}") // dashboard layout, default screen, etc.
+  updatedAt   DateTime @updatedAt
+}
+
+model FeatureFlag {
+  key         String   @id
+  enabled     Boolean  @default(false)
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+model BankTransaction {
+  id              String   @id @default(cuid())
+  xeroTxnId       String   @unique
+  date            DateTime @db.Date
+  amount          Int      // AUD cents (signed)
+  description     String?
+  rawPayload      Json
+  matchedType     String?  // expense / invoice / bill / null
+  matchedId       String?
+  matchConfidence Decimal? @db.Decimal(4, 3)
+  createdAt       DateTime @default(now())
+
+  @@index([date])
+  @@index([matchedType, matchedId])
+}

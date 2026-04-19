@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Foundry Ops — Wireframe Exploration</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="components-shared.jsx"></script>
+<script type="text/babel" src="screens-dash.jsx"></script>
+<script type="text/babel" src="screens-projects.jsx"></script>
+<script type="text/babel" src="screens-portals.jsx"></script>
+<script type="text/babel" src="screens-bd-admin.jsx"></script>
+
+<script type="text/babel" data-presets="react">
+const useState = React.useState;
+const useEffect = React.useEffect;
+
+const SCREENS = [
+  { k: 'nav',          label: '🏠 Nav models',          persona: ['all'] },
+  { k: 'dashboard',    label: '📊 Dashboard',           persona: ['Partner','Finance'] },
+  { k: 'project',      label: '📁 Project detail',      persona: ['Partner','Finance','PM'] },
+  { k: 'wizard',       label: '＋ New project wizard',  persona: ['Partner','PM'] },
+  { k: 'bd',           label: '🎯 BD Pipeline',         persona: ['Partner'] },
+  { k: 'timesheet',    label: '⏱ Timesheet (portal)',   persona: ['Consultant','PM'] },
+  { k: 'invoices',     label: '🧾 Invoice OCR',         persona: ['Finance'] },
+  { k: 'expenses',     label: '💳 Expense upload',      persona: ['Consultant','Finance'] },
+  { k: 'approvals',    label: '✓ Approvals queue',      persona: ['Partner','Finance'] },
+  { k: 'directory',    label: '👥 Directory',           persona: ['Partner','Finance'] },
+  { k: 'reports',      label: '📈 Reports',             persona: ['Partner','Finance'] },
+  { k: 'templates',    label: '📄 Contract/Invoice gen', persona: ['Finance','Partner'] },
+  { k: 'excel',        label: '🔁 Excel sync surfacing', persona: ['all'] },
+  { k: 'admin',        label: '⚙ Admin',                persona: ['Partner'] },
+];
+
+const ROLES = ['Partner (TT)', 'Finance (JS)', 'PM (MB)', 'Consultant (CC)'];
+
+// persisted state
+const loadVar = (k, d=0) => parseInt(localStorage.getItem('foundry:'+k) || d);
+const saveVar = (k, v) => localStorage.setItem('foundry:'+k, v);
+
+function App() {
+  const [screen, setScreen] = useState(localStorage.getItem('foundry:screen') || 'dashboard');
+  const [role, setRole] = useState(parseInt(localStorage.getItem('foundry:role') || 0));
+  const [navVar, setNavVar] = useState(loadVar('navVar'));
+  const [dashVar, setDashVar] = useState(loadVar('dashVar'));
+  const [bdVar, setBdVar] = useState(loadVar('bdVar'));
+  const [excelVar, setExcelVar] = useState(loadVar('excelVar'));
+
+  useEffect(() => { localStorage.setItem('foundry:screen', screen); }, [screen]);
+  useEffect(() => { saveVar('navVar', navVar); }, [navVar]);
+  useEffect(() => { saveVar('dashVar', dashVar); }, [dashVar]);
+  useEffect(() => { saveVar('bdVar', bdVar); }, [bdVar]);
+  useEffect(() => { saveVar('excelVar', excelVar); }, [excelVar]);
+  useEffect(() => { localStorage.setItem('foundry:role', role); }, [role]);
+
+  // ---------- Screen renderers ----------
+  const renderNavScreen = () => (
+    <>
+      <ScreenTitle title="Information architecture · 3 options" subtitle="Same data, 3 different nav shells" />
+      <VarTabs options={['Grouped sidebar','Top tabs','Command-palette']} cur={navVar} onChange={setNavVar} />
+      <div className="small" style={{ marginBottom: 10 }}>
+        <b>Recommendation:</b> grouped sidebar (A) — matches the 3 data-worlds (Analyze / Work / Data) and gives room for persistent Excel-sync status.
+      </div>
+      <div style={{ border: '1.5px dashed var(--line-soft)', borderRadius: 6, padding: 12, background: 'rgba(255,255,255,.3)' }}>
+        {navVar === 0 && (
+          <div className="grid" style={{ gridTemplateColumns: '220px 1fr', gap: 10 }}>
+            <NavVariantSidebar cur="dashboard" onNav={(k)=>{ const map = {dashboard:'dashboard', 'project-detail':'project', timesheet:'timesheet', invoices:'invoices', expenses:'expenses', bd:'bd', directories:'directory', reports:'reports', templates:'templates', admin:'admin', wizard:'wizard', projects:'project', approvals:'approvals'}; if(map[k]) setScreen(map[k]); }} />
+            <div style={{ border: '1.5px solid var(--line)', borderRadius: 6, padding: 14, background: 'var(--paper)' }}>
+              <div className="small" style={{ fontFamily: 'var(--mono)', color: 'var(--ink-faint)' }}>〈 content area — click any sidebar item to jump to that screen 〉</div>
+              <Placeholder h={420} label="main content" />
+              <Sticky rot={-1} style={{ maxWidth: 320, marginTop: 10 }}>Sections map to the 3 concerns in the brief: <b>Analyze</b> (firm view), <b>Work</b> (daily flow), <b>Data</b> (ground-truth admin).</Sticky>
+            </div>
+          </div>
+        )}
+        {navVar === 1 && <NavVariantTopTabs />}
+        {navVar === 2 && <NavVariantCommand />}
+      </div>
+    </>
+  );
+
+  const renderDashboard = () => (
+    <>
+      <ScreenTitle
+        title="Analytics dashboard"
+        subtitle="Dense, power-user. 3 framings of same data."
+        right={<><ExcelPill state="synced" label="all workbooks · synced"/><SketchBtn small>⬇ export</SketchBtn></>}
+      />
+      <VarTabs options={['Portfolio first','KPI grid + donuts','Narrative (morning briefing)']} cur={dashVar} onChange={setDashVar} />
+      {dashVar === 0 && <DashVariantA/>}
+      {dashVar === 1 && <DashVariantB/>}
+      {dashVar === 2 && <DashVariantC/>}
+    </>
+  );
+
+  const renderBD = () => (
+    <>
+      <ScreenTitle title="BD pipeline" subtitle="aim: 2–3× target revenue in pipe" right={<SketchBtn small primary>＋ new deal</SketchBtn>} />
+      <VarTabs options={['Kanban by stage','Weighted funnel','Filterable table']} cur={bdVar} onChange={setBdVar} />
+      {bdVar === 0 && <BDKanban/>}
+      {bdVar === 1 && <BDFunnel/>}
+      {bdVar === 2 && <BDTable/>}
+      <PenLine/>
+      <Sticky rot={-1} style={{ maxWidth: 540 }}>All 3 views share same data. Kanban for daily triage · Funnel for forecast convos · Table for power-filtering/export.</Sticky>
+    </>
+  );
+
+  const renderExcel = () => (
+    <>
+      <ScreenTitle title="Excel sync — how visible?" subtitle="3 philosophies for how Excel shows up in the UI" />
+      <div className="grid g3">
+        <ExcelSyncInvisible/>
+        <ExcelSyncExplicit/>
+        <ExcelSyncTwoWay/>
+      </div>
+      <DividerLbl>Recommendation</DividerLbl>
+      <div className="sketch-box" style={{ background: 'var(--paper-2)' }}>
+        <h4>Hybrid — default Explicit, escalate to Diff on conflict</h4>
+        <PenLine/>
+        <ul style={{ fontFamily: 'var(--hand)', fontSize: 15 }}>
+          <li>✓ Status pill on every data-bearing screen (matches Foundry's "low bar to fall back to Excel")</li>
+          <li>✓ "Open in Excel" is never &gt; 1 click away</li>
+          <li>✓ Conflicts surface as diff modal (option C) — not silent overwrites</li>
+          <li>✓ Admin can switch a workbook between 1-way (read-only) and 2-way per risk appetite</li>
+        </ul>
+      </div>
+    </>
+  );
+
+  const renderScreen = () => {
+    switch (screen) {
+      case 'nav': return renderNavScreen();
+      case 'dashboard': return renderDashboard();
+      case 'project': return <><ScreenTitle title="Project detail" subtitle="single source of truth per project code" /><ProjectDetail/></>;
+      case 'wizard': return <><ScreenTitle title="New project wizard" subtitle="propagates project code across all systems" /><ProjectWizard/></>;
+      case 'bd': return renderBD();
+      case 'timesheet': return <><ScreenTitle title="Timesheet · weekly grid" subtitle="consultant portal · Kbd-friendly · syncs to Timesheet.xlsx" /><Timesheet/></>;
+      case 'invoices': return <><ScreenTitle title="Invoice intake — drag, drop, OCR" subtitle="PDFs in → fields extracted → human confirms → posted to project P&L + Excel" /><InvoiceOCR/></>;
+      case 'expenses': return <><ScreenTitle title="Expenses" subtitle="drag receipts or forward to inbox" /><ExpenseUpload/></>;
+      case 'approvals': return <Approvals/>;
+      case 'directory': return <><ScreenTitle title="Directory — people & clients" /><Directory/></>;
+      case 'reports': return <Reports/>;
+      case 'templates': return <Templates/>;
+      case 'excel': return renderExcel();
+      case 'admin': return <><ScreenTitle title="Admin" subtitle="users, roles, Excel sync, financial controls" /><Admin/></>;
+      default: return null;
+    }
+  };
+
+  return (
+    <div className="app-frame">
+      <div className="top-chrome">
+        <div className="brand">
+          <div className="brand-logo">F</div>
+          <div>
+            <div style={{ fontFamily: 'var(--hand-title)', fontSize: 26, lineHeight: 1 }}>Foundry Ops</div>
+            <div className="small" style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--ink-faint)' }}>wireframe · v0.1 · internal admin</div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className="small">Role ↓</span>
+          <div className="role-switcher">
+            {ROLES.map((r, i) => (
+              <button key={i} className={i === role ? 'active' : ''} onClick={() => setRole(i)}>{r}</button>
+            ))}
+          </div>
+          <ExcelPill state="synced" label="all synced · 2m"/>
+        </div>
+      </div>
+
+      <div className="screen-tabs">
+        <span style={{ fontFamily: 'var(--hand-title)', fontSize: 18, color: 'var(--accent-red)', marginRight: 4 }}>Screens →</span>
+        {SCREENS.map(s => (
+          <button
+            key={s.k}
+            className={screen === s.k ? 'active' : ''}
+            onClick={() => setScreen(s.k)}
+          >{s.label}</button>
+        ))}
+      </div>
+
+      <div className="screen screen-scroll">
+        {renderScreen()}
+      </div>
+
+      <div className="footer">
+        ✦ Foundry Ops wireframe · exploring IA + dashboard layout + Excel sync + BD views ·
+        persists across refresh (localStorage) · based on FY26 Flow-of-Funds governance
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

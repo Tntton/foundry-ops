@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=1400"/>
+<title>Foundry Ops — Hi-fi mockup</title>
+<link rel="stylesheet" href="hifi.css"/>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="shared.jsx"></script>
+<script type="text/babel" src="foundry-team.jsx"></script>
+<script type="text/babel" src="screens-3.jsx"></script>
+<script type="text/babel" src="screens-project-settings-risks.jsx"></script>
+<script type="text/babel" src="screens-1.jsx"></script>
+<script type="text/babel" src="screens-2.jsx"></script>
+<script type="text/babel" src="screens-4.jsx"></script>
+<script type="text/babel" src="screens-5.jsx"></script>
+<script type="text/babel" src="screens-6.jsx"></script>
+<script type="text/babel" src="screens-7.jsx"></script>
+<script type="text/babel" src="screens-8.jsx"></script>
+<script type="text/babel" src="screens-wizard.jsx"></script>
+<script type="text/babel" src="screens-costplan.jsx"></script>
+<script type="text/babel" src="screens-costplan-drawer.jsx"></script>
+<script type="text/babel" src="screens-bd-drawer.jsx"></script>
+<script type="text/babel" src="screens-directory-drawers.jsx"></script>
+<script type="text/babel" src="screens-line-drawers.jsx"></script>
+<script type="text/babel" src="screens-resource-drawer.jsx"></script>
+<script type="text/babel" src="screens-trueup-drawer.jsx"></script>
+<script type="text/babel" src="screens-pnl.jsx"></script>
+<script type="text/babel" src="foundry-ratecard.jsx"></script>
+<script type="text/babel" src="screens-directory-people.jsx"></script>
+<script type="text/babel" src="screens-me.jsx"></script>
+<script type="text/babel" src="screens-client-wizard.jsx"></script>
+<script type="text/babel" src="screens-modals-final.jsx"></script>
+<script type="text/babel" src="screens-auth.jsx"></script>
+<script type="text/babel" src="screens-integrations-agents.jsx"></script>
+<script type="text/babel">
+const ProjectsRouter = ({ role }) => {
+  const [code, setCode] = React.useState(() => {
+    const pending = window.__openProject;
+    if (pending) { delete window.__openProject; return pending; }
+    return null;
+  });
+  React.useEffect(()=>{
+    const check = setInterval(()=>{
+      if (window.__openProject) { setCode(window.__openProject); delete window.__openProject; }
+    }, 150);
+    return ()=>clearInterval(check);
+  },[]);
+  if (code && code !== '__new') return <ProjectDetail code={code} onBack={()=>setCode(null)} role={role}/>;
+  return <ProjectsOverview onOpen={(c)=>setCode(c)} role={role}/>;
+};
+
+const BDWithConvert = () => {
+  const [deal, setDeal] = React.useState(null);        // drawer
+  const [convert, setConvert] = React.useState(null);  // convert modal
+  React.useEffect(()=>{
+    window.__openBDDeal = (d)=>setDeal(d);
+    window.__openConvertBD = (d)=>setConvert(d);
+    return ()=>{ delete window.__openBDDeal; delete window.__openConvertBD; };
+  },[]);
+  return <>
+    <BDPipeline/>
+    <BDDealDrawer deal={deal} onClose={()=>setDeal(null)} onConvert={()=>{ setConvert(deal); setDeal(null); }}/>
+    <ConvertBDModal deal={convert} onClose={()=>setConvert(null)}/>
+  </>;
+};
+</script>
+<script type="text/babel">
+const TWEAKS = /*EDITMODE-BEGIN*/{
+  "showExcelStatus": true,
+  "density": "dense",
+  "accentHue": "gold"
+}/*EDITMODE-END*/;
+
+const SCREENS = [
+  { id:'myweek', label:'My week', icon:'clock', kind:'main', roles:['consultant'], title:'My week', Screen: ConsultantHome },
+  { id:'mgrhome', label:'Manager dashboard', icon:'dashboard', kind:'main', roles:['manager'], title:'Manager dashboard', Screen: ManagerHome },
+  { id:'dashboard', label:'Dashboard', icon:'dashboard', kind:'main', roles:['mgpartner','partner','office'], title:'Firm dashboard', Screen: Dashboard },
+  { id:'projects', label:'Projects', icon:'briefcase', kind:'main', roles:['mgpartner','partner','office','consultant','manager'], title:'Projects', Screen: ProjectsRouter },
+  { id:'costplan', label:'Cost planning', icon:'chart', kind:'main', roles:['mgpartner','office'], title:'Cost planning', Screen: CostPlanningTab },
+  { id:'pnl', label:'P&L overview', icon:'chart', kind:'main', roles:['mgpartner','partner','office'], title:'P&L overview', Screen: PnL },
+  { id:'bd', label:'BD pipeline', icon:'target', kind:'main', roles:['mgpartner','partner','office','manager'], count:'7', title:'BD pipeline', Screen: BDWithConvert },
+  { id:'approvals', label:'Approvals', icon:'check', kind:'main', roles:['mgpartner','partner','office','manager'], count:'12', title:'Approvals', Screen: Approvals },
+  { id:'trueup', label:'Partner true-up', icon:'chart', kind:'main', roles:['mgpartner'], title:'Partner true-up', Screen: TrueUp },
+  { id:'resource', label:'Resource planning', icon:'team', kind:'main', roles:['mgpartner','office','manager'], title:'Resource planning', Screen: ResourcePlanning },
+  { id:'directory', label:'Directory', icon:'team', kind:'main', roles:['mgpartner','partner','office','manager'], title:'Directory', Screen: Directory },
+  { id:'reports', label:'Reports', icon:'chart', kind:'main', roles:['mgpartner','office'], title:'Reports', Screen: Reports },
+  { id:'integrations-agents', label:'Integrations & Agents', icon:'settings', kind:'main', roles:['mgpartner','office'], title:'Integrations & Agents', Screen: IntegrationsAgents },
+
+  { id:'timesheet', label:'Timesheet', icon:'clock', kind:'input', roles:['consultant','mgpartner','partner','office','manager'], title:'Timesheet', Screen: Timesheet },
+  { id:'selfinvoice', label:'Invoice Foundry', icon:'invoice', kind:'input', roles:['consultant','mgpartner','partner','manager'], title:'Generate invoice to Foundry', Screen: SelfInvoice },
+  { id:'invoices', label:'Invoices', icon:'invoice', kind:'input', roles:['office','mgpartner','manager'], count:'6', title:'Invoice intake', Screen: InvoiceOCR },
+  { id:'expenses', label:'Expenses', icon:'receipt', kind:'input', roles:['consultant','mgpartner','partner','office','manager'], title:'Expenses', Screen: Expenses },
+  { id:'wizard', label:'New project', icon:'plus', kind:'input', roles:['office','mgpartner','manager'], title:'New project wizard', Screen: NewProjectWizard },
+
+  { id:'templates', label:'Templates', icon:'doc', kind:'tool', roles:['office','mgpartner','manager'], title:'Templates & generation', Screen: Templates },
+  { id:'masteradmin', label:'Master admin', icon:'settings', kind:'tool', roles:['mgpartner','office'], title:'Master admin', Screen: MasterAdmin },
+  { id:'admin', label:'Admin', icon:'settings', kind:'tool', roles:['office'], title:'Admin', Screen: Admin },
+
+  // Hidden — reachable via avatar menu / __nav('me'), not shown in sidebar
+  { id:'me', label:'My profile', icon:'team', kind:'hidden', roles:['mgpartner','partner','office','consultant','manager'], title:'My profile', Screen: window.MyProfile },
+];
+
+const ROLES = [
+  { id:'mgpartner', label:'Super Admin' },
+  { id:'office', label:'Admin' },
+  { id:'partner', label:'Partner' },
+  { id:'manager', label:'Manager' },
+  { id:'consultant', label:'Staff' },
+];
+
+const AvatarMenu = ({ role, onNav }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  const identity = { mgpartner:'TT', partner:'MB', manager:'MB', office:'JS', consultant:'CC' }[role] || 'TT';
+  const db = (window.PERSON_DB || {})[identity] || {};
+  React.useEffect(()=>{
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    if (open) { document.addEventListener('mousedown', close); return ()=>document.removeEventListener('mousedown', close); }
+  },[open]);
+  const go = (id) => { setOpen(false); onNav(id); };
+  return (
+    <div ref={ref} style={{ position:'relative' }}>
+      <button onClick={()=>setOpen(o=>!o)} style={{ background:'none', border:'none', padding:0, cursor:'pointer' }} aria-label="Account menu">
+        <Avatar>{identity}</Avatar>
+      </button>
+      {open && (
+        <div style={{
+          position:'absolute', top:'calc(100% + 8px)', right:0, minWidth:240,
+          background:'var(--bg-elev)', border:'1px solid var(--border)', borderRadius:10,
+          boxShadow:'0 12px 32px rgba(0,0,0,.16), 0 2px 6px rgba(0,0,0,.06)',
+          padding:6, zIndex:1000,
+        }}>
+          <div style={{ padding:'10px 12px', display:'flex', gap:10, alignItems:'center', borderBottom:'1px solid var(--divider)', marginBottom:4 }}>
+            <Avatar size={36}>{identity}</Avatar>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontWeight:600, fontSize:13, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{db.first||''} {db.last||''}</div>
+              <div className="txt-sm txt-muted" style={{ fontSize:11, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{db.email || '—'}</div>
+            </div>
+          </div>
+          {[
+            ['me',            'team',      'My profile'],
+            ['me-notif',      'mail',      'Notification preferences'],
+            ['me-security',   'settings',  'Security'],
+          ].map(([id,icon,label])=>(
+            <button key={id} onClick={()=>go('me')} style={{
+              display:'flex', width:'100%', alignItems:'center', gap:10, padding:'8px 10px',
+              background:'none', border:'none', borderRadius:6, cursor:'pointer', fontSize:13, color:'var(--text)',
+              textAlign:'left',
+            }} onMouseEnter={e=>e.currentTarget.style.background='var(--bg-subtle)'} onMouseLeave={e=>e.currentTarget.style.background='none'}>
+              <Icon name={icon} size={14}/>
+              <span>{label}</span>
+            </button>
+          ))}
+          <div style={{ height:1, background:'var(--divider)', margin:'4px 6px' }}/>
+          <button onClick={()=>{ setOpen(false); window.__auth && window.__auth.signOut(); }} style={{
+            display:'flex', width:'100%', alignItems:'center', gap:10, padding:'8px 10px',
+            background:'none', border:'none', borderRadius:6, cursor:'pointer', fontSize:13, color:'var(--red)',
+            textAlign:'left',
+          }} onMouseEnter={e=>e.currentTarget.style.background='var(--red-soft)'} onMouseLeave={e=>e.currentTarget.style.background='none'}>
+            <Icon name="x" size={14}/>
+            <span>Sign out</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const App = () => {
+  const [screenId, setScreenId] = React.useState(() => localStorage.getItem('foundry.screen') || 'dashboard');
+  const [role, setRole] = React.useState(() => {
+    // If signed in, use session role; else fall back to saved/default
+    const s = (()=>{ try { return JSON.parse(localStorage.getItem('foundry.auth.v1')||'null'); } catch(_){ return null; } })();
+    return s?.role || localStorage.getItem('foundry.role') || 'partner';
+  });
+  const screen = SCREENS.find(s => s.id === screenId) || SCREENS[0];
+  React.useEffect(()=>{ localStorage.setItem('foundry.screen', screenId); }, [screenId]);
+  React.useEffect(()=>{ localStorage.setItem('foundry.role', role); }, [role]);
+
+  // Expose navigation globally so any component can deep-link
+  React.useEffect(()=>{
+    window.__nav = (id, opts) => {
+      setScreenId(id);
+      if (opts?.projectCode) window.__openProject = opts.projectCode;
+      if (opts?.projectTab) window.__projectTab = opts.projectTab;
+      if (opts?.approvalFilter) window.__approvalFilter = opts.approvalFilter;
+      if (opts?.dealCode) window.__openDeal = opts.dealCode;
+      if (opts?.directoryTab) window.__directoryTab = opts.directoryTab;
+      if (opts?.tab) window.__screenTab = opts.tab;
+    };
+    return ()=>{ delete window.__nav; };
+  },[]);
+
+  const visible = (kind) => SCREENS.filter(s => s.kind === kind && s.roles.includes(role));
+  const mainScreens = visible('main');
+  const inputScreens = visible('input');
+  const toolScreens = visible('tool');
+
+  // if current screen isn't visible for this role, jump to the first available main screen
+  React.useEffect(()=>{
+    const allowed = [...mainScreens, ...inputScreens, ...toolScreens];
+    if (!allowed.find(s=>s.id===screenId)) setScreenId(allowed[0]?.id || 'dashboard');
+  }, [role]);
+
+  return (
+    <div className="app" data-screen-label={screen.label}>
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <div className="brand-mark"><img src="assets/fh-mark.png" alt="FH"/></div>
+          <div className="brand-txt">
+            <div className="name">Foundry Health</div>
+            <div className="sub">Ops · FY26</div>
+          </div>
+        </div>
+        <div className="nav-section-label">Workspace</div>
+        {mainScreens.map(s => (
+          <div key={s.id} className={`nav-item ${screenId===s.id?'active':''}`} onClick={()=>setScreenId(s.id)}>
+            <Icon name={s.icon}/>{s.label}{s.count && <span className="count">{s.count}</span>}
+          </div>
+        ))}
+        <div className="nav-section-label">Inputs</div>
+        {inputScreens.map(s => (
+          <div key={s.id} className={`nav-item ${screenId===s.id?'active':''}`} onClick={()=>setScreenId(s.id)}>
+            <Icon name={s.icon}/>{s.label}{s.count && <span className="count">{s.count}</span>}
+          </div>
+        ))}
+        <div className="nav-section-label">System</div>
+        {toolScreens.map(s => (
+          <div key={s.id} className={`nav-item ${screenId===s.id?'active':''}`} onClick={()=>setScreenId(s.id)}>
+            <Icon name={s.icon}/>{s.label}
+          </div>
+        ))}
+        <div style={{ flex:1 }}/>
+        <div style={{ padding:'12px 8px', borderTop:'1px solid var(--border)', marginTop:8 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:9 }}>
+            <XlsxPill state="synced">all synced · 2m ago</XlsxPill>
+          </div>
+          <div className="txt-sm txt-muted" style={{ marginTop:8, fontSize:11, lineHeight:1.5 }}>6 workbooks · 2-way sync · Excel remains the source of truth</div>
+        </div>
+      </aside>
+      <main className="main">
+        <div className="topbar">
+          <div className="breadcrumb">
+            <span>Foundry Health</span><span className="sep">/</span>
+            <span>{screen.kind==='main'?'Workspace':screen.kind==='input'?'Inputs':'System'}</span>
+            <span className="sep">/</span>
+            <b>{screen.label}</b>
+          </div>
+          <div style={{ flex:1 }}/>
+          <div className="search">
+            <Icon name="search" size={14}/>
+            <span>Search projects, people, invoices…</span>
+            <kbd>⌘K</kbd>
+          </div>
+          <div className="role-switcher">
+            {ROLES.map(r => (
+              <button key={r.id} className={role===r.id?'active':''} onClick={()=>setRole(r.id)}>{r.label}</button>
+            ))}
+          </div>
+          <AvatarMenu role={role} onNav={setScreenId}/>
+        </div>
+        <div className="page">
+          <screen.Screen role={role}/>
+        </div>
+      </main>
+    </div>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<AuthGate><App/></AuthGate>);
+</script>
+</body>
+</html>
