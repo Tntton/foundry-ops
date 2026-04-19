@@ -1,0 +1,41 @@
+{
+  "name": "foundry-ops",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Foundry Health internal operating platform — projects, P&L, timesheets, invoices, expenses, BD pipeline, approvals, and human-in-the-loop AI agents.",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "next lint --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prisma:validate": "DATABASE_URL=postgresql://placeholder:placeholder@localhost:5432/placeholder prisma validate --schema=prisma/schema.prisma"
+  },
+  "dependencies": {
+    "next": "14.2.15",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.7.5",
+    "@types/react": "18.3.11",
+    "@types/react-dom": "18.3.0",
+    "@typescript-eslint/eslint-plugin": "7.18.0",
+    "@typescript-eslint/parser": "7.18.0",
+    "eslint": "8.57.1",
+    "eslint-config-next": "14.2.15",
+    "eslint-config-prettier": "9.1.0",
+    "prettier": "3.3.3",
+    "prisma": "5.20.0",
+    "typescript": "5.6.3",
+    "vitest": "2.1.2"
+  }
+}

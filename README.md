@@ -1,4 +1,85 @@
-# Foundry Ops — Design Handoff to Claude Code
+# Foundry Ops
+
+Foundry Health's internal operating platform — projects, P&L, timesheets, invoices, expenses, BD pipeline, approvals, and human-in-the-loop AI agents. Replaces a sprawl of Excel workbooks on OneDrive + manual Xero entry + WhatsApp approvals for a ~12-person AU/NZ healthcare strategy consultancy.
+
+## Repo status
+
+**Active build — early Phase 0.** Tracked as a [ralph loop](./CLAUDE.md#ralph-loop-rules-read-carefully--this-is-how-you-work) against [`TASKS.md`](./TASKS.md). Current focus: MVP (Phases 0 + 1) for parallel-run testing from **2026-04-24**, no firm go-live date yet.
+
+Locked architectural decisions are in [`CLAUDE.md`](./CLAUDE.md). Data model + integration contracts in [`HANDOFF.md`](./HANDOFF.md). Live infrastructure picks (Vercel, Supabase, Sentry, Langfuse, CBA ABA flavour, etc.) documented in commit history and auto-memory.
+
+## Dev setup
+
+**Prerequisites**
+
+- Node **22+** (tested on 22 LTS; 24 also works)
+- **pnpm 9.12+** (`corepack enable` then `corepack prepare pnpm@9.12.0 --activate`, or `npm install -g pnpm@9`)
+- Postgres (TASK-002 adds a Docker compose; until then not required)
+
+**Install + sanity checks**
+
+```bash
+pnpm install
+pnpm typecheck        # tsc --noEmit
+pnpm lint             # next lint --max-warnings=0
+pnpm test             # vitest run
+pnpm prisma:validate  # prisma validate
+```
+
+All four commands must exit 0 on every commit; CI enforces this on every push (`.github/workflows/ci.yml`).
+
+**Dev server**
+
+```bash
+pnpm dev   # http://localhost:3000
+```
+
+## Scripts
+
+| Script | What it does |
+|---|---|
+| `dev` | Next.js dev server |
+| `build` | Production build |
+| `start` | Start production server |
+| `typecheck` | `tsc --noEmit` (strict mode) |
+| `test` / `test:watch` | Vitest run / watch |
+| `lint` | `next lint --max-warnings=0` |
+| `format` / `format:check` | Prettier write / check |
+| `prisma:validate` | Validate `prisma/schema.prisma` |
+
+## Project layout
+
+```
+src/
+  app/                    Next.js app router routes + layouts
+  components/             React components (shadcn/ui + ported prototype primitives)
+  server/                 Server-only code (DB client, integrations, agents, permissions)
+  server/agents/<name>/   One folder per agent (prompt, schema, workflow, tests)
+  server/integrations/<x>/ One folder per integration (client, sync, types)
+prisma/
+  schema.prisma           Single source of truth for DB
+  seed.ts                 Dev/staging seed from foundry-team.jsx + foundry-ratecard.jsx
+.github/workflows/ci.yml  CI: typecheck + lint + test + prisma validate
+```
+
+Design-handoff reference files — `screens-*.jsx`, `foundry-*.jsx`, `shared.jsx`, `components-shared.jsx`, `hifi.css`, `styles.css`, `Foundry Ops.html` — remain at the repo root as **reference only** and are excluded from typecheck/lint/prettier/tests. Port tokens into Tailwind theme config (TASK-003); do not ship the prototype CSS verbatim.
+
+## If you're running a Claude Code / ralph-loop session
+
+Read the handoff bundle in this order (locked by [`CLAUDE.md`](./CLAUDE.md) §Read first):
+
+1. [`CLAUDE.md`](./CLAUDE.md) — ralph-loop operating manual, locked decisions, security must-haves.
+2. [`HANDOFF.md`](./HANDOFF.md) — data model, role matrix, integration contracts, agent catalog.
+3. [`BUILD_ORDER.md`](./BUILD_ORDER.md) — ordered phase plan.
+4. [`TASKS.md`](./TASKS.md) — pick the first `status: todo`.
+5. [`schema.prisma`](./schema.prisma) — canonical DB schema (also copied verbatim to `prisma/schema.prisma`).
+6. [`AGENTS.md`](./AGENTS.md) + [`INTEGRATIONS.md`](./INTEGRATIONS.md) — per-agent / per-integration specs.
+7. HTML prototype (`Foundry Ops.html` + `screens-*.jsx`) — UX reference, not production code.
+8. `screenshots/` — 19 numbered PNGs across every major screen and role.
+
+---
+
+# Design handoff bundle — reference
 
 ## Overview
 

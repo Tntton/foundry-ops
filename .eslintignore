@@ -1,0 +1,12 @@
+node_modules
+.next
+coverage
+dist
+build
+
+# Design-handoff prototype — reference only, not production code
+screens-*.jsx
+foundry-*.jsx
+components-shared.jsx
+shared.jsx
+*.html

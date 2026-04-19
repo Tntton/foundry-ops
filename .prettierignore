@@ -1,0 +1,19 @@
+node_modules
+.next
+coverage
+dist
+build
+pnpm-lock.yaml
+
+# Design-handoff prototype — reference only
+screens-*.jsx
+foundry-*.jsx
+components-shared.jsx
+shared.jsx
+*.html
+hifi.css
+styles.css
+assets/
+
+# Schema: let prisma format it
+prisma/schema.prisma
