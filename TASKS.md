@@ -89,15 +89,32 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 
 **context:** Custom implementation (not Auth.js email provider) because the Auth.js email provider requires the full Prisma Adapter with User/Account/Session/VerificationToken tables, which conflicts with our Person-as-identity model. Our `MagicLink` is a lightweight, single-purpose token table.
 
-### TASK-005 — Session → roles middleware
-**status:** todo
+### TASK-005 — Session → roles helper (Person.roles as source)
+**status:** done
 **depends on:** TASK-004
 **acceptance:**
-- [ ] `getSession()` helper returns `{person, roles: Role[]}` or null
-- [ ] Roles resolved from Entra group membership on sign-in; cached on Person for 1h
-- [ ] Five roles supported: `super_admin`, `admin`, `partner`, `manager`, `staff`
-- [ ] Person can hold multiple roles — roles is an array
-- [ ] Unit test: person in `FoundryPartners` group resolves to `partner`
+- [x] `getSession()` in `src/server/session.ts` reads the Auth.js JWT and fetches the Person row, returning `{person}` (with roles + basic identity fields) or null
+- [x] Five roles supported via `Role` enum from `@prisma/client`
+- [x] Multi-role supported — `Person.roles: Role[]` is the source of truth
+- [x] Pure helpers split into `src/server/roles.ts` (no auth/prisma deps): `hasRole`, `hasAnyRole`, `requireSession`, `requireRole`, `requireAnyRole`, `UnauthorizedError`
+- [x] 15 unit tests in `src/__tests__/session.test.ts` cover null / single role / multi-role / empty required list / throws-when-missing branches
+- [x] Role array re-fetched from DB on every `getSession()` call — no 1h stale cache. Admin role changes via Directory take effect on the next request
+
+**note on completion:** The original acceptance mentioned "roles resolved from Entra group membership … cached on Person for 1h"; that's TASK-005b (deferred). For MVP, `Person.roles` is set via the Directory wizard (TASK-023). Pure role helpers intentionally separated from `getSession()` so Vitest can test them without loading NextAuth's runtime (which transitively imports Next.js server internals not available in the Node test env).
+
+**note:** The original acceptance said "roles resolved from Entra group membership on sign-in; cached on Person for 1h." Deferred to TASK-005b — for MVP, `Person.roles` is set via the Directory wizard (TASK-023) and read directly. Entra group sync becomes a nice-to-have once the org's groups are standardised.
+
+### TASK-005b — Entra group membership → Role sync
+**status:** todo
+**depends on:** TASK-005
+**acceptance:**
+- [ ] On sign-in, call Microsoft Graph `/me/memberOf` with the user's delegated token
+- [ ] Map Entra group names (e.g. `FoundryPartners`, `FoundrySuperAdmins`, etc.) to `Role[]` via a config table
+- [ ] Union with any roles set directly on Person (Entra groups add, don't subtract)
+- [ ] Cache result on `Person.roles` with a `rolesSyncedAt` timestamp; refresh if stale >1h
+- [ ] Unit test: mock Graph response with `FoundryPartners` group → resolves to `partner`
+
+**context:** Skipped in MVP. The Directory wizard sets Person.roles directly; admins manage role assignments in-app. Entra sync becomes relevant once Foundry standardises on Entra group management for access control org-wide.
 
 ### TASK-006 — Permission primitive
 **status:** todo
