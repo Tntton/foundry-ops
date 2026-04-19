@@ -156,14 +156,17 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note:** Drawer (right-side, ~640px) + Modal (center dialog) both built on Radix Dialog with different slide-in directions. Tabs on Radix Tabs. Avatar on Radix Avatar with initials fallback. KPI is custom (not in shadcn) with trend arrow + subtext. Table uses semantic `<table>` + shadcn's hover/selected row patterns. All CSS classes reference the Foundry Tailwind tokens from TASK-003.
 
 ### TASK-009 — Shell: sidebar + topbar + breadcrumb
-**status:** todo
+**status:** done
 **depends on:** TASK-008, TASK-005
 **acceptance:**
-- [ ] Sidebar groups: Workspace / Inputs / System (match prototype)
-- [ ] Role-filtered nav (hide Projects for Staff outside their projects, hide P&L for Manager, etc.)
-- [ ] Topbar: breadcrumb + search placeholder + avatar menu
-- [ ] No top-right role switcher (that's prototype-only)
-- [ ] Keyboard nav: `⌘K` opens a placeholder command palette (phase 2)
+- [x] Sidebar groups Workspace / Inputs / System in `src/components/shell/nav-config.ts`; groups hide when all their items are filtered out for the user's roles
+- [x] Role-filtered nav: Staff sees only Projects + Timesheet + Expenses + My week (no Dashboard, P&L, BD, Directory, Approvals); Manager hides P&L/BD/Directory; Partner hides Rate card / Audit / Approval policies; Super Admin sees everything
+- [x] Topbar: breadcrumb (resolves known hrefs to nav labels, falls back to humanised path segments), ⌘K search placeholder, avatar + name + email on the right
+- [x] No role switcher — authenticated user's real roles drive the nav, read from `getSession()` in the (app) layout
+- [x] `⌘K` (and `Ctrl+K`) opens a placeholder Dialog announcing Phase 2 command palette — keyboard shortcut is reserved and visible (`<kbd>⌘K</kbd>` chip in the search button) without building the backend yet
+- [x] `src/app/(app)/layout.tsx` enforces auth — unauthenticated requests redirect to `/api/auth/signin`. `src/app/(app)/page.tsx` is the new `/` landing with placeholder KPIs + cards. Old `src/app/page.tsx` removed.
+
+**note:** Breadcrumb is a client component (uses `usePathname()`). Sidebar is server-rendered per-request since `currentPath` changes on every navigation; Next.js app-router's default per-request rendering handles this without extra state. Route group `(app)` groups authenticated pages without affecting URLs. `/playground` remains outside the group — accessible without auth (dev-only).
 
 ### TASK-010 — Healthz + staging deploy
 **status:** todo
