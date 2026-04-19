@@ -55,11 +55,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     MicrosoftEntraID({
       clientId: requireEnv('ENTRA_CLIENT_ID'),
       clientSecret: requireEnv('ENTRA_CLIENT_SECRET'),
-      // tenantId is read at runtime by the provider's customFetch to rewrite
-      // the OIDC issuer from "{tenantid}" → the real tenant. It's in the source
-      // but not yet in @auth/core@0.37.2's public types — fixed on main.
-      // @ts-expect-error — see note above
-      tenantId: requireEnv('ENTRA_TENANT_ID'),
+      // Single-tenant: point OIDC discovery at the tenant-specific issuer so
+      // Auth.js hits .../<tenantId>/v2.0/.well-known/... rather than /common/
+      // which is rejected with AADSTS50194 for apps not configured as multi-tenant.
+      issuer: `https://login.microsoftonline.com/${requireEnv('ENTRA_TENANT_ID')}/v2.0`,
     }),
   ],
   session: {
@@ -80,42 +79,58 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     async signIn({ profile, account }) {
       const email = extractEmail(profile);
-      if (!email || !email.endsWith(REQUIRED_EMAIL_SUFFIX)) return false;
+      if (!email) {
+        console.error(
+          '[auth/signIn] reject: no email claim (email, preferred_username, upn all absent)',
+        );
+        return false;
+      }
+      if (!email.endsWith(REQUIRED_EMAIL_SUFFIX)) {
+        console.error(
+          `[auth/signIn] reject: "${email}" does not end with ${REQUIRED_EMAIL_SUFFIX}`,
+        );
+        return false;
+      }
 
       const { firstName, lastName } = extractName(profile);
       const entraUserId = account?.providerAccountId ?? null;
 
-      const existing = await prisma.person.findUnique({ where: { email } });
-      if (existing) {
-        if (entraUserId && existing.entraUserId !== entraUserId) {
-          await prisma.person.update({ where: { email }, data: { entraUserId } });
+      try {
+        const existing = await prisma.person.findUnique({ where: { email } });
+        if (existing) {
+          if (entraUserId && existing.entraUserId !== entraUserId) {
+            await prisma.person.update({ where: { email }, data: { entraUserId } });
+          }
+          return true;
         }
-        return true;
-      }
 
-      // First-time sign-in — create a minimal Person row. Admin refines via
-      // Directory wizard (TASK-021/022/023); roles populated by TASK-005 from
-      // Entra group membership.
-      const initials = await ensureUniqueInitials(deriveInitials(firstName, lastName));
-      await prisma.person.create({
-        data: {
-          email,
-          firstName,
-          lastName,
-          initials,
-          band: 'Consultant',
-          level: 'T1',
-          employment: 'ft',
-          fte: 1.0,
-          region: 'AU',
-          rateUnit: 'day',
-          rate: 0,
-          roles: [],
-          startDate: new Date(),
-          entraUserId,
-        },
-      });
-      return true;
+        // First-time sign-in — create a minimal Person row. Admin refines via
+        // Directory wizard (TASK-021/022/023); roles populated by TASK-005 from
+        // Entra group membership.
+        const initials = await ensureUniqueInitials(deriveInitials(firstName, lastName));
+        await prisma.person.create({
+          data: {
+            email,
+            firstName,
+            lastName,
+            initials,
+            band: 'Consultant',
+            level: 'T1',
+            employment: 'ft',
+            fte: 1.0,
+            region: 'AU',
+            rateUnit: 'day',
+            rate: 0,
+            roles: [],
+            startDate: new Date(),
+            entraUserId,
+          },
+        });
+        return true;
+      } catch (err) {
+        console.error('[auth/signIn] DB error during Person upsert:', err);
+        return false;
+      }
     },
 
     async jwt({ token, profile }) {
