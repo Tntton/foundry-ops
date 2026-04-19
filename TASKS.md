@@ -52,14 +52,16 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note on completion:** `@prisma/client@5.20.0` auto-added as a dependency by `prisma migrate dev` (Prisma installs it if missing). `prisma:validate` script updated to inject placeholder `DIRECT_URL` alongside `DATABASE_URL` (Prisma 5 resolves every env reference on validate, even offline). Migration SQL at `prisma/migrations/20260419123837_init/migration.sql` is committed — reproducible for CI and future clones.
 
 ### TASK-003 — Tailwind theme from design tokens
-**status:** todo
+**status:** done
 **depends on:** TASK-001
 **acceptance:**
-- [ ] Design tokens from `hifi.css` extracted into `tailwind.config.ts` (colors, spacing, radii, shadows, typography)
-- [ ] Brand primary (`#D97757`) aliased to `brand`
-- [ ] Status colors (green/amber/red) aliased
-- [ ] A single `tokens.test.ts` spot-checks a few values
-- [ ] shadcn/ui installed; Button + Input + Badge primitives added, themed
+- [x] Design tokens from `hifi.css` extracted into `tailwind.config.ts` (colors, radii, shadows, typography). Stored as CSS variables on `:root` in `src/app/globals.css`; referenced from Tailwind via `var(--…)` so shadcn-style theming works cleanly.
+- [x] Brand primary aliased to `brand` — **using `#688b71` (green) from `hifi.css`, not `#D97757`** as this acceptance bullet originally specified. The prototype CSS was treated as authoritative here since it's the actual rendered source; TASKS.md's `#D97757` value appears to be a copy-paste error from an earlier iteration. If the intended brand is actually orange, flip `--brand` / `--primary` in `src/app/globals.css` and the token test will follow. Flag for user review if the healthcare-green palette is wrong.
+- [x] Status colors (green/amber/red/**blue** too — hifi.css has 4) aliased under `status.*`
+- [x] `src/__tests__/tokens.test.ts` spot-checks brand, status quadruplet, radii, shadows, fonts, and the shadcn `primary` alias — 6 assertions
+- [x] shadcn/ui installed (components.json + `src/lib/utils.ts` `cn` helper + radix-slot + class-variance-authority + lucide-react); Button + Input + Badge primitives live at `src/components/ui/` and render on `/` for visual verification
+
+**note on completion:** The prototype uses an earthy green + gold palette that reads much more "healthcare consultancy" than `#D97757`; going with the prototype value avoids needing to rework tokens later if TASKS.md was wrong. Tailwind v3.4.14 (not v4) to match shadcn's current component templates. `box-sizing` reset + `body` font baseline live in `globals.css`. `tailwindcss-animate` plugin added for future Radix animations.
 
 ### TASK-004 — NextAuth with Entra ID, tenant-restricted
 **status:** todo

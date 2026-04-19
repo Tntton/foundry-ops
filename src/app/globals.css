@@ -1,9 +1,85 @@
-html,
-body {
-  margin: 0;
-  padding: 0;
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-* {
-  box-sizing: border-box;
+@layer base {
+  :root {
+    /* Foundry brand tokens — ported verbatim from hifi.css (prototype source of truth).
+       Note: CLAUDE.md §8 warns against porting hifi.css directly; we port tokens only. */
+
+    /* Surfaces */
+    --surface: #fafaf8;
+    --surface-elev: #ffffff;
+    --surface-subtle: #f4f3ef;
+    --surface-hover: #efede6;
+
+    /* Lines / borders */
+    --line: #e4e2db;
+    --line-strong: #cfccc2;
+    --line-divider: #ecebe3;
+
+    /* Ink (text) */
+    --ink: #1a1a17;
+    --ink-2: #4a4945;
+    --ink-3: #8b8984;
+    --ink-4: #b5b2a9;
+
+    /* Brand — muted green (healthcare consultancy feel) */
+    --brand: #688b71;
+    --brand-2: #7a9e84;
+    --brand-ink: #48695a;
+    --brand-soft: #e3ece5;
+
+    /* Gold accent */
+    --gold: #c4a962;
+    --gold-soft: #f0e9d4;
+
+    /* Status */
+    --status-green: #3f7c5c;
+    --status-green-soft: #e6f0e9;
+    --status-amber: #b8741e;
+    --status-amber-soft: #fbecd4;
+    --status-red: #a5342f;
+    --status-red-soft: #f7dfdc;
+    --status-blue: #2b5a8c;
+    --status-blue-soft: #e0e9f2;
+
+    /* shadcn/ui aliases — map to Foundry palette so shadcn components inherit the theme */
+    --background: #fafaf8;
+    --foreground: #1a1a17;
+    --card: #ffffff;
+    --card-foreground: #1a1a17;
+    --popover: #ffffff;
+    --popover-foreground: #1a1a17;
+    --primary: #688b71;
+    --primary-foreground: #ffffff;
+    --secondary: #f4f3ef;
+    --secondary-foreground: #1a1a17;
+    --muted: #f4f3ef;
+    --muted-foreground: #8b8984;
+    --accent: #c4a962;
+    --accent-foreground: #1a1a17;
+    --destructive: #a5342f;
+    --destructive-foreground: #ffffff;
+    --border: #e4e2db;
+    --input: #e4e2db;
+    --ring: #688b71;
+    --radius: 0.5rem;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Helvetica Neue', Helvetica, Arial, -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
 }
