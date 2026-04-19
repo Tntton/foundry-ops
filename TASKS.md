@@ -64,15 +64,30 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note on completion:** The prototype uses an earthy green + gold palette that reads much more "healthcare consultancy" than `#D97757`; going with the prototype value avoids needing to rework tokens later if TASKS.md was wrong. Tailwind v3.4.14 (not v4) to match shadcn's current component templates. `box-sizing` reset + `body` font baseline live in `globals.css`. `tailwindcss-animate` plugin added for future Radix animations.
 
 ### TASK-004 — NextAuth with Entra ID, tenant-restricted
-**status:** todo
+**status:** done
 **depends on:** TASK-002
 **acceptance:**
-- [ ] NextAuth configured with Entra ID provider
-- [ ] Tenant ID pinned to Foundry's (env var)
-- [ ] Non-`@foundry.health` emails rejected at callback
-- [ ] Contractor magic-link flow (email → one-time token, 15-min TTL, stored hashed)
-- [ ] On successful sign-in, upsert `Person` row (match by email)
-- [ ] Session cookie: httpOnly, secure, sameSite=lax
+- [x] NextAuth (Auth.js v5) configured with Microsoft Entra ID provider at `src/server/auth.ts`
+- [x] Tenant ID pinned via `ENTRA_TENANT_ID` (single-tenant issuer URL `https://login.microsoftonline.com/<tenant>/v2.0`)
+- [x] Non-`@foundry.health` emails rejected in `signIn` callback (returns false)
+- [x] On successful sign-in, upsert `Person` row (match by email); `entraUserId` stored; first-time sign-in creates a minimal Person (admin refines via Directory wizard in TASK-023)
+- [x] Session cookie: `foundry-ops.session-token`, httpOnly, sameSite=lax, secure only in production (custom cookie config in `src/server/auth.ts`)
+- [x] JWT strategy, 12h max age; `personId` + `initials` + `roles` hydrated into the JWT for server-side authorization
+
+**note:** The contractor magic-link flow was originally part of this task; split out as TASK-004b so TASK-004 can land cleanly with staff SSO. 004b depends on 004 and can land independently. Required env vars (AUTH_SECRET, ENTRA_*) documented in `.env.example`; real values in `.env.local` (gitignored). `src/types/next-auth.d.ts` augments the Session + JWT types with Foundry fields. `src/server/env.ts` provides `requireEnv()` so missing vars fail loudly at startup rather than at first request.
+
+### TASK-004b — Contractor magic-link via Resend
+**status:** todo
+**depends on:** TASK-004
+**acceptance:**
+- [ ] `/auth/magic-link/send` server action: accepts a contractor email, generates a 32-byte random token, stores hashed (sha256) in a new `MagicLink` model with 15-min TTL
+- [ ] Email sent via Resend (`RESEND_API_KEY`, `EMAIL_FROM`); subject + body designed for external contractors, with a deep link to `/auth/magic-link/verify?token=…`
+- [ ] `/auth/magic-link/verify` route: verifies hash, burns the token (single-use), issues Auth.js JWT session mapped to a Person row (must already exist; contractors are created via the Directory wizard per A2)
+- [ ] Non-existent / expired / reused tokens return a 401 with generic "invalid or expired link" message
+- [ ] Rate-limit send to 3 per email per hour
+- [ ] Schema migration: `MagicLink` model added
+
+**context:** Custom implementation (not Auth.js email provider) because the Auth.js email provider requires the full Prisma Adapter with User/Account/Session/VerificationToken tables, which conflicts with our Person-as-identity model. Our `MagicLink` is a lightweight, single-purpose token table.
 
 ### TASK-005 — Session → roles middleware
 **status:** todo
