@@ -20,6 +20,7 @@ export type ProjectListFilter = {
   clientId?: string;
   partnerId?: string;
   active?: boolean;
+  search?: string;
 };
 
 /**
@@ -45,6 +46,18 @@ export async function listProjects(
     }
   }
 
+  const q = filter.search?.trim();
+  const searchFilter = q
+    ? {
+        OR: [
+          { code: { contains: q, mode: 'insensitive' as const } },
+          { name: { contains: q, mode: 'insensitive' as const } },
+          { client: { is: { code: { contains: q, mode: 'insensitive' as const } } } },
+          { client: { is: { legalName: { contains: q, mode: 'insensitive' as const } } } },
+        ],
+      }
+    : null;
+
   const where: Record<string, unknown> = {
     ...(filter.stage ? { stage: filter.stage } : {}),
     ...(filter.clientId ? { clientId: filter.clientId } : {}),
@@ -52,6 +65,7 @@ export async function listProjects(
     ...(filter.active === true ? { stage: { not: 'archived' } } : {}),
     ...(filter.active === false ? { stage: 'archived' } : {}),
     ...(scopeFilter.length > 0 ? { AND: scopeFilter } : {}),
+    ...(searchFilter ? searchFilter : {}),
   };
 
   const rows = await prisma.project.findMany({

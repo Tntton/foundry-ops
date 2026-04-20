@@ -8,6 +8,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import {
   Table,
   TableBody,
@@ -36,7 +37,7 @@ function formatMoney(cents: number): string {
 export default async function ProjectsPage({
   searchParams,
 }: {
-  searchParams: { stage?: string; active?: string; deleted?: string };
+  searchParams: { stage?: string; active?: string; deleted?: string; q?: string };
 }) {
   const session = await getSession();
   if (!session) notFound();
@@ -47,8 +48,9 @@ export default async function ProjectsPage({
   const active =
     searchParams.active === 'true' ? true : searchParams.active === 'false' ? false : undefined;
   const deletedFlag = searchParams.deleted === '1';
+  const q = searchParams.q?.trim() ?? '';
 
-  const rows = await listProjects(session, { stage, active });
+  const rows = await listProjects(session, { stage, active, search: q || undefined });
   const canCreate = hasCapability(session, 'project.create');
 
   return (
@@ -81,8 +83,14 @@ export default async function ProjectsPage({
       <form
         action="/projects"
         method="get"
-        className="flex items-center gap-2 rounded-lg border border-line bg-card p-3"
+        className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-card p-3"
       >
+        <Input
+          name="q"
+          defaultValue={q}
+          placeholder="Search code, name, or client…"
+          className="min-w-[240px] max-w-md"
+        />
         <label className="flex items-center gap-2 text-xs text-ink-3">
           <span>Stage</span>
           <select
@@ -113,9 +121,11 @@ export default async function ProjectsPage({
         <Button type="submit" variant="outline" size="sm">
           Apply
         </Button>
-        <Button type="button" asChild variant="ghost" size="sm">
-          <Link href="/projects">Clear</Link>
-        </Button>
+        {(q || stage || active !== undefined) && (
+          <Button type="button" asChild variant="ghost" size="sm">
+            <Link href="/projects">Clear</Link>
+          </Button>
+        )}
         <span className="ml-auto text-xs text-ink-3">
           {rows.length} {rows.length === 1 ? 'project' : 'projects'}
         </span>
@@ -124,11 +134,17 @@ export default async function ProjectsPage({
       <Card className="p-0">
         {rows.length === 0 ? (
           <div className="p-12 text-center text-sm text-ink-3">
-            No projects {stage ? `in ${stage}` : 'yet'}.{' '}
-            {canCreate && (
-              <Link href="/projects/new" className="text-brand hover:underline">
-                Create one →
-              </Link>
+            {q ? (
+              <>No projects match &quot;{q}&quot;. Try a different query or clear the filter.</>
+            ) : (
+              <>
+                No projects {stage ? `in ${stage}` : 'yet'}.{' '}
+                {canCreate && (
+                  <Link href="/projects/new" className="text-brand hover:underline">
+                    Create one →
+                  </Link>
+                )}
+              </>
             )}
           </div>
         ) : (

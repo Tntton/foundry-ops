@@ -22,9 +22,11 @@ const ROLES = ['super_admin', 'admin', 'partner', 'manager', 'staff'] as const;
 export function NewPersonForm({
   provisioningOn,
   ratesByCode,
+  defaultEmployment,
 }: {
   provisioningOn: boolean;
   ratesByCode: Record<string, number>;
+  defaultEmployment?: 'ft' | 'contractor';
 }) {
   const [state, action] = useFormState<NewPersonState, FormData>(createPerson, {
     status: 'idle',
@@ -161,7 +163,7 @@ export function NewPersonForm({
         </FieldRow>
         <FieldRow>
           <Field label="Employment" required error={errs['employment']}>
-            <Select name="employment" defaultValue="ft" required>
+            <Select name="employment" defaultValue={defaultEmployment ?? 'ft'} required>
               {EMPLOYMENTS.map((e) => (
                 <option key={e.v} value={e.v}>
                   {e.label}

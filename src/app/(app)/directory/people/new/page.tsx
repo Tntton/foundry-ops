@@ -6,12 +6,22 @@ import { optionalEnv } from '@/server/env';
 import { currentRatesByCode } from '@/server/rate-card';
 import { NewPersonForm } from './form';
 
-export default async function NewPersonPage() {
+export default async function NewPersonPage({
+  searchParams,
+}: {
+  searchParams: { employment?: string };
+}) {
   const session = await getSession();
   if (!hasCapability(session, 'person.create')) notFound();
 
   const provisioningOn = optionalEnv('ENABLE_PROVISIONING') === '1';
   const ratesByCode = await currentRatesByCode();
+  const defaultEmployment: 'ft' | 'contractor' | undefined =
+    searchParams.employment === 'contractor'
+      ? 'contractor'
+      : searchParams.employment === 'ft'
+        ? 'ft'
+        : undefined;
 
   return (
     <div className="space-y-6">
@@ -27,7 +37,11 @@ export default async function NewPersonPage() {
           <span className="text-status-red">*</span> marks mandatory fields.
         </p>
       </header>
-      <NewPersonForm provisioningOn={provisioningOn} ratesByCode={ratesByCode} />
+      <NewPersonForm
+        provisioningOn={provisioningOn}
+        ratesByCode={ratesByCode}
+        {...(defaultEmployment ? { defaultEmployment } : {})}
+      />
     </div>
   );
 }

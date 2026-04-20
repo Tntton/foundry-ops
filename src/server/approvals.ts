@@ -121,3 +121,104 @@ export async function listPendingApprovals(session: Session): Promise<ApprovalQu
     };
   });
 }
+
+export type ApprovalsAnalytics = {
+  pendingCount: number;
+  oldestPendingAgeDays: number | null;
+  pendingByType: Record<string, number>;
+  decidedLast7: number;
+  decidedLast30: number;
+  avgCycleHoursLast30: number | null;
+  approverBreakdownLast30: Array<{
+    personId: string;
+    initials: string;
+    name: string;
+    count: number;
+  }>;
+};
+
+/**
+ * Computes approval queue analytics scoped to whatever the viewer can see
+ * (their roles). Cycle time is the delta between Approval.createdAt and
+ * decidedAt, averaged over the last 30 days of decided rows.
+ */
+export async function getApprovalsAnalytics(session: Session): Promise<ApprovalsAnalytics> {
+  const roles = session.person.roles;
+  const now = Date.now();
+  const d7 = new Date(now - 7 * 24 * 3600 * 1000);
+  const d30 = new Date(now - 30 * 24 * 3600 * 1000);
+
+  const [pending, recentDecided] = await Promise.all([
+    prisma.approval.findMany({
+      where: { status: 'pending', requiredRole: { in: roles } },
+      select: { subjectType: true, createdAt: true },
+    }),
+    prisma.approval.findMany({
+      where: {
+        status: { in: ['approved', 'rejected'] },
+        decidedAt: { gte: d30 },
+        requiredRole: { in: roles },
+      },
+      select: {
+        createdAt: true,
+        decidedAt: true,
+        decidedBy: {
+          select: { id: true, initials: true, firstName: true, lastName: true },
+        },
+      },
+    }),
+  ]);
+
+  const pendingByType: Record<string, number> = {};
+  let oldestCreated: Date | null = null;
+  for (const p of pending) {
+    pendingByType[p.subjectType] = (pendingByType[p.subjectType] ?? 0) + 1;
+    if (!oldestCreated || p.createdAt < oldestCreated) oldestCreated = p.createdAt;
+  }
+  const oldestPendingAgeDays = oldestCreated
+    ? Math.floor((now - oldestCreated.getTime()) / (24 * 3600 * 1000))
+    : null;
+
+  let decidedLast7 = 0;
+  let cycleSumMs = 0;
+  let cycleCount = 0;
+  const approverTally = new Map<
+    string,
+    { initials: string; name: string; count: number }
+  >();
+  for (const d of recentDecided) {
+    if (!d.decidedAt) continue;
+    if (d.decidedAt >= d7) decidedLast7++;
+    cycleSumMs += d.decidedAt.getTime() - d.createdAt.getTime();
+    cycleCount++;
+    if (d.decidedBy) {
+      const key = d.decidedBy.id;
+      const entry =
+        approverTally.get(key) ??
+        ({
+          initials: d.decidedBy.initials,
+          name: `${d.decidedBy.firstName} ${d.decidedBy.lastName}`,
+          count: 0,
+        } as { initials: string; name: string; count: number });
+      entry.count += 1;
+      approverTally.set(key, entry);
+    }
+  }
+
+  const avgCycleHoursLast30 =
+    cycleCount > 0 ? Math.round((cycleSumMs / cycleCount / 3600 / 1000) * 10) / 10 : null;
+
+  const approverBreakdownLast30 = [...approverTally.entries()]
+    .map(([personId, v]) => ({ personId, ...v }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    pendingCount: pending.length,
+    oldestPendingAgeDays,
+    pendingByType,
+    decidedLast7,
+    decidedLast30: recentDecided.length,
+    avgCycleHoursLast30,
+    approverBreakdownLast30,
+  };
+}
