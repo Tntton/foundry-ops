@@ -73,8 +73,16 @@ export async function decideApproval(
             approvedAt: decision === 'approved' ? new Date() : null,
           },
         });
+      } else if (approval.subjectType === 'invoice') {
+        // Approved invoices move to 'approved' (ready to send via Xero — TASK-053);
+        // Rejected invoices bounce back to 'draft' for edit.
+        const nextStatus = decision === 'approved' ? 'approved' : 'draft';
+        await tx.invoice.update({
+          where: { id: approval.subjectId },
+          data: { status: nextStatus },
+        });
       }
-      // invoice / bill / pay_run propagation lands when those flows are wired up.
+      // bill / pay_run propagation lands when those flows are wired up.
 
       await writeAudit(tx, {
         actor: { type: 'person', id: session.person.id },

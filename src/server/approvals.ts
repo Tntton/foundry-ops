@@ -46,15 +46,29 @@ export async function listPendingApprovals(session: Session): Promise<ApprovalQu
     },
   });
 
-  // Hydrate subject details in parallel per type.
+  // Hydrate subject details per type.
   const expenseIds = pending.filter((a) => a.subjectType === 'expense').map((a) => a.subjectId);
-  const expenses = expenseIds.length
-    ? await prisma.expense.findMany({
-        where: { id: { in: expenseIds } },
-        include: { project: { select: { code: true, name: true } } },
-      })
-    : [];
+  const invoiceIds = pending.filter((a) => a.subjectType === 'invoice').map((a) => a.subjectId);
+
+  const [expenses, invoices] = await Promise.all([
+    expenseIds.length
+      ? prisma.expense.findMany({
+          where: { id: { in: expenseIds } },
+          include: { project: { select: { code: true, name: true } } },
+        })
+      : Promise.resolve([]),
+    invoiceIds.length
+      ? prisma.invoice.findMany({
+          where: { id: { in: invoiceIds } },
+          include: {
+            project: { select: { code: true, name: true } },
+            client: { select: { code: true, legalName: true } },
+          },
+        })
+      : Promise.resolve([]),
+  ]);
   const expenseById = new Map(expenses.map((e) => [e.id, e]));
+  const invoiceById = new Map(invoices.map((i) => [i.id, i]));
 
   return pending.map<ApprovalQueueItem>((a) => {
     let summary = `${a.subjectType} · ${a.subjectId}`;
@@ -66,6 +80,12 @@ export async function listPendingApprovals(session: Session): Promise<ApprovalQu
           e.project ? ` · ${e.project.code}` : ' · OPEX'
         }`;
         amountCents = e.amount;
+      }
+    } else if (a.subjectType === 'invoice') {
+      const i = invoiceById.get(a.subjectId);
+      if (i) {
+        summary = `${i.number} · ${i.client.code} ${i.client.legalName} · ${i.project.code}`;
+        amountCents = i.amountTotal;
       }
     }
     return {
