@@ -1,3 +1,4 @@
+import type { ExpenseStatus } from '@prisma/client';
 import { prisma } from '@/server/db';
 import type { Session } from '@/server/roles';
 
@@ -14,6 +15,12 @@ export type ExpenseListRow = {
   person: { id: string; initials: string; firstName: string; lastName: string };
 };
 
+export type ExpenseListFilter = {
+  status?: ExpenseStatus;
+  category?: string;
+  search?: string;
+};
+
 /**
  * Role-scoped expense list:
  *  - super_admin / admin: see all
@@ -21,23 +28,49 @@ export type ExpenseListRow = {
  *  - manager: see own + their projects' expenses (for approval)
  *  - staff: see own only
  */
-export async function listExpenses(session: Session, scope: 'mine' | 'all' = 'mine') {
+export async function listExpenses(
+  session: Session,
+  scope: 'mine' | 'all' = 'mine',
+  filter: ExpenseListFilter = {},
+) {
   const personId = session.person.id;
   const roles = session.person.roles;
 
-  const where: Record<string, unknown> = {};
-  if (scope === 'mine' || roles.includes('staff') || (roles.includes('manager') && !roles.some((r) => ['super_admin', 'admin', 'partner'].includes(r)))) {
+  const scopeWhere: Record<string, unknown> = {};
+  if (
+    scope === 'mine' ||
+    roles.includes('staff') ||
+    (roles.includes('manager') && !roles.some((r) => ['super_admin', 'admin', 'partner'].includes(r)))
+  ) {
     if (scope === 'mine') {
-      where['personId'] = personId;
+      scopeWhere['personId'] = personId;
     } else if (roles.includes('manager')) {
-      where['OR'] = [
+      scopeWhere['OR'] = [
         { personId },
         { project: { managerId: personId } },
       ];
     } else {
-      where['personId'] = personId;
+      scopeWhere['personId'] = personId;
     }
   }
+
+  const q = filter.search?.trim();
+  const searchFilter = q
+    ? {
+        OR: [
+          { vendor: { contains: q, mode: 'insensitive' as const } },
+          { description: { contains: q, mode: 'insensitive' as const } },
+          { project: { is: { code: { contains: q, mode: 'insensitive' as const } } } },
+        ],
+      }
+    : null;
+
+  const where = {
+    ...scopeWhere,
+    ...(filter.status ? { status: filter.status } : {}),
+    ...(filter.category ? { category: filter.category } : {}),
+    ...(searchFilter ?? {}),
+  } as const;
 
   const rows = await prisma.expense.findMany({
     where,

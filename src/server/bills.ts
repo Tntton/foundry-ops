@@ -1,3 +1,4 @@
+import type { BillStatus } from '@prisma/client';
 import { prisma } from '@/server/db';
 import type { Session } from '@/server/roles';
 
@@ -14,19 +15,49 @@ export type BillListRow = {
   project: { id: string; code: string; name: string } | null;
 };
 
-export async function listBills(session: Session): Promise<BillListRow[]> {
+export type BillListFilter = {
+  status?: BillStatus;
+  category?: string;
+  search?: string;
+};
+
+export async function listBills(
+  session: Session,
+  filter: BillListFilter = {},
+): Promise<BillListRow[]> {
   const canSeeAll = session.person.roles.some((r) =>
     ['super_admin', 'admin', 'partner'].includes(r),
   );
 
-  const rows = await prisma.bill.findMany({
-    where: canSeeAll
+  const q = filter.search?.trim();
+  const searchFilter = q
+    ? {
+        OR: [
+          { supplierName: { contains: q, mode: 'insensitive' as const } },
+          { supplierInvoiceNumber: { contains: q, mode: 'insensitive' as const } },
+          { project: { is: { code: { contains: q, mode: 'insensitive' as const } } } },
+        ],
+      }
+    : null;
+
+  const where = {
+    ...(canSeeAll
       ? {}
       : {
           project: {
-            OR: [{ managerId: session.person.id }, { primaryPartnerId: session.person.id }],
+            OR: [
+              { managerId: session.person.id },
+              { primaryPartnerId: session.person.id },
+            ],
           },
-        },
+        }),
+    ...(filter.status ? { status: filter.status } : {}),
+    ...(filter.category ? { category: filter.category } : {}),
+    ...(searchFilter ?? {}),
+  } as const;
+
+  const rows = await prisma.bill.findMany({
+    where,
     orderBy: { issueDate: 'desc' },
     take: 200,
     include: {

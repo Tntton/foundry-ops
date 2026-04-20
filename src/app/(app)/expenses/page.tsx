@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import type { ExpenseStatus } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { listExpenses } from '@/server/expenses';
@@ -7,6 +8,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import {
   Table,
   TableBody,
@@ -33,11 +35,49 @@ const STATUS_VARIANT: Record<string, 'amber' | 'green' | 'red' | 'blue' | 'outli
   batched_for_payment: 'blue',
 };
 
-export default async function ExpensesPage() {
+const STATUS_OPTIONS: readonly ExpenseStatus[] = [
+  'draft',
+  'submitted',
+  'approved',
+  'rejected',
+  'reimbursed',
+  'batched_for_payment',
+];
+const CATEGORY_OPTIONS = [
+  'travel',
+  'meals',
+  'office',
+  'tools',
+  'subscriptions',
+  'other',
+] as const;
+
+export default async function ExpensesPage({
+  searchParams,
+}: {
+  searchParams: { status?: string; category?: string; q?: string; scope?: string };
+}) {
   const session = await getSession();
   if (!session) notFound();
 
-  const rows = await listExpenses(session, 'mine');
+  const status = STATUS_OPTIONS.includes(searchParams.status as ExpenseStatus)
+    ? (searchParams.status as ExpenseStatus)
+    : undefined;
+  const category = CATEGORY_OPTIONS.includes(
+    searchParams.category as (typeof CATEGORY_OPTIONS)[number],
+  )
+    ? searchParams.category
+    : undefined;
+  const q = searchParams.q?.trim() ?? '';
+  const canSeeAll = hasCapability(session, 'expense.approve.under_2k');
+  const scope: 'mine' | 'all' =
+    canSeeAll && searchParams.scope === 'all' ? 'all' : 'mine';
+
+  const rows = await listExpenses(session, scope, {
+    ...(status ? { status } : {}),
+    ...(category ? { category } : {}),
+    ...(q ? { search: q } : {}),
+  });
   const canSubmit = hasCapability(session, 'expense.submit');
 
   return (
@@ -45,7 +85,9 @@ export default async function ExpensesPage() {
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-ink">Expenses</h1>
-          <p className="text-sm text-ink-3">Your submitted expenses.</p>
+          <p className="text-sm text-ink-3">
+            {scope === 'all' ? 'All expenses in scope.' : 'Your submitted expenses.'}
+          </p>
         </div>
         {canSubmit && (
           <Button asChild>
@@ -54,14 +96,92 @@ export default async function ExpensesPage() {
         )}
       </header>
 
+      <form
+        action="/expenses"
+        method="get"
+        className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-card p-3"
+      >
+        <Input
+          name="q"
+          defaultValue={q}
+          placeholder="Search vendor, description, or project code…"
+          className="min-w-[240px] max-w-md"
+        />
+        <label className="flex items-center gap-2 text-xs text-ink-3">
+          <span>Status</span>
+          <select
+            name="status"
+            defaultValue={status ?? ''}
+            className="h-9 rounded-md border border-line bg-surface-elev px-2 text-sm text-ink"
+          >
+            <option value="">Any</option>
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>
+                {s.replace(/_/g, ' ')}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-xs text-ink-3">
+          <span>Category</span>
+          <select
+            name="category"
+            defaultValue={category ?? ''}
+            className="h-9 rounded-md border border-line bg-surface-elev px-2 text-sm text-ink"
+          >
+            <option value="">Any</option>
+            {CATEGORY_OPTIONS.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </label>
+        {canSeeAll && (
+          <label className="flex items-center gap-2 text-xs text-ink-3">
+            <span>Scope</span>
+            <select
+              name="scope"
+              defaultValue={scope}
+              className="h-9 rounded-md border border-line bg-surface-elev px-2 text-sm text-ink"
+            >
+              <option value="mine">Mine</option>
+              <option value="all">All in scope</option>
+            </select>
+          </label>
+        )}
+        <Button type="submit" size="sm" variant="outline">
+          Apply
+        </Button>
+        {(q || status || category || scope === 'all') && (
+          <Button type="button" asChild size="sm" variant="ghost">
+            <Link href="/expenses">Clear</Link>
+          </Button>
+        )}
+        <span className="ml-auto text-xs text-ink-3">
+          {rows.length} {rows.length === 1 ? 'expense' : 'expenses'}
+        </span>
+      </form>
+
       <Card className="p-0">
         {rows.length === 0 ? (
           <div className="p-12 text-center text-sm text-ink-3">
-            No expenses yet.{' '}
-            {canSubmit && (
-              <Link href="/expenses/new" className="text-brand hover:underline">
-                Submit one →
-              </Link>
+            {q || status || category || scope === 'all' ? (
+              <>
+                No expenses match the current filters.{' '}
+                <Link href="/expenses" className="text-brand hover:underline">
+                  Clear →
+                </Link>
+              </>
+            ) : (
+              <>
+                No expenses yet.{' '}
+                {canSubmit && (
+                  <Link href="/expenses/new" className="text-brand hover:underline">
+                    Submit one →
+                  </Link>
+                )}
+              </>
             )}
           </div>
         ) : (

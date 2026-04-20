@@ -1,11 +1,13 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import type { InvoiceStatus } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { listInvoices } from '@/server/invoices';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import {
   Table,
   TableBody,
@@ -34,15 +36,34 @@ const STATUS_VARIANT: Record<string, 'outline' | 'amber' | 'green' | 'blue' | 'r
   written_off: 'outline',
 };
 
+const STATUS_OPTIONS: readonly InvoiceStatus[] = [
+  'draft',
+  'pending_approval',
+  'approved',
+  'sent',
+  'partial',
+  'paid',
+  'overdue',
+  'written_off',
+];
+
 export default async function InvoicesPage({
   searchParams,
 }: {
-  searchParams: { deleted?: string };
+  searchParams: { deleted?: string; status?: string; q?: string };
 }) {
   const session = await getSession();
   if (!session) notFound();
 
-  const rows = await listInvoices(session);
+  const status = STATUS_OPTIONS.includes(searchParams.status as InvoiceStatus)
+    ? (searchParams.status as InvoiceStatus)
+    : undefined;
+  const q = searchParams.q?.trim() ?? '';
+
+  const rows = await listInvoices(session, {
+    ...(status ? { status } : {}),
+    ...(q ? { search: q } : {}),
+  });
   const canCreate = hasCapability(session, 'invoice.create');
   const deletedFlag = searchParams.deleted === '1';
 
@@ -65,14 +86,64 @@ export default async function InvoicesPage({
         )}
       </header>
 
+      <form
+        action="/invoices"
+        method="get"
+        className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-card p-3"
+      >
+        <Input
+          name="q"
+          defaultValue={q}
+          placeholder="Search invoice number, client, or project…"
+          className="min-w-[240px] max-w-md"
+        />
+        <label className="flex items-center gap-2 text-xs text-ink-3">
+          <span>Status</span>
+          <select
+            name="status"
+            defaultValue={status ?? ''}
+            className="h-9 rounded-md border border-line bg-surface-elev px-2 text-sm text-ink"
+          >
+            <option value="">Any</option>
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>
+                {s.replace(/_/g, ' ')}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button type="submit" size="sm" variant="outline">
+          Apply
+        </Button>
+        {(q || status) && (
+          <Button type="button" asChild size="sm" variant="ghost">
+            <Link href="/invoices">Clear</Link>
+          </Button>
+        )}
+        <span className="ml-auto text-xs text-ink-3">
+          {rows.length} {rows.length === 1 ? 'invoice' : 'invoices'}
+        </span>
+      </form>
+
       <Card className="p-0">
         {rows.length === 0 ? (
           <div className="p-12 text-center text-sm text-ink-3">
-            No invoices yet.{' '}
-            {canCreate && (
-              <Link href="/invoices/new" className="text-brand hover:underline">
-                Draft one →
-              </Link>
+            {q || status ? (
+              <>
+                No invoices match the current filters.{' '}
+                <Link href="/invoices" className="text-brand hover:underline">
+                  Clear →
+                </Link>
+              </>
+            ) : (
+              <>
+                No invoices yet.{' '}
+                {canCreate && (
+                  <Link href="/invoices/new" className="text-brand hover:underline">
+                    Draft one →
+                  </Link>
+                )}
+              </>
             )}
           </div>
         ) : (
