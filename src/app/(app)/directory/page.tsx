@@ -29,7 +29,6 @@ export default async function DirectoryPage({
   searchParams,
 }: {
   searchParams: {
-    tab?: string;
     q?: string;
     band?: string;
     region?: string;
@@ -43,7 +42,6 @@ export default async function DirectoryPage({
     notFound();
   }
 
-  const tab = searchParams.tab ?? 'people';
   const q = searchParams.q ?? '';
   const band = BAND_OPTIONS.includes(searchParams.band as Band)
     ? (searchParams.band as Band)
@@ -63,10 +61,7 @@ export default async function DirectoryPage({
   const canCreate = hasCapability(session, 'person.create');
   const canSeePay = hasCapability(session, 'ratecard.view');
 
-  const people =
-    tab === 'people'
-      ? await listPeople({ search: q, band, region, employment, active })
-      : [];
+  const people = await listPeople({ search: q, band, region, employment, active });
 
   const deletedFlag = searchParams.deleted === '1';
 
@@ -82,26 +77,26 @@ export default async function DirectoryPage({
           <h1 className="text-xl font-semibold text-ink">Directory</h1>
           <p className="text-sm text-ink-3">People, clients, contractors, suppliers.</p>
         </div>
-        {canCreate && tab === 'people' && (
+        {canCreate && (
           <Button asChild>
             <Link href="/directory/people/new">+ New person</Link>
           </Button>
         )}
       </header>
 
-      <Tabs defaultValue={tab}>
+      <Tabs defaultValue="people">
         <TabsList>
           <TabsTrigger value="people" asChild>
-            <Link href="/directory?tab=people">People</Link>
+            <Link href="/directory">People</Link>
           </TabsTrigger>
           <TabsTrigger value="clients" asChild>
-            <Link href="/directory?tab=clients">Clients</Link>
+            <Link href="/directory/clients">Clients</Link>
           </TabsTrigger>
           <TabsTrigger value="contractors" asChild>
-            <Link href="/directory?tab=contractors">Contractors</Link>
+            <Link href="/directory/contractors">Contractors</Link>
           </TabsTrigger>
           <TabsTrigger value="suppliers" asChild>
-            <Link href="/directory?tab=suppliers">Suppliers</Link>
+            <Link href="/directory/suppliers">Suppliers</Link>
           </TabsTrigger>
         </TabsList>
 
@@ -116,15 +111,6 @@ export default async function DirectoryPage({
             canSeePay={canSeePay}
             canEdit={canEdit}
           />
-        </TabsContent>
-        <TabsContent value="clients">
-          <EmptyTab message="Open the Clients tab above to view and manage clients." />
-        </TabsContent>
-        <TabsContent value="contractors">
-          <EmptyTab message="Contractors live on the People tab — filter by Employment = contractor once the filter ships." />
-        </TabsContent>
-        <TabsContent value="suppliers">
-          <EmptyTab message="Suppliers are tracked implicitly through Bills. A dedicated supplier directory isn't planned for MVP." />
         </TabsContent>
       </Tabs>
     </div>
