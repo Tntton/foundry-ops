@@ -7,6 +7,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
+import { setM365UserEnabled } from '@/server/integrations/m365';
 
 export type ArchiveState =
   | { status: 'idle' }
@@ -83,6 +84,29 @@ export async function archivePerson(
     return { status: 'error', message: 'Archive failed — try again.' };
   }
 
+  // Best-effort M365 deactivation — archive already succeeded, so even if
+  // Graph fails we don't undo. Admin can manually disable in Entra if needed.
+  if (person.entraUserId) {
+    try {
+      await setM365UserEnabled(person.entraUserId, false);
+      await prisma.$transaction(async (tx) => {
+        await writeAudit(tx, {
+          actor: { type: 'person', id: session.person.id },
+          action: 'm365_disabled',
+          entity: {
+            type: 'person',
+            id: personId,
+            after: { entraUserId: person.entraUserId, accountEnabled: false },
+          },
+          source: 'web',
+        });
+      });
+    } catch (err) {
+      console.error('[person.archive] M365 deactivation failed:', err);
+      // Surface but don't fail the archive — DB is already updated.
+    }
+  }
+
   revalidatePath('/directory');
   revalidatePath(`/directory/people/${personId}`);
   redirect(`/directory/people/${personId}`);
@@ -127,6 +151,27 @@ export async function reactivatePerson(
   } catch (err) {
     console.error('[person.reactivate] failed:', err);
     return { status: 'error', message: 'Reactivation failed — try again.' };
+  }
+
+  // Best-effort M365 re-enable.
+  if (person.entraUserId) {
+    try {
+      await setM365UserEnabled(person.entraUserId, true);
+      await prisma.$transaction(async (tx) => {
+        await writeAudit(tx, {
+          actor: { type: 'person', id: session.person.id },
+          action: 'm365_enabled',
+          entity: {
+            type: 'person',
+            id: personId,
+            after: { entraUserId: person.entraUserId, accountEnabled: true },
+          },
+          source: 'web',
+        });
+      });
+    } catch (err) {
+      console.error('[person.reactivate] M365 re-enable failed:', err);
+    }
   }
 
   revalidatePath('/directory');

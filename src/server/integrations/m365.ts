@@ -94,3 +94,28 @@ function pick(from: string): string {
   const i = Math.floor(Math.random() * from.length);
   return from.charAt(i);
 }
+
+/**
+ * Flip Entra account on/off. Used on Person archive/reactivate.
+ * Returns true if the change was applied, false if Graph isn't configured.
+ * Throws GraphError on API failures so callers can surface the reason.
+ *
+ * When disabling, also revokes active sign-in sessions so any open
+ * Microsoft/Outlook/Teams sessions get booted immediately instead of
+ * waiting for the access token to expire.
+ */
+export async function setM365UserEnabled(
+  entraUserId: string,
+  enabled: boolean,
+): Promise<boolean> {
+  if (!graphConfigured()) return false;
+  await graph('PATCH', `/users/${entraUserId}`, { accountEnabled: enabled });
+  if (!enabled) {
+    try {
+      await graph('POST', `/users/${entraUserId}/revokeSignInSessions`, {});
+    } catch (err) {
+      console.error('[m365.revokeSignInSessions] failed:', err);
+    }
+  }
+  return true;
+}
