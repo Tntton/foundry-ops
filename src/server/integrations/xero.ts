@@ -7,6 +7,9 @@ const TOKEN_URL = 'https://identity.xero.com/connect/token';
 const REVOCATION_URL = 'https://identity.xero.com/connect/revocation';
 const CONNECTIONS_URL = 'https://api.xero.com/connections';
 
+// Core scopes sufficient for TASK-051 (contacts), 052 (tracking categories),
+// 053/054 (invoice + bill push), 055 (bank feed). Attachments + reports.read
+// require higher-tier Xero app approval and aren't needed for MVP.
 const SCOPES = [
   'openid',
   'profile',
@@ -15,8 +18,6 @@ const SCOPES = [
   'accounting.transactions',
   'accounting.contacts',
   'accounting.settings',
-  'accounting.attachments',
-  'accounting.reports.read',
 ];
 
 export type XeroTokens = {
