@@ -3,18 +3,14 @@ import {
   LayoutDashboard,
   FolderKanban,
   Inbox,
-  BarChart3,
-  TrendingUp,
   Users,
   Clock,
   Receipt,
   FileText,
   Shield,
   Plug,
-  Bot,
   ScrollText,
   CircleDollarSign,
-  CalendarDays,
   Sparkles,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -49,13 +45,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: LayoutDashboard,
         roles: ['super_admin', 'admin', 'partner'],
       },
-      {
-        label: 'Manager home',
-        href: '/mgrhome',
-        icon: LayoutDashboard,
-        roles: ['manager'],
-      },
-      { label: 'My week', href: '/myweek', icon: CalendarDays, roles: ['staff'] },
+      // Manager home + My week role-specific landings: deferred — for MVP
+      // everyone lands on /; Projects is the primary work surface.
       {
         label: 'Projects',
         href: '/projects',
@@ -68,18 +59,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: Inbox,
         roles: ['super_admin', 'admin', 'partner', 'manager'],
       },
-      {
-        label: 'P&L',
-        href: '/pnl',
-        icon: BarChart3,
-        roles: ['super_admin', 'admin', 'partner'],
-      },
-      {
-        label: 'BD pipeline',
-        href: '/bd',
-        icon: TrendingUp,
-        roles: ['super_admin', 'admin', 'partner'],
-      },
+      // Firm-wide P&L + BD pipeline: deferred. P&L needs aggregated
+      // timesheet/expense data; BD pipeline is phase 2.
       {
         label: 'Directory',
         href: '/directory',
@@ -140,12 +121,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: Plug,
         roles: ['super_admin', 'admin'],
       },
-      {
-        label: 'Agents',
-        href: '/admin/agents',
-        icon: Bot,
-        roles: ['super_admin', 'admin'],
-      },
+      // Agents surface: ships with TASK-080 onward. Hidden from nav until then.
       {
         label: 'Audit log',
         href: '/admin/audit',
