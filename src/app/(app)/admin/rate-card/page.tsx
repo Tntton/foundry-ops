@@ -69,8 +69,8 @@ export default async function RateCardPage({
           </p>
         </div>
         {canEdit && (
-          <Button variant="outline" disabled>
-            New version (TASK-026b)
+          <Button asChild>
+            <Link href="/admin/rate-card/new">+ New version</Link>
           </Button>
         )}
       </header>

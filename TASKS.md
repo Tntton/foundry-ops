@@ -275,14 +275,14 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Writes `AuditEvent`
 
 ### TASK-026 — Rate card view + edit
-**status:** doing
+**status:** done
 **depends on:** TASK-020
 **acceptance:**
 - [x] `/admin/rate-card` view — gated on `ratecard.view` (super_admin, admin, partner)
 - [x] Table: role code (badge), role label, band, effective from, cost/hr, bill rate low, bill rate high
 - [x] "Active as of <date>" selector with Today shortcut — resolves to the most-recent row per role with `effectiveFrom <= asOf`
-- [ ] Edit creates a new versioned row — **deferred to TASK-026b** (needs a form + action similar to Person edit, plus a "compare to previous version" preview)
-- [ ] Audit event on every change — will land with 026b
+- [x] `/admin/rate-card/new` — versioned add (roleCode + effectiveFrom + cost + bill low/high); never mutates existing rows; duplicate (roleCode, effectiveFrom) blocked
+- [x] Audit event per create (entity: `rate_card`)
 
 **note:** Listing logic in `src/server/rate-card.ts` — `listRateCardAsOf(asOf)` picks one row per roleCode (newest `effectiveFrom <= asOf`) and sorts by a business-sensible order (Leadership → Expert → Fellow → Consultant → Analyst → Intern). Bill rate low/high are MVP heuristics (cost × 2 / × 3) per TASK-020 seed — replace once Foundry's real pricing matrix is ingested.
 
