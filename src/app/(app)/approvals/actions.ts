@@ -8,6 +8,7 @@ import { requireSession } from '@/server/roles';
 import { writeAudit } from '@/server/audit';
 import { getXeroIntegration } from '@/server/integrations/xero';
 import { pushInvoiceToXero } from '@/server/integrations/xero-invoices';
+import { pushBillToXero } from '@/server/integrations/xero-bills';
 
 const DecisionSchema = z.object({
   approvalId: z.string().min(1),
@@ -53,6 +54,7 @@ export async function decideApproval(
   }
 
   let pushInvoiceId: string | null = null;
+  let pushBillId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
       await tx.approval.update({
@@ -93,6 +95,7 @@ export async function decideApproval(
           where: { id: approval.subjectId },
           data: { status: nextStatus },
         });
+        if (decision === 'approved') pushBillId = approval.subjectId;
       }
       // pay_run / contract / new_hire / rate_change propagation lands when those flows ship.
 
@@ -118,34 +121,57 @@ export async function decideApproval(
   }
 
   // Best-effort Xero push after the approval commits. If Xero is down or the
-  // push fails the invoice stays 'approved' locally and the detail-page
-  // "Push to Xero" retry button picks up the slack.
-  if (pushInvoiceId) {
-    try {
-      const xeroRow = await getXeroIntegration();
-      if (xeroRow?.status === 'connected') {
-        const xeroInvoiceId = await pushInvoiceToXero(pushInvoiceId);
-        await prisma.$transaction(async (tx) => {
-          await writeAudit(tx, {
-            actor: { type: 'person', id: session.person.id },
-            action: 'xero_pushed',
-            entity: {
-              type: 'invoice',
-              id: pushInvoiceId!,
-              after: { xeroInvoiceId },
-            },
-            source: 'web',
+  // push fails, the subject stays 'approved' locally and the detail-page
+  // retry button picks up the slack.
+  if (pushInvoiceId || pushBillId) {
+    const xeroRow = await getXeroIntegration();
+    if (xeroRow?.status === 'connected') {
+      if (pushInvoiceId) {
+        try {
+          const xeroInvoiceId = await pushInvoiceToXero(pushInvoiceId);
+          await prisma.$transaction(async (tx) => {
+            await writeAudit(tx, {
+              actor: { type: 'person', id: session.person.id },
+              action: 'xero_pushed',
+              entity: {
+                type: 'invoice',
+                id: pushInvoiceId!,
+                after: { xeroInvoiceId },
+              },
+              source: 'web',
+            });
           });
-        });
+        } catch (err) {
+          console.error('[approvals.decide] Xero invoice push failed:', err);
+        }
       }
-    } catch (err) {
-      console.error('[approvals.decide] Xero invoice push failed:', err);
+      if (pushBillId) {
+        try {
+          const xeroBillId = await pushBillToXero(pushBillId);
+          await prisma.$transaction(async (tx) => {
+            await writeAudit(tx, {
+              actor: { type: 'person', id: session.person.id },
+              action: 'xero_pushed',
+              entity: {
+                type: 'bill',
+                id: pushBillId!,
+                after: { xeroBillId },
+              },
+              source: 'web',
+            });
+          });
+        } catch (err) {
+          console.error('[approvals.decide] Xero bill push failed:', err);
+        }
+      }
     }
   }
 
   revalidatePath('/approvals');
   revalidatePath('/expenses');
   revalidatePath('/invoices');
+  revalidatePath('/bills');
   if (pushInvoiceId) revalidatePath(`/invoices/${pushInvoiceId}`);
+  if (pushBillId) revalidatePath(`/bills/${pushBillId}`);
   return { status: 'success' };
 }

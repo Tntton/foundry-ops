@@ -2,8 +2,10 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { prisma } from '@/server/db';
+import { hasAnyRole } from '@/server/roles';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { XeroPushBillButton } from './xero-push-button';
 
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
@@ -32,6 +34,10 @@ export default async function BillDetailPage({ params }: { params: { id: string 
     },
   });
   if (!bill) notFound();
+
+  const canPushToXero = hasAnyRole(session, ['super_admin']);
+  const isPushable =
+    bill.status === 'approved' || bill.status === 'scheduled_for_payment' || bill.status === 'paid';
 
   return (
     <div className="space-y-6">
@@ -85,11 +91,14 @@ export default async function BillDetailPage({ params }: { params: { id: string 
           <CardHeader>
             <CardTitle>Xero</CardTitle>
           </CardHeader>
-          <CardContent className="text-sm text-ink-3">
+          <CardContent className="flex flex-col items-start gap-2 text-sm text-ink-3">
             {bill.xeroBillId ? (
               <span className="font-mono text-xs">{bill.xeroBillId}</span>
             ) : (
-              'Not yet pushed (TASK-054)'
+              <span>Not yet pushed.</span>
+            )}
+            {canPushToXero && isPushable && (
+              <XeroPushBillButton billId={bill.id} alreadyPushed={Boolean(bill.xeroBillId)} />
             )}
           </CardContent>
         </Card>

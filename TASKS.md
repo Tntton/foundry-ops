@@ -467,8 +467,8 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **acceptance:**
 - [x] Super Admin approval required by default (per A8); thresholds configurable via `resolveRequiredRole('bill', total)` + TASK-049 UI
 - [x] Approve in `/approvals` queue → `Bill.status = 'approved'` (same tx + audit). Reject → `Bill.status = 'rejected'`.
-- [ ] Push to Xero as draft — **blocked on TASK-050**
-- [ ] Xero webhook updates paid status — **blocked on TASK-050**
+- [x] Push to Xero as draft (auto on approval, best-effort; manual retry on detail page) — see TASK-054
+- [ ] Xero webhook updates paid status — **deferred to TASK-054b** (needs signed-webhook infra)
 
 ---
 
@@ -542,11 +542,19 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note:** Invoice line items use `TaxType=OUTPUT` (AU GST) and `LineAmountTypes=Exclusive`, so Xero computes GST from the line subtotals. Sales `AccountCode` is optional via `XERO_SALES_ACCOUNT_CODE` env — Xero applies org default when absent. Pure payload builder is unit-tested (`src/__tests__/xero-invoices.test.ts`).
 
 ### TASK-054 — Xero: bill push + status webhook
-**status:** todo
+**status:** done
 **depends on:** TASK-047
 **acceptance:**
-- [ ] On bill approve: push as Xero Bill (draft)
-- [ ] Webhook updates paid status
+- [x] On bill approve: push as Xero ACCPAY (draft) (`pushBillToXero`, called best-effort after the approval transaction commits)
+- [x] Idempotent on `Bill.xeroBillId` — re-push updates existing
+- [x] Single-line bill: description = "<Category> — <Supplier>"; `LineAmountTypes=Inclusive`, `TaxType=INPUT`
+- [x] Uses Person's `xeroContactId` when a contractor supplier has one; falls back to `Contact.Name` (Xero name-matches or creates)
+- [x] Auto-ensures project tracking option when `projectId` is set; tracking + `Reference` only present for project-coded bills (OPEX bills have no tracking)
+- [x] "Push to Xero" / "Re-push" button on bill detail page (super_admin only — matches `bill.approve` capability)
+- [x] Audit event `xero_pushed` on successful push
+- [ ] Webhook updates paid status — **deferred to TASK-054b** (needs signed-webhook infra)
+
+**note:** Expense `AccountCode` is optional via `XERO_EXPENSE_ACCOUNT_CODE` env — Xero applies org default when absent. Pure payload builder unit-tested in `src/__tests__/xero-bills.test.ts`.
 
 ### TASK-055 — Xero: nightly bank-feed pull
 **status:** todo
