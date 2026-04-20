@@ -130,6 +130,50 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
               </CardContent>
             </Card>
           </div>
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle>Integrations</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <Row label="SharePoint">
+                {project.sharepointFolderUrl ? (
+                  <a
+                    href={project.sharepointFolderUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-brand hover:underline"
+                  >
+                    Open team folder →
+                  </a>
+                ) : (
+                  <span className="text-ink-3">Not provisioned — see Files tab</span>
+                )}
+              </Row>
+              <Row label="Admin folder">
+                {project.sharepointAdminFolderUrl ? (
+                  <a
+                    href={project.sharepointAdminFolderUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-brand hover:underline"
+                  >
+                    Open admin folder →
+                  </a>
+                ) : (
+                  <span className="text-ink-3">—</span>
+                )}
+              </Row>
+              <Row label="Xero tracking">
+                {project.xeroTrackingCategoryValue ? (
+                  <span className="font-mono text-xs text-ink-2">
+                    Projects · {project.code}
+                  </span>
+                ) : (
+                  <span className="text-ink-3">Not synced — pushes on first invoice/bill</span>
+                )}
+              </Row>
+            </CardContent>
+          </Card>
           {project.description && (
             <Card className="mt-4">
               <CardHeader>

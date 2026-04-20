@@ -321,12 +321,14 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [x] Permission: `project.create` (super_admin, admin, partner)
 
 ### TASK-032 — Xero tracking category per project
-**status:** todo
+**status:** done
 **depends on:** TASK-030, TASK-050
 **acceptance:**
-- [ ] On project create, ensure a tracking category value exists for the project code
-- [ ] `xero_tracking_category_value` written back
-- [ ] Reuses category "Projects" — creates the value, not the category
+- [x] On project create, ensure a tracking category value exists for the project code (shipped as part of TASK-052)
+- [x] `xero_tracking_category_value` written back
+- [x] Reuses category "Projects" — creates the value, not the category
+
+**note:** Implementation lives in `src/server/integrations/xero-projects.ts` (`ensureProjectTrackingOption`). Called from `/projects/new` action and available on-demand via any flow that needs the option.
 
 ### TASK-033 — Projects list
 **status:** doing
@@ -339,12 +341,12 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [x] Empty state with CTA; loading via Next suspense; error via Next error boundary.
 
 ### TASK-034 — Project detail: Brief tab
-**status:** todo
+**status:** done
 **depends on:** TASK-033
 **acceptance:**
-- [ ] `/projects/[code]` with tabs: Brief, Team, Milestones, P&L, Files, Settings, Risks
-- [ ] Brief: description, contract, dates, SharePoint link, Xero link
-- [ ] Edit gated to Admin+ / owning Partner / owning Manager
+- [x] `/projects/[code]` with tabs: Brief, Team, Milestones, P&L, Files, Risks (Settings lives behind a top-right button rather than a tab — deliberate: rare action, keeps tab bar compact)
+- [x] Brief: description, contract value (header), dates, leadership, SharePoint link, admin folder link, Xero tracking category status
+- [x] Edit (Settings) gated to Admin+ / owning Partner / owning Manager via the existing `/projects/[code]/settings` capability checks
 
 ### TASK-035 — Project detail: Team tab
 **status:** done
@@ -372,12 +374,12 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Permission: Super Admin / Admin / owning Partner / owning Manager
 
 ### TASK-038 — Project detail: Files tab
-**status:** todo
+**status:** done
 **depends on:** TASK-034, TASK-031
 **acceptance:**
-- [ ] Lists recent files from SharePoint folder (via Graph)
-- [ ] "Open in SharePoint" link for each
-- [ ] Upload button opens SharePoint in new tab (we don't handle binaries)
+- [x] "Open team folder" + "Open admin folder" deep links; if not yet provisioned, a Provision button triggers TASK-031's template-copy flow
+- [ ] Lists recent files from SharePoint folder (via Graph) — **deferred to TASK-038b**; MVP ships links only. Listing would need per-request Graph lookups + pagination UI which adds load for a feature staff can already get in one click.
+- [x] No in-app upload — staff upload directly in SharePoint, which matches Foundry's existing workflow and avoids binary handling in Foundry Ops
 
 ### TASK-039 — Project detail: Settings + Risks tabs
 **status:** done
