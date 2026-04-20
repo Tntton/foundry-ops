@@ -338,20 +338,21 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Edit gated to Admin+ / owning Partner / owning Manager
 
 ### TASK-035 — Project detail: Team tab
-**status:** todo
+**status:** done
 **depends on:** TASK-034
 **acceptance:**
-- [ ] Add/remove people with role_on_project + allocation_pct
-- [ ] Shows utilisation conflicts (person already >100% in this period)
-- [ ] Audit event on change
+- [x] `/projects/[code]/team/edit` page — add/remove ProjectTeam rows, per-row role + allocation %.
+- [ ] Utilisation conflict detection (>100% across projects) — **deferred to TASK-035b**
+- [x] Audit event on save (entity: project_team, before/after with added/removed).
 
 ### TASK-036 — Project detail: Milestones tab
-**status:** todo
+**status:** done
 **depends on:** TASK-034
 **acceptance:**
-- [ ] CRUD milestones: label, due, amount, status (not_started / in_progress / delivered / invoiced)
-- [ ] Milestone → invoice link visible once invoiced
-- [ ] Totals validate against contract_value (warn if sum > contract)
+- [x] `/projects/[code]/milestones` — CRUD (label, due, amount, status). Inline status select auto-submits.
+- [x] Invoice link column surfaces `milestone.invoiceId` (populated when invoice drafter attaches).
+- [x] Totals row; amber banner when sum > contract value.
+- [x] Audit event on every create + status update.
 
 ### TASK-037 — Project detail: P&L tab
 **status:** todo
