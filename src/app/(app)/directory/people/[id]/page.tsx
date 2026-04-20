@@ -9,12 +9,43 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatFte, formatRateCents } from '@/lib/format';
 import {
   ArchivePersonButton,
   ReactivatePersonButton,
 } from './archive/dialog';
+
+function formatMoney(cents: number): string {
+  if (cents === 0) return '—';
+  return new Intl.NumberFormat('en-AU', {
+    style: 'currency',
+    currency: 'AUD',
+    maximumFractionDigits: 0,
+  }).format(cents / 100);
+}
+
+const STAGE_VARIANT: Record<string, 'amber' | 'green' | 'blue' | 'outline'> = {
+  kickoff: 'amber',
+  delivery: 'green',
+  closing: 'blue',
+  archived: 'outline',
+};
+const BILL_STATUS_VARIANT: Record<string, 'outline' | 'amber' | 'green' | 'blue' | 'red'> = {
+  pending_review: 'amber',
+  approved: 'blue',
+  rejected: 'red',
+  scheduled_for_payment: 'blue',
+  paid: 'green',
+};
 
 export default async function PersonDetailPage({
   params,
@@ -81,6 +112,125 @@ export default async function PersonDetailPage({
   if (dealsOwned) deleteBlockers.push(`${dealsOwned} deal${dealsOwned === 1 ? '' : 's'}`);
   if (approvalsTouched) deleteBlockers.push(`${approvalsTouched} approval${approvalsTouched === 1 ? '' : 's'}`);
   if (auditCount) deleteBlockers.push(`${auditCount} audit event${auditCount === 1 ? '' : 's'}`);
+
+  // Activity — hours by project + bills + clients/projects they own.
+  const [tsByProject, teamMemberships, recentBills, ownedClients, ownedProjects] =
+    await Promise.all([
+      prisma.timesheetEntry.groupBy({
+        by: ['projectId'],
+        where: { personId: person.id, status: { in: ['approved', 'billed'] } },
+        _sum: { hours: true },
+      }),
+      prisma.projectTeam.findMany({
+        where: { personId: person.id },
+        select: {
+          project: { select: { id: true, code: true, name: true, stage: true } },
+          allocationPct: true,
+          roleOnProject: true,
+        },
+      }),
+      person.employment === 'contractor'
+        ? prisma.bill.findMany({
+            where: { supplierPersonId: person.id },
+            orderBy: { issueDate: 'desc' },
+            take: 10,
+            select: {
+              id: true,
+              supplierInvoiceNumber: true,
+              issueDate: true,
+              dueDate: true,
+              amountTotal: true,
+              category: true,
+              status: true,
+              project: { select: { code: true } },
+            },
+          })
+        : Promise.resolve([]),
+      prisma.client.findMany({
+        where: { primaryPartnerId: person.id },
+        orderBy: { code: 'asc' },
+        select: { id: true, code: true, legalName: true },
+      }),
+      prisma.project.findMany({
+        where: {
+          OR: [{ primaryPartnerId: person.id }, { managerId: person.id }],
+        },
+        orderBy: { code: 'asc' },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          stage: true,
+          primaryPartnerId: true,
+          managerId: true,
+        },
+      }),
+    ]);
+
+  const projectIds = new Set<string>([
+    ...tsByProject.map((t) => t.projectId),
+    ...teamMemberships.map((m) => m.project.id),
+  ]);
+  const projectMeta =
+    projectIds.size > 0
+      ? await prisma.project.findMany({
+          where: { id: { in: [...projectIds] } },
+          select: { id: true, code: true, name: true, stage: true },
+        })
+      : [];
+  const projectById = new Map(projectMeta.map((p) => [p.id, p]));
+
+  type ProjectActivityRow = {
+    id: string;
+    code: string;
+    name: string;
+    stage: string;
+    hours: number;
+    allocationPct: number | null;
+    roleOnProject: string | null;
+  };
+  const projectActivity = new Map<string, ProjectActivityRow>();
+  for (const t of tsByProject) {
+    const p = projectById.get(t.projectId);
+    if (!p) continue;
+    projectActivity.set(p.id, {
+      id: p.id,
+      code: p.code,
+      name: p.name,
+      stage: p.stage,
+      hours: Number(t._sum.hours ?? 0),
+      allocationPct: null,
+      roleOnProject: null,
+    });
+  }
+  for (const m of teamMemberships) {
+    const existing = projectActivity.get(m.project.id);
+    if (existing) {
+      existing.allocationPct = m.allocationPct;
+      existing.roleOnProject = m.roleOnProject;
+    } else {
+      projectActivity.set(m.project.id, {
+        id: m.project.id,
+        code: m.project.code,
+        name: m.project.name,
+        stage: m.project.stage,
+        hours: 0,
+        allocationPct: m.allocationPct,
+        roleOnProject: m.roleOnProject,
+      });
+    }
+  }
+  const projectActivityRows = [...projectActivity.values()].sort((a, b) =>
+    a.code.localeCompare(b.code),
+  );
+
+  const totalHours = projectActivityRows.reduce((s, r) => s + r.hours, 0);
+  const totalBillsPaidCents = recentBills
+    .filter((b) => ['approved', 'scheduled_for_payment', 'paid'].includes(b.status))
+    .reduce((s, b) => s + b.amountTotal, 0);
+  const billsCountAll = await (person.employment === 'contractor'
+    ? prisma.bill.count({ where: { supplierPersonId: person.id } })
+    : Promise.resolve(0));
 
   return (
     <div className="space-y-6">
@@ -160,6 +310,7 @@ export default async function PersonDetailPage({
         <TabsList>
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="employment">Employment</TabsTrigger>
+          <TabsTrigger value="activity">Activity</TabsTrigger>
           <TabsTrigger value="pay">Pay</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
         </TabsList>
@@ -199,6 +350,260 @@ export default async function PersonDetailPage({
               </Field>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="activity">
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <TotalCard
+                label="Hours logged"
+                value={totalHours.toFixed(1)}
+                sub="approved + billed"
+              />
+              <TotalCard
+                label="Projects"
+                value={String(projectActivityRows.length)}
+                sub={`${projectActivityRows.filter((p) => p.stage !== 'archived').length} active`}
+              />
+              {person.employment === 'contractor' ? (
+                <>
+                  <TotalCard
+                    label="Bills issued"
+                    value={String(billsCountAll)}
+                    sub={`${formatMoney(totalBillsPaidCents)} approved+`}
+                  />
+                  <TotalCard
+                    label="Clients led"
+                    value={String(ownedClients.length)}
+                    sub="as primary partner"
+                  />
+                </>
+              ) : (
+                <>
+                  <TotalCard
+                    label="Clients led"
+                    value={String(ownedClients.length)}
+                    sub="as primary partner"
+                  />
+                  <TotalCard
+                    label="Projects owned"
+                    value={String(ownedProjects.length)}
+                    sub="partner or manager"
+                  />
+                </>
+              )}
+            </div>
+
+            <Card className="p-0">
+              <CardHeader>
+                <CardTitle>Project engagement</CardTitle>
+                <CardDescription>
+                  Approved + billed hours plus any project-team memberships.
+                </CardDescription>
+              </CardHeader>
+              {projectActivityRows.length === 0 ? (
+                <CardContent>
+                  <p className="text-sm text-ink-3">
+                    No timesheet activity or project team memberships yet.
+                  </p>
+                </CardContent>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Project</TableHead>
+                      <TableHead>Stage</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead className="text-right">Allocation</TableHead>
+                      <TableHead className="text-right">Hours</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {projectActivityRows.map((p) => (
+                      <TableRow key={p.id}>
+                        <TableCell>
+                          <Link
+                            href={`/projects/${p.code}`}
+                            className="flex items-center gap-2 hover:underline"
+                          >
+                            <span className="font-mono text-xs text-ink-3">{p.code}</span>
+                            <span className="text-sm text-ink">{p.name}</span>
+                          </Link>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={STAGE_VARIANT[p.stage] ?? 'outline'}
+                            className="capitalize"
+                          >
+                            {p.stage}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-ink-2">
+                          {p.roleOnProject ?? '—'}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-xs text-ink-3">
+                          {p.allocationPct !== null ? `${p.allocationPct}%` : '—'}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-ink-2">
+                          {p.hours > 0 ? p.hours.toFixed(1) : '—'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </Card>
+
+            {person.employment === 'contractor' && (
+              <Card className="p-0">
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <div>
+                    <CardTitle>Bills issued by this contractor</CardTitle>
+                    <CardDescription>
+                      Supplier-side bills where they are the paid party.
+                    </CardDescription>
+                  </div>
+                  {billsCountAll > 10 && (
+                    <span className="pr-4 text-xs text-ink-3">
+                      Showing 10 of {billsCountAll}
+                    </span>
+                  )}
+                </CardHeader>
+                {recentBills.length === 0 ? (
+                  <CardContent>
+                    <p className="text-sm text-ink-3">No bills issued yet.</p>
+                  </CardContent>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Issued</TableHead>
+                        <TableHead>Ref</TableHead>
+                        <TableHead>Category</TableHead>
+                        <TableHead>Project</TableHead>
+                        <TableHead>Due</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {recentBills.map((b) => (
+                        <TableRow key={b.id}>
+                          <TableCell className="tabular-nums text-xs">
+                            {b.issueDate.toLocaleDateString('en-AU')}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            <Link href={`/bills/${b.id}`} className="hover:underline">
+                              {b.supplierInvoiceNumber ?? 'open →'}
+                            </Link>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="capitalize">
+                              {b.category.replace(/_/g, ' ')}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs text-ink-3">
+                            {b.project ? (
+                              <Link
+                                href={`/projects/${b.project.code}`}
+                                className="font-mono hover:underline"
+                              >
+                                {b.project.code}
+                              </Link>
+                            ) : (
+                              <span className="text-ink-4">OPEX</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="tabular-nums text-xs">
+                            {b.dueDate.toLocaleDateString('en-AU')}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-ink">
+                            {formatMoney(b.amountTotal)}
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={BILL_STATUS_VARIANT[b.status] ?? 'outline'}
+                              className="capitalize"
+                            >
+                              {b.status.replace(/_/g, ' ')}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </Card>
+            )}
+
+            {(ownedClients.length > 0 || ownedProjects.length > 0) && (
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {ownedClients.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Clients led ({ownedClients.length})</CardTitle>
+                      <CardDescription>As primary partner.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <ul className="space-y-1 text-sm">
+                        {ownedClients.map((c) => (
+                          <li key={c.id} className="flex items-center gap-2">
+                            <Link
+                              href={`/directory/clients/${c.id}`}
+                              className="flex items-center gap-2 hover:underline"
+                            >
+                              <Badge variant="outline" className="font-mono">
+                                {c.code}
+                              </Badge>
+                              <span className="text-ink">{c.legalName}</span>
+                            </Link>
+                          </li>
+                        ))}
+                      </ul>
+                    </CardContent>
+                  </Card>
+                )}
+                {ownedProjects.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Projects owned ({ownedProjects.length})</CardTitle>
+                      <CardDescription>As primary partner or manager.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <ul className="space-y-1 text-sm">
+                        {ownedProjects.map((p) => (
+                          <li key={p.id} className="flex items-center gap-2">
+                            <Link
+                              href={`/projects/${p.code}`}
+                              className="flex items-center gap-2 hover:underline"
+                            >
+                              <Badge variant="outline" className="font-mono">
+                                {p.code}
+                              </Badge>
+                              <span className="text-ink">{p.name}</span>
+                              <Badge
+                                variant={STAGE_VARIANT[p.stage] ?? 'outline'}
+                                className="capitalize"
+                              >
+                                {p.stage}
+                              </Badge>
+                              <span className="text-xs text-ink-3">
+                                {p.primaryPartnerId === person.id
+                                  ? p.managerId === person.id
+                                    ? 'partner + manager'
+                                    : 'partner'
+                                  : 'manager'}
+                              </span>
+                            </Link>
+                          </li>
+                        ))}
+                      </ul>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="pay">
@@ -263,5 +668,21 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <div className="text-ink-3">{label}</div>
       <div className="text-ink">{children}</div>
     </div>
+  );
+}
+
+function TotalCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <Card>
+      <CardHeader className="pb-1">
+        <CardTitle className="text-xs font-medium uppercase tracking-wide text-ink-3">
+          {label}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="text-lg font-semibold tabular-nums text-ink">{value}</div>
+        {sub && <div className="text-[11px] text-ink-3">{sub}</div>}
+      </CardContent>
+    </Card>
   );
 }
