@@ -237,14 +237,32 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Writes `AuditEvent` on save
 
 ### TASK-023 — New Person wizard
-**status:** todo
+**status:** doing
 **depends on:** TASK-022
 **acceptance:**
-- [ ] Multi-step sidebar: Basics → Employment → Pay → Permissions → Review
-- [ ] On finish: creates `Person`, queues M365 provisioning job, sends welcome email
-- [ ] Provisioning job is idempotent (re-runnable if it fails partway)
-- [ ] For contractors: creates Xero contact instead of M365 account
-- [ ] Flag-gated (`ENABLE_PROVISIONING`) — default off in dev, on in staging
+- [ ] Multi-step sidebar: Basics → Employment → Pay → Permissions → Review — **deferred to TASK-023b**; shipped as single-form with sections instead (matches the other create forms in the MVP)
+- [x] `/directory/people/new` form: identity / employment / pay / roles; FT-only email suffix validation (`@foundry.health`); auto-derived initials with collision suffix
+- [x] On finish: creates Person + audit event in `prisma.$transaction`
+- [x] M365 provisioning via Graph `POST /users` when `ENABLE_PROVISIONING=1` AND employment=ft. Idempotent: looks up by UPN first, returns existing `entraUserId` if found. Generates a 20-char temp password satisfying MS complexity rules; surfaces it once on the new-person detail page via one-shot `?tempPassword=…` query param.
+- [x] Flag-gated via `ENABLE_PROVISIONING` env (default off)
+- [ ] Contractor Xero contact creation — **deferred to TASK-023c**; requires TASK-050 (Xero OAuth). Form allows contractor creation without Xero for now.
+- [ ] Welcome email — **deferred to TASK-023d**; Resend template needs designing
+
+### TASK-031 — Project SharePoint folder provision
+**status:** doing
+**depends on:** TASK-030
+**acceptance:**
+- [x] `provisionProjectFolder(clientCode, projectCode)` in `src/server/integrations/sharepoint.ts` creates the full folder tree `<SHAREPOINT_CLIENTS_ROOT>/<ClientCode>/<ProjectCode>/{01 Brief, 02 Working, 03 Delivery, 04 Admin}` via Graph
+- [x] Wired into `createProject` action — best-effort provision after the DB transaction; project creation is never rolled back by provisioning failures
+- [x] Stores resulting `webUrl` on `Project.sharepointFolderUrl` when successful
+- [x] Idempotent: `createFolder` handles `409 nameAlreadyExists` by fetching the existing item; safe to call repeatedly
+- [x] Retry UI — "Provision SharePoint folder" button on the Files tab when `sharepointFolderUrl` is null; audits retry attempts (entity: `project_sharepoint`)
+- [ ] Env `SHAREPOINT_SITE_URL` + (optional) `SHAREPOINT_CLIENTS_ROOT` — **pending from user**. Code runs cleanly without it (returns null and the UI shows the retry button).
+
+**note:** Also added:
+- `src/server/graph.ts` — centralised Graph client with client_credentials token caching + typed `GraphError` for all Graph callers.
+- `src/server/integrations/m365.ts` — `provisionM365User` used by TASK-023.
+- Both helpers gate on `graphConfigured()` so dev without Graph doesn't break.
 
 ### TASK-024 — Client list + detail drawer
 **status:** done
@@ -301,15 +319,6 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Team allocations + milestones at create — **deferred to TASK-035/TASK-036**; empty state on detail page points to those tasks
 - [x] Creates `Project` + audit event in `prisma.$transaction`
 - [x] Permission: `project.create` (super_admin, admin, partner)
-
-### TASK-031 — Project SharePoint folder provision
-**status:** todo
-**depends on:** TASK-030
-**acceptance:**
-- [ ] On project create, queue a job that creates folder structure under `/Clients/<ClientCode>/<ProjectCode>/` with subfolders: `01 Brief`, `02 Working`, `03 Delivery`, `04 Admin`
-- [ ] `sharepoint_folder_url` written back to Project
-- [ ] Idempotent (skips if folder exists)
-- [ ] Failure marks project with `provisioning_error` flag; retry button in UI
 
 ### TASK-032 — Xero tracking category per project
 **status:** todo

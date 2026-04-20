@@ -11,7 +11,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatFte, formatRateCents } from '@/lib/format';
 
-export default async function PersonDetailPage({ params }: { params: { id: string } }) {
+export default async function PersonDetailPage({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  searchParams: { tempPassword?: string };
+}) {
   const session = await getSession();
   if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) {
     notFound();
@@ -22,6 +28,7 @@ export default async function PersonDetailPage({ params }: { params: { id: strin
 
   const canSeePay = hasCapability(session, 'ratecard.view');
   const canEdit = hasCapability(session, 'person.edit');
+  const tempPassword = searchParams.tempPassword;
 
   return (
     <div className="space-y-6">
@@ -70,6 +77,18 @@ export default async function PersonDetailPage({ params }: { params: { id: strin
           </Button>
         )}
       </div>
+
+      {tempPassword && (
+        <div className="rounded-md border border-status-amber bg-status-amber-soft px-4 py-3 text-sm text-status-amber">
+          <strong>Temporary M365 password — shown once:</strong>{' '}
+          <span className="font-mono">{tempPassword}</span>
+          <div className="mt-1 text-xs text-ink-2">
+            Copy and share with the new user via a secure channel. They&apos;ll be required
+            to change it on first sign-in. This message will not reappear — refresh and
+            it&apos;s gone.
+          </div>
+        </div>
+      )}
 
       <Tabs defaultValue="profile">
         <TabsList>

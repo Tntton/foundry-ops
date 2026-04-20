@@ -7,6 +7,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
+import { provisionProjectFolder } from '@/server/integrations/sharepoint';
 
 const ProjectCreate = z
   .object({
@@ -78,8 +79,14 @@ export async function createProject(
 
   const contractValue = Math.round(data.contractValueDollars * 100);
   let newCode: string;
+  let newProjectId: string;
+  let clientCode: string;
   try {
-    newCode = await prisma.$transaction(async (tx) => {
+    ({ newCode, newProjectId, clientCode } = await prisma.$transaction(async (tx) => {
+      const client = await tx.client.findUniqueOrThrow({
+        where: { id: data.clientId },
+        select: { code: true },
+      });
       const project = await tx.project.create({
         data: {
           code: data.code,
@@ -112,11 +119,26 @@ export async function createProject(
         },
         source: 'web',
       });
-      return project.code;
-    });
+      return { newCode: project.code, newProjectId: project.id, clientCode: client.code };
+    }));
   } catch (err) {
     console.error('[project.create] failed:', err);
     return { status: 'error', message: 'Create failed — try again.' };
+  }
+
+  // SharePoint folder provisioning (best-effort; async on the response thread but
+  // if it fails we don't roll back the project — surfaces as a "Provision
+  // SharePoint" button on the Files tab for retry).
+  try {
+    const url = await provisionProjectFolder(clientCode, newCode);
+    if (url) {
+      await prisma.project.update({
+        where: { id: newProjectId },
+        data: { sharepointFolderUrl: url },
+      });
+    }
+  } catch (err) {
+    console.error('[project.create] SharePoint provisioning failed:', err);
   }
 
   revalidatePath('/projects');

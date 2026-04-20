@@ -6,6 +6,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ProvisionSharePointButton } from './provision-button';
 
 const STAGE_VARIANT: Record<string, 'amber' | 'green' | 'blue' | 'outline'> = {
   kickoff: 'amber',
@@ -251,7 +252,7 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
         <TabsContent value="files">
           <Card>
             <CardContent className="py-8 text-center text-sm text-ink-3">
-              SharePoint folder: {project.sharepointFolderUrl ? (
+              {project.sharepointFolderUrl ? (
                 <a
                   href={project.sharepointFolderUrl}
                   target="_blank"
@@ -261,7 +262,10 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
                   Open in SharePoint →
                 </a>
               ) : (
-                <span>Not provisioned yet (TASK-031).</span>
+                <div className="flex flex-col items-center gap-3">
+                  <span>No SharePoint folder yet.</span>
+                  <ProvisionSharePointButton projectCode={project.code} />
+                </div>
               )}
             </CardContent>
           </Card>
