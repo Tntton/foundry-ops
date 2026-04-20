@@ -440,21 +440,23 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Send button + Xero status webhook — **blocked on TASK-050/053**
 
 ### TASK-046 — Bill (AP): upload + draft
-**status:** todo
+**status:** doing
 **depends on:** TASK-020
 **acceptance:**
-- [ ] `/bills/new`: upload PDF/image + fill fields
-- [ ] Attachment → SharePoint `/AP/<YYYY>/<MM>/`
-- [ ] Supplier picker (auto-create Person-as-supplier or Organisation)
-- [ ] Status `pending_review`
+- [x] `/bills/new` form: supplier name, optional contractor Person link, supplier invoice number, issue/due dates, category (subscriptions / hosting / office / professional_services / contractor_payment / travel / other), amount + GST (auto ÷ 11, overridable), optional project, optional cost centre
+- [ ] File upload → SharePoint — **deferred to TASK-046b** (needs Graph Files scope). Pasted SharePoint URL supported as an interim; UI hints at 046b.
+- [x] Supplier picker: either external org (typed name) or an existing contractor Person (dropdown filtered to `employment=contractor, endDate=null`)
+- [x] Status `pending_review`; `receivedVia='manual'`; audit event on create/submit
+- [x] "Save for review" + "Save + submit for approval" buttons
 
 ### TASK-047 — Bill: approval + push to Xero
-**status:** todo
+**status:** doing
 **depends on:** TASK-046
 **acceptance:**
-- [ ] Super Admin approval required (per A8 default)
-- [ ] Approve → push to Xero as Bill (draft)
-- [ ] Xero webhook updates paid status
+- [x] Super Admin approval required by default (per A8); thresholds configurable via `resolveRequiredRole('bill', total)` + TASK-049 UI
+- [x] Approve in `/approvals` queue → `Bill.status = 'approved'` (same tx + audit). Reject → `Bill.status = 'rejected'`.
+- [ ] Push to Xero as draft — **blocked on TASK-050**
+- [ ] Xero webhook updates paid status — **blocked on TASK-050**
 
 ---
 

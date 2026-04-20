@@ -49,8 +49,9 @@ export async function listPendingApprovals(session: Session): Promise<ApprovalQu
   // Hydrate subject details per type.
   const expenseIds = pending.filter((a) => a.subjectType === 'expense').map((a) => a.subjectId);
   const invoiceIds = pending.filter((a) => a.subjectType === 'invoice').map((a) => a.subjectId);
+  const billIds = pending.filter((a) => a.subjectType === 'bill').map((a) => a.subjectId);
 
-  const [expenses, invoices] = await Promise.all([
+  const [expenses, invoices, bills] = await Promise.all([
     expenseIds.length
       ? prisma.expense.findMany({
           where: { id: { in: expenseIds } },
@@ -66,9 +67,16 @@ export async function listPendingApprovals(session: Session): Promise<ApprovalQu
           },
         })
       : Promise.resolve([]),
+    billIds.length
+      ? prisma.bill.findMany({
+          where: { id: { in: billIds } },
+          include: { project: { select: { code: true, name: true } } },
+        })
+      : Promise.resolve([]),
   ]);
   const expenseById = new Map(expenses.map((e) => [e.id, e]));
   const invoiceById = new Map(invoices.map((i) => [i.id, i]));
+  const billById = new Map(bills.map((b) => [b.id, b]));
 
   return pending.map<ApprovalQueueItem>((a) => {
     let summary = `${a.subjectType} · ${a.subjectId}`;
@@ -86,6 +94,14 @@ export async function listPendingApprovals(session: Session): Promise<ApprovalQu
       if (i) {
         summary = `${i.number} · ${i.client.code} ${i.client.legalName} · ${i.project.code}`;
         amountCents = i.amountTotal;
+      }
+    } else if (a.subjectType === 'bill') {
+      const b = billById.get(a.subjectId);
+      if (b) {
+        summary = `${b.supplierName}${b.supplierInvoiceNumber ? ` · ${b.supplierInvoiceNumber}` : ''}${
+          b.project ? ` · ${b.project.code}` : ' · OPEX'
+        } · ${b.category.replace(/_/g, ' ')}`;
+        amountCents = b.amountTotal;
       }
     }
     return {

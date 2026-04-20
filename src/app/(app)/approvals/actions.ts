@@ -81,8 +81,16 @@ export async function decideApproval(
           where: { id: approval.subjectId },
           data: { status: nextStatus },
         });
+      } else if (approval.subjectType === 'bill') {
+        // Approved bills are ready for payment scheduling (TASK-100 ABA generator);
+        // Rejected bills flip to BillStatus.rejected.
+        const nextStatus = decision === 'approved' ? 'approved' : 'rejected';
+        await tx.bill.update({
+          where: { id: approval.subjectId },
+          data: { status: nextStatus },
+        });
       }
-      // bill / pay_run propagation lands when those flows are wired up.
+      // pay_run / contract / new_hire / rate_change propagation lands when those flows ship.
 
       await writeAudit(tx, {
         actor: { type: 'person', id: session.person.id },
