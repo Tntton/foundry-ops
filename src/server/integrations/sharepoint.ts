@@ -26,17 +26,29 @@ export async function provisionProjectFolder(
 
   const siteId = await resolveSiteId(siteUrl);
   const driveId = await resolveDriveId(siteId);
-  const rootName = optionalEnv('SHAREPOINT_CLIENTS_ROOT') ?? 'Clients';
 
-  await createFolder(driveId, '', rootName);
-  await createFolder(driveId, rootName, clientCode);
+  // Root path can be multi-segment (e.g. "CORPORATE/TEAM ACCESS"). Walk each
+  // segment and ensure it exists. Existing folders are reused by createFolder's
+  // 409 fallback, so this is safe against Foundry's live SharePoint.
+  const rootSegments = (optionalEnv('SHAREPOINT_CLIENTS_ROOT') ?? 'Clients')
+    .split('/')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  let rootPath = '';
+  for (const seg of rootSegments) {
+    await createFolder(driveId, rootPath, seg);
+    rootPath = rootPath ? `${rootPath}/${seg}` : seg;
+  }
+
+  await createFolder(driveId, rootPath, clientCode);
   const projectFolder = await createFolder(
     driveId,
-    `${rootName}/${clientCode}`,
+    `${rootPath}/${clientCode}`,
     projectCode,
   );
   for (const sub of ['01 Brief', '02 Working', '03 Delivery', '04 Admin']) {
-    await createFolder(driveId, `${rootName}/${clientCode}/${projectCode}`, sub);
+    await createFolder(driveId, `${rootPath}/${clientCode}/${projectCode}`, sub);
   }
 
   return projectFolder.webUrl;
