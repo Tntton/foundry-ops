@@ -10,6 +10,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatFte, formatRateCents } from '@/lib/format';
+import {
+  ArchivePersonButton,
+  ReactivatePersonButton,
+} from './archive/dialog';
 
 export default async function PersonDetailPage({
   params,
@@ -19,6 +23,7 @@ export default async function PersonDetailPage({
   searchParams: { tempPassword?: string };
 }) {
   const session = await getSession();
+  if (!session) notFound();
   if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) {
     notFound();
   }
@@ -72,9 +77,21 @@ export default async function PersonDetailPage({
           </div>
         </div>
         {canEdit && (
-          <Button asChild variant="outline">
-            <Link href={`/directory/people/${person.id}/edit`}>Edit</Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button asChild variant="outline">
+              <Link href={`/directory/people/${person.id}/edit`}>Edit</Link>
+            </Button>
+            {person.active ? (
+              <ArchivePersonButton
+                personId={person.id}
+                personEmail={person.email}
+                personName={`${person.firstName} ${person.lastName}`}
+                isSelf={person.id === session.person.id}
+              />
+            ) : (
+              <ReactivatePersonButton personId={person.id} />
+            )}
+          </div>
         )}
       </div>
 

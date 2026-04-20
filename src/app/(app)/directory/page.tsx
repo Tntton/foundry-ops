@@ -34,6 +34,7 @@ export default async function DirectoryPage({
     band?: string;
     region?: string;
     employment?: string;
+    active?: string;
   };
 }) {
   const session = await getSession();
@@ -52,12 +53,19 @@ export default async function DirectoryPage({
   const employment = EMPLOYMENT_OPTIONS.includes(searchParams.employment as Employment)
     ? (searchParams.employment as Employment)
     : undefined;
+  const active: 'active' | 'archived' | 'all' =
+    searchParams.active === 'archived' || searchParams.active === 'all'
+      ? searchParams.active
+      : 'active';
 
   const canEdit = hasCapability(session, 'person.edit');
   const canCreate = hasCapability(session, 'person.create');
   const canSeePay = hasCapability(session, 'ratecard.view');
 
-  const people = tab === 'people' ? await listPeople({ search: q, band, region, employment }) : [];
+  const people =
+    tab === 'people'
+      ? await listPeople({ search: q, band, region, employment, active })
+      : [];
 
   return (
     <div className="space-y-6">
@@ -95,6 +103,7 @@ export default async function DirectoryPage({
             band={band}
             region={region}
             employment={employment}
+            active={active}
             rows={people}
             canSeePay={canSeePay}
             canEdit={canEdit}
@@ -119,6 +128,7 @@ function PeopleTab({
   band,
   region,
   employment,
+  active,
   rows,
   canSeePay,
   canEdit,
@@ -127,6 +137,7 @@ function PeopleTab({
   band: Band | undefined;
   region: Region | undefined;
   employment: Employment | undefined;
+  active: 'active' | 'archived' | 'all';
   rows: Awaited<ReturnType<typeof listPeople>>;
   canSeePay: boolean;
   canEdit: boolean;
@@ -153,6 +164,18 @@ function PeopleTab({
           value={employment}
           options={EMPLOYMENT_OPTIONS}
         />
+        <label className="flex items-center gap-1 text-xs text-ink-3">
+          <span>Show</span>
+          <select
+            name="active"
+            defaultValue={active}
+            className="h-9 rounded-md border border-line bg-surface-elev px-2 text-sm text-ink"
+          >
+            <option value="active">Active only</option>
+            <option value="archived">Archived only</option>
+            <option value="all">All</option>
+          </select>
+        </label>
         <Button type="submit" variant="outline" size="sm">
           Apply
         </Button>

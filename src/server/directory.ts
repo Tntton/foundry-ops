@@ -23,15 +23,18 @@ export type PersonListFilter = {
   band?: Band;
   region?: Region;
   employment?: Employment;
+  active?: 'active' | 'archived' | 'all';
 };
 
 export async function listPeople(filter: PersonListFilter = {}): Promise<PersonListRow[]> {
-  const { search, band, region, employment } = filter;
+  const { search, band, region, employment, active = 'active' } = filter;
 
   const where: Record<string, unknown> = {};
   if (band) where['band'] = band;
   if (region) where['region'] = region;
   if (employment) where['employment'] = employment;
+  if (active === 'active') where['endDate'] = null;
+  else if (active === 'archived') where['endDate'] = { not: null };
   if (search && search.trim()) {
     const q = search.trim();
     where['OR'] = [
