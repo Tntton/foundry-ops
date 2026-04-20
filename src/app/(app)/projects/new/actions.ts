@@ -81,11 +81,12 @@ export async function createProject(
   let newCode: string;
   let newProjectId: string;
   let clientCode: string;
+  let clientName: string;
   try {
-    ({ newCode, newProjectId, clientCode } = await prisma.$transaction(async (tx) => {
+    ({ newCode, newProjectId, clientCode, clientName } = await prisma.$transaction(async (tx) => {
       const client = await tx.client.findUniqueOrThrow({
         where: { id: data.clientId },
-        select: { code: true },
+        select: { code: true, legalName: true, tradingName: true },
       });
       const project = await tx.project.create({
         data: {
@@ -119,22 +120,30 @@ export async function createProject(
         },
         source: 'web',
       });
-      return { newCode: project.code, newProjectId: project.id, clientCode: client.code };
+      return {
+        newCode: project.code,
+        newProjectId: project.id,
+        clientCode: client.code,
+        clientName: client.tradingName ?? client.legalName,
+      };
     }));
   } catch (err) {
     console.error('[project.create] failed:', err);
     return { status: 'error', message: 'Create failed — try again.' };
   }
 
-  // SharePoint folder provisioning (best-effort; async on the response thread but
-  // if it fails we don't roll back the project — surfaces as a "Provision
-  // SharePoint" button on the Files tab for retry).
+  // SharePoint folder provisioning (best-effort; if it fails we don't roll back
+  // the project — surfaces as a "Provision SharePoint" button on the Files tab
+  // for retry).
   try {
-    const url = await provisionProjectFolder(clientCode, newCode);
-    if (url) {
+    const result = await provisionProjectFolder(clientCode, clientName, newCode);
+    if (result) {
       await prisma.project.update({
         where: { id: newProjectId },
-        data: { sharepointFolderUrl: url },
+        data: {
+          sharepointFolderUrl: result.teamUrl,
+          sharepointAdminFolderUrl: result.adminUrl,
+        },
       });
     }
   } catch (err) {

@@ -283,7 +283,8 @@ model Project {
   actualEndDate              DateTime?
   primaryPartnerId           String
   managerId                  String
-  sharepointFolderUrl        String?
+  sharepointFolderUrl        String?  // team/project work folder
+  sharepointAdminFolderUrl   String?  // admin/financial folder (invoices, receipts, payment docs)
   xeroTrackingCategoryValue  String?
   createdAt                  DateTime     @default(now())
   updatedAt                  DateTime     @updatedAt

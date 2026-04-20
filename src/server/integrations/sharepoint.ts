@@ -4,22 +4,31 @@ import { optionalEnv } from '@/server/env';
 type DriveItem = { id: string; webUrl: string; name: string };
 
 /**
- * Provision the SharePoint folder tree for a project. Safe to call repeatedly —
- * existing folders are reused; missing ones are created.
+ * Provision the SharePoint folder trees for a project — TWO trees:
  *
- * Structure:
- *   /<SHAREPOINT_CLIENTS_ROOT>/<ClientCode>/<ProjectCode>/01 Brief
- *                                                        /02 Working
- *                                                        /03 Delivery
- *                                                        /04 Admin
+ * 1. **Team (project work)** under SHAREPOINT_CLIENTS_ROOT:
+ *      <root>/<ClientCode> <ClientName>/<ProjectCode>/{01 Brief, 02 Working, 03 Delivery, 04 Admin}
+ *    Default root matches Foundry's existing structure:
+ *      CORPORATE/TEAM ACCESS/01 Client projects/01 Active clients
  *
- * Returns the webUrl of the project folder on success, or null when Graph /
- * SharePoint env isn't configured yet (feature-flag off).
+ * 2. **Admin (financial)** under SHAREPOINT_ADMIN_ROOT:
+ *      <admin-root>/<ClientCode> <ClientName>/<ProjectCode>
+ *    For invoices / receipts / payment docs. Default root:
+ *      CORPORATE/ADMIN ACCESS/00 Administration/03 Financial/02 Project administration
+ *
+ * Safe to call repeatedly — existing folders reused via 409 fallback.
+ * Returns { teamUrl, adminUrl } or null if Graph not configured.
  */
+export type ProvisionResult = {
+  teamUrl: string;
+  adminUrl: string | null;
+};
+
 export async function provisionProjectFolder(
   clientCode: string,
+  clientName: string,
   projectCode: string,
-): Promise<string | null> {
+): Promise<ProvisionResult | null> {
   if (!graphConfigured()) return null;
   const siteUrl = optionalEnv('SHAREPOINT_SITE_URL');
   if (!siteUrl) return null;
@@ -27,10 +36,43 @@ export async function provisionProjectFolder(
   const siteId = await resolveSiteId(siteUrl);
   const driveId = await resolveDriveId(siteId);
 
-  // Root path can be multi-segment (e.g. "CORPORATE/TEAM ACCESS"). Walk each
-  // segment and ensure it exists. Existing folders are reused by createFolder's
-  // 409 fallback, so this is safe against Foundry's live SharePoint.
-  const rootSegments = (optionalEnv('SHAREPOINT_CLIENTS_ROOT') ?? 'Clients')
+  const clientFolderName = `${clientCode} ${clientName}`.trim();
+
+  // Team/project work
+  const teamUrl = await ensureProjectTree(
+    driveId,
+    optionalEnv('SHAREPOINT_CLIENTS_ROOT') ??
+      'CORPORATE/TEAM ACCESS/01 Client projects/01 Active clients',
+    clientFolderName,
+    projectCode,
+    ['01 Brief', '02 Working', '03 Delivery', '04 Admin'],
+  );
+
+  // Admin/financial — only if admin root is configured
+  let adminUrl: string | null = null;
+  const adminRoot = optionalEnv('SHAREPOINT_ADMIN_ROOT');
+  if (adminRoot) {
+    adminUrl = await ensureProjectTree(
+      driveId,
+      adminRoot,
+      clientFolderName,
+      projectCode,
+      [],
+    );
+  }
+
+  return { teamUrl, adminUrl };
+}
+
+async function ensureProjectTree(
+  driveId: string,
+  rootPathSpec: string,
+  clientFolderName: string,
+  projectCode: string,
+  subfolders: string[],
+): Promise<string> {
+  // Walk the root path segment by segment
+  const rootSegments = rootPathSpec
     .split('/')
     .map((s) => s.trim())
     .filter(Boolean);
@@ -41,14 +83,14 @@ export async function provisionProjectFolder(
     rootPath = rootPath ? `${rootPath}/${seg}` : seg;
   }
 
-  await createFolder(driveId, rootPath, clientCode);
+  await createFolder(driveId, rootPath, clientFolderName);
   const projectFolder = await createFolder(
     driveId,
-    `${rootPath}/${clientCode}`,
+    `${rootPath}/${clientFolderName}`,
     projectCode,
   );
-  for (const sub of ['01 Brief', '02 Working', '03 Delivery', '04 Admin']) {
-    await createFolder(driveId, `${rootPath}/${clientCode}/${projectCode}`, sub);
+  for (const sub of subfolders) {
+    await createFolder(driveId, `${rootPath}/${clientFolderName}/${projectCode}`, sub);
   }
 
   return projectFolder.webUrl;

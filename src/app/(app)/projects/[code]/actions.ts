@@ -26,13 +26,17 @@ export async function provisionSharePoint(
 
   const project = await prisma.project.findUnique({
     where: { code: projectCode },
-    include: { client: { select: { code: true } } },
+    include: { client: { select: { code: true, legalName: true, tradingName: true } } },
   });
   if (!project) return { status: 'error', message: 'Project not found' };
 
   try {
-    const url = await provisionProjectFolder(project.client.code, project.code);
-    if (!url) {
+    const result = await provisionProjectFolder(
+      project.client.code,
+      project.client.tradingName ?? project.client.legalName,
+      project.code,
+    );
+    if (!result) {
       return {
         status: 'error',
         message:
@@ -42,7 +46,10 @@ export async function provisionSharePoint(
     await prisma.$transaction(async (tx) => {
       await tx.project.update({
         where: { id: project.id },
-        data: { sharepointFolderUrl: url },
+        data: {
+          sharepointFolderUrl: result.teamUrl,
+          sharepointAdminFolderUrl: result.adminUrl,
+        },
       });
       await writeAudit(tx, {
         actor: { type: 'person', id: session.person.id },
@@ -50,7 +57,10 @@ export async function provisionSharePoint(
         entity: {
           type: 'project_sharepoint',
           id: project.id,
-          after: { sharepointFolderUrl: url },
+          after: {
+            sharepointFolderUrl: result.teamUrl,
+            sharepointAdminFolderUrl: result.adminUrl,
+          },
         },
         source: 'web',
       });

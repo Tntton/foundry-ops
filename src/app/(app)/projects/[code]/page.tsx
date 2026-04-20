@@ -251,19 +251,36 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
 
         <TabsContent value="files">
           <Card>
-            <CardContent className="py-8 text-center text-sm text-ink-3">
-              {project.sharepointFolderUrl ? (
-                <a
-                  href={project.sharepointFolderUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-brand hover:underline"
-                >
-                  Open in SharePoint →
-                </a>
+            <CardContent className="space-y-3 py-8 text-center text-sm text-ink-3">
+              {project.sharepointFolderUrl || project.sharepointAdminFolderUrl ? (
+                <div className="flex flex-col items-center gap-2">
+                  {project.sharepointFolderUrl && (
+                    <a
+                      href={project.sharepointFolderUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-brand hover:underline"
+                    >
+                      Open team folder (delivery + working) →
+                    </a>
+                  )}
+                  {project.sharepointAdminFolderUrl && (
+                    <a
+                      href={project.sharepointAdminFolderUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-brand hover:underline"
+                    >
+                      Open admin folder (invoices + receipts + payments) →
+                    </a>
+                  )}
+                  {(!project.sharepointFolderUrl || !project.sharepointAdminFolderUrl) && (
+                    <ProvisionSharePointButton projectCode={project.code} />
+                  )}
+                </div>
               ) : (
                 <div className="flex flex-col items-center gap-3">
-                  <span>No SharePoint folder yet.</span>
+                  <span>No SharePoint folders yet.</span>
                   <ProvisionSharePointButton projectCode={project.code} />
                 </div>
               )}
