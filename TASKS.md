@@ -398,22 +398,23 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Approved entries are billable (eligible for invoice drafter)
 
 ### TASK-042 — Expense: submit
-**status:** todo
+**status:** doing
 **depends on:** TASK-021
 **acceptance:**
-- [ ] `/expenses/new`: fields per `schema.prisma` Expense entity
-- [ ] Receipt upload → SharePoint `/Expenses/<PersonCode>/<YYYY>-<MM>/`
-- [ ] GST auto-calculated (10%) with manual override
-- [ ] Category picker from enum
-- [ ] Project optional (OPEX if blank)
+- [x] `/expenses/new`: date, amount (inc GST), GST (auto ÷ 11, overridable), category (travel/meals/office/tools/subscriptions/other), project (optional "— OPEX —"), vendor, description
+- [ ] Receipt upload → SharePoint — **deferred to TASK-042b** (needs Graph Files scope)
+- [x] GST auto-calc + manual override
+- [x] Category enum picker
+- [x] Project optional, blank = OPEX
+- [x] Submit creates `Expense { status: submitted }` + `Approval` row + audit event in one `prisma.$transaction`
 
 ### TASK-043 — Expense: approval + reimburse queue
-**status:** todo
+**status:** doing
 **depends on:** TASK-042
 **acceptance:**
-- [ ] Threshold routing: ≤$2k → Admin or owning Manager; >$2k → Super Admin
-- [ ] Approved expenses queue for reimbursement (batched into pay run)
-- [ ] Rejected → back with note
+- [x] Threshold routing in `src/server/approvals.ts`: >$2k → super_admin; ≤$2k → admin (manager own-project refinement deferred)
+- [x] Approve/reject in /approvals queue with audit event; decision note required on reject
+- [ ] Approved → reimbursement pay-run batching — **deferred to TASK-100 (ABA generator)**
 
 ### TASK-044 — Invoice: draft (manual)
 **status:** todo
@@ -455,14 +456,14 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 ## Phase 1D — Approvals
 
 ### TASK-048 — Approvals queue UI
-**status:** todo
-**depends on:** TASK-045, TASK-047, TASK-043, TASK-041
+**status:** doing
+**depends on:** TASK-043 (invoice/bill/payrun subjects layer in as those ship)
 **acceptance:**
-- [ ] `/approvals` list of all pending `Approval` rows for the current user
-- [ ] Filter by type (invoice, expense, bill, pay run, contract, hire, rate change)
-- [ ] Row → detail modal with full context + approve / reject actions
-- [ ] Decision note required on reject
-- [ ] Approved / rejected rows disappear from queue
+- [x] `/approvals` list shows pending Approval rows where `requiredRole ∈ session.roles`
+- [ ] Filter by type — **deferred**; single-type queue is small enough for MVP
+- [x] Inline approve/reject with note field (required on reject)
+- [x] Approval status + subject status both updated in same transaction with audit event
+- [x] Decided rows disappear from queue (`where: { status: 'pending' }`)
 
 ### TASK-049 — Approvals: threshold config UI
 **status:** todo
