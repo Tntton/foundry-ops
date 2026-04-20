@@ -25,6 +25,7 @@ export type Capability =
   | 'payrun.create'
   | 'project.create'
   | 'project.edit'
+  | 'project.delete'
   | 'person.create'
   | 'person.edit'
   | 'client.create'
@@ -62,6 +63,9 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   'project.create': ['super_admin', 'admin', 'partner'],
   // manager/partner: restricted to own projects at the handler level
   'project.edit': ['super_admin', 'admin', 'partner', 'manager'],
+  // Hard delete only for super_admin — and handler refuses if the project has
+  // any financial children (invoices / bills / expenses / timesheets / deals).
+  'project.delete': ['super_admin'],
 
   // Directory
   'person.create': ['super_admin', 'admin'],

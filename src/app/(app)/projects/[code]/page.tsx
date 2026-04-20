@@ -9,6 +9,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ProvisionSharePointButton } from './provision-button';
 import { computeProjectPnL, type ProjectPnL } from '@/server/projects/pnl';
 import { hasAnyRole } from '@/server/roles';
+import { hasCapability } from '@/server/capabilities';
+import { ArchiveProjectButton, ReactivateProjectButton } from './archive/dialog';
 
 const STAGE_VARIANT: Record<string, 'amber' | 'green' | 'blue' | 'outline'> = {
   kickoff: 'amber',
@@ -62,6 +64,31 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
     project.managerId === session.person.id;
   const pnl = canSeePnL ? await computeProjectPnL(project.id) : null;
 
+  const canEditProject =
+    hasAnyRole(session, ['super_admin', 'admin']) ||
+    project.primaryPartnerId === session.person.id ||
+    project.managerId === session.person.id;
+
+  const canDeleteProject = hasCapability(session, 'project.delete');
+
+  const [invoiceCount, billCount, expenseCount, timesheetCount, dealCount] =
+    canDeleteProject
+      ? await Promise.all([
+          prisma.invoice.count({ where: { projectId: project.id } }),
+          prisma.bill.count({ where: { projectId: project.id } }),
+          prisma.expense.count({ where: { projectId: project.id } }),
+          prisma.timesheetEntry.count({ where: { projectId: project.id } }),
+          prisma.deal.count({ where: { convertedProjectId: project.id } }),
+        ])
+      : [0, 0, 0, 0, 0];
+  const deleteBlockers: string[] = [];
+  if (invoiceCount) deleteBlockers.push(`${invoiceCount} invoice${invoiceCount === 1 ? '' : 's'}`);
+  if (billCount) deleteBlockers.push(`${billCount} bill${billCount === 1 ? '' : 's'}`);
+  if (expenseCount) deleteBlockers.push(`${expenseCount} expense${expenseCount === 1 ? '' : 's'}`);
+  if (timesheetCount)
+    deleteBlockers.push(`${timesheetCount} timesheet ${timesheetCount === 1 ? 'entry' : 'entries'}`);
+  if (dealCount) deleteBlockers.push(`${dealCount} converted deal${dealCount === 1 ? '' : 's'}`);
+
   return (
     <div className="space-y-6">
       <div className="text-sm">
@@ -100,8 +127,28 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
           >
             Settings
           </Link>
+          {canEditProject &&
+            (project.stage === 'archived' ? (
+              <ReactivateProjectButton projectId={project.id} />
+            ) : (
+              <ArchiveProjectButton
+                projectId={project.id}
+                projectCode={project.code}
+                projectName={project.name}
+                deleteBlockers={deleteBlockers}
+                canDelete={canDeleteProject}
+              />
+            ))}
         </div>
       </header>
+
+      {project.stage === 'archived' && (
+        <div className="rounded-md border border-status-amber bg-status-amber-soft px-3 py-2 text-sm text-status-amber">
+          This project is archived (actual end{' '}
+          {project.actualEndDate?.toLocaleDateString('en-AU') ?? '—'}). Read-only until
+          reactivated.
+        </div>
+      )}
 
       <Tabs defaultValue="brief">
         <TabsList>

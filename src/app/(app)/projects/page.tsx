@@ -36,7 +36,7 @@ function formatMoney(cents: number): string {
 export default async function ProjectsPage({
   searchParams,
 }: {
-  searchParams: { stage?: string; active?: string };
+  searchParams: { stage?: string; active?: string; deleted?: string };
 }) {
   const session = await getSession();
   if (!session) notFound();
@@ -46,12 +46,18 @@ export default async function ProjectsPage({
     : undefined;
   const active =
     searchParams.active === 'true' ? true : searchParams.active === 'false' ? false : undefined;
+  const deletedFlag = searchParams.deleted === '1';
 
   const rows = await listProjects(session, { stage, active });
   const canCreate = hasCapability(session, 'project.create');
 
   return (
     <div className="space-y-6">
+      {deletedFlag && (
+        <div className="rounded-md border border-status-green bg-status-green-soft px-3 py-2 text-sm text-status-green">
+          Project deleted.
+        </div>
+      )}
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-ink">Projects</h1>
