@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { getPerson } from '@/server/directory';
+import { currentRatesByCode } from '@/server/rate-card';
 import { PersonEditForm } from './form';
 
 export default async function PersonEditPage({ params }: { params: { id: string } }) {
@@ -11,6 +12,8 @@ export default async function PersonEditPage({ params }: { params: { id: string 
 
   const person = await getPerson(params.id);
   if (!person) notFound();
+
+  const ratesByCode = await currentRatesByCode();
 
   return (
     <div className="space-y-6">
@@ -24,10 +27,11 @@ export default async function PersonEditPage({ params }: { params: { id: string 
           Edit {person.firstName} {person.lastName}
         </h1>
         <p className="text-sm text-ink-3">
-          Changes are audited. Email and initials are not editable here.
+          Changes are audited. Email and initials are not editable here.{' '}
+          <span className="text-status-red">*</span> marks mandatory fields.
         </p>
       </header>
-      <PersonEditForm person={person} />
+      <PersonEditForm person={person} ratesByCode={ratesByCode} />
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { optionalEnv } from '@/server/env';
+import { currentRatesByCode } from '@/server/rate-card';
 import { NewPersonForm } from './form';
 
 export default async function NewPersonPage() {
@@ -10,6 +11,7 @@ export default async function NewPersonPage() {
   if (!hasCapability(session, 'person.create')) notFound();
 
   const provisioningOn = optionalEnv('ENABLE_PROVISIONING') === '1';
+  const ratesByCode = await currentRatesByCode();
 
   return (
     <div className="space-y-6">
@@ -21,11 +23,11 @@ export default async function NewPersonPage() {
       <header>
         <h1 className="text-xl font-semibold text-ink">New person</h1>
         <p className="text-sm text-ink-3">
-          Creates the Person record + audit event. FT staff can optionally auto-provision
-          a Microsoft 365 account when <code className="font-mono">ENABLE_PROVISIONING=1</code>.
+          Creates the Person record + audit event.{' '}
+          <span className="text-status-red">*</span> marks mandatory fields.
         </p>
       </header>
-      <NewPersonForm provisioningOn={provisioningOn} />
+      <NewPersonForm provisioningOn={provisioningOn} ratesByCode={ratesByCode} />
     </div>
   );
 }

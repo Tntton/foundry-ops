@@ -48,6 +48,20 @@ export async function listRateCardAsOf(asOf: Date = new Date()): Promise<RateCar
 }
 
 /**
+ * Returns the current cost rate (in cents per hour) for each role code that
+ * has an active rate card row as of `asOf`. Used by the New Person / Edit
+ * forms to auto-fill the Rate field when a level is picked.
+ */
+export async function currentRatesByCode(
+  asOf: Date = new Date(),
+): Promise<Record<string, number>> {
+  const rows = await listRateCardAsOf(asOf);
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.roleCode] = r.costRate;
+  return out;
+}
+
+/**
  * List all historical rows for a given role code (newest first).
  */
 export async function listRateCardHistory(roleCode: string): Promise<RateCardRow[]> {
