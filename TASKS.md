@@ -557,12 +557,18 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note:** Expense `AccountCode` is optional via `XERO_EXPENSE_ACCOUNT_CODE` env — Xero applies org default when absent. Pure payload builder unit-tested in `src/__tests__/xero-bills.test.ts`.
 
 ### TASK-055 — Xero: nightly bank-feed pull
-**status:** todo
+**status:** done
 **depends on:** TASK-050
 **acceptance:**
-- [ ] Nightly job stores raw bank transactions in `BankTransaction` table
-- [ ] Idempotent on Xero transaction ID
-- [ ] Used later by Xero Reconciler agent (TASK-083)
+- [x] Nightly job stores raw bank transactions in `BankTransaction` table (`pullBankTransactions`)
+- [x] Idempotent on `xeroTxnId` — re-running the pull over overlapping windows updates rather than dupes
+- [x] Vercel Cron schedule at 17:30 UTC daily (≈3:30 AM AEST) via `vercel.json`; authenticated via `CRON_SECRET`
+- [x] Rolling 30-day lookback window — safer than tracking a persistent cursor for MVP, Xero caps paginated responses at 100/page
+- [x] Signed amount cents (SPEND / SPEND-TRANSFER → negative; RECEIVE / RECEIVE-TRANSFER → positive)
+- [x] `rawPayload` jsonb retained for downstream Xero Reconciler agent (TASK-083)
+- [x] Skips cleanly when Xero isn't connected (returns 200 `{ skipped: ... }`)
+
+**note:** Endpoint at `/api/cron/xero-bank-pull`. `parseXeroDate` + `signedAmountCents` are pure helpers and unit-tested. Bank-feed import is "bank transactions Xero has recorded" — real bank-feed ingestion (e.g. bank statement lines) is out of scope for MVP and would come with the Xero Reconciler agent.
 
 ---
 
