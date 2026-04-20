@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
+import { approvalRoleFilter } from '@/server/roles';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { KPI } from '@/components/ui/kpi';
 
@@ -17,7 +18,7 @@ export default async function DashboardPage() {
   const [activeProjectCount, pendingApprovals, pendingInvoices] = await Promise.all([
     prisma.project.count({ where: { stage: { not: 'archived' } } }),
     prisma.approval.count({
-      where: { status: 'pending', requiredRole: { in: session.person.roles } },
+      where: { status: 'pending', ...approvalRoleFilter(session.person.roles) },
     }),
     prisma.invoice.count({ where: { status: 'pending_approval' } }),
   ]);

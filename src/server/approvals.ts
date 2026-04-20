@@ -1,6 +1,6 @@
 import type { ApprovalSubjectType, Role } from '@prisma/client';
 import { prisma } from '@/server/db';
-import type { Session } from '@/server/roles';
+import { approvalRoleFilter, type Session } from '@/server/roles';
 
 /**
  * Decide required role for an expense approval.
@@ -38,7 +38,7 @@ export async function listPendingApprovals(session: Session): Promise<ApprovalQu
   const pending = await prisma.approval.findMany({
     where: {
       status: 'pending',
-      requiredRole: { in: roles },
+      ...approvalRoleFilter(roles),
     },
     orderBy: { createdAt: 'asc' },
     include: {
@@ -148,16 +148,17 @@ export async function getApprovalsAnalytics(session: Session): Promise<Approvals
   const d7 = new Date(now - 7 * 24 * 3600 * 1000);
   const d30 = new Date(now - 30 * 24 * 3600 * 1000);
 
+  const roleFilter = approvalRoleFilter(roles);
   const [pending, recentDecided] = await Promise.all([
     prisma.approval.findMany({
-      where: { status: 'pending', requiredRole: { in: roles } },
+      where: { status: 'pending', ...roleFilter },
       select: { subjectType: true, createdAt: true },
     }),
     prisma.approval.findMany({
       where: {
         status: { in: ['approved', 'rejected'] },
         decidedAt: { gte: d30 },
-        requiredRole: { in: roles },
+        ...roleFilter,
       },
       select: {
         createdAt: true,

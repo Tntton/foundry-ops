@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
-import { requireSession } from '@/server/roles';
+import { canActOnApproval, requireSession } from '@/server/roles';
 import { writeAudit } from '@/server/audit';
 import { getXeroIntegration } from '@/server/integrations/xero';
 import { pushInvoiceToXero } from '@/server/integrations/xero-invoices';
@@ -49,7 +49,7 @@ export async function decideApproval(
   if (approval.status !== 'pending') {
     return { status: 'error', message: 'Already decided' };
   }
-  if (!session.person.roles.includes(approval.requiredRole)) {
+  if (!canActOnApproval(session.person.roles, approval.requiredRole)) {
     return { status: 'error', message: 'Not authorized for this approval level' };
   }
 
