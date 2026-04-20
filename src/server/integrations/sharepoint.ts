@@ -38,17 +38,22 @@ export async function provisionProjectFolder(
 
   const clientFolderName = `${clientCode} ${clientName}`.trim();
 
-  // Team/project work
+  // Team/project work — root + subfolders both env-configurable.
   const teamUrl = await ensureProjectTree(
     driveId,
     optionalEnv('SHAREPOINT_CLIENTS_ROOT') ??
       'CORPORATE/TEAM ACCESS/01 Client projects/01 Active clients',
     clientFolderName,
     projectCode,
-    ['01 Brief', '02 Working', '03 Delivery', '04 Admin'],
+    parseSubfolders(optionalEnv('SHAREPOINT_TEAM_SUBFOLDERS'), [
+      '01 Brief',
+      '02 Working',
+      '03 Delivery',
+      '04 Admin',
+    ]),
   );
 
-  // Admin/financial — only if admin root is configured
+  // Admin/financial — only if admin root is configured.
   let adminUrl: string | null = null;
   const adminRoot = optionalEnv('SHAREPOINT_ADMIN_ROOT');
   if (adminRoot) {
@@ -57,11 +62,19 @@ export async function provisionProjectFolder(
       adminRoot,
       clientFolderName,
       projectCode,
-      [],
+      parseSubfolders(optionalEnv('SHAREPOINT_ADMIN_SUBFOLDERS'), []),
     );
   }
 
   return { teamUrl, adminUrl };
+}
+
+function parseSubfolders(raw: string | undefined, fallback: string[]): string[] {
+  if (raw === undefined) return fallback;
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 async function ensureProjectTree(
