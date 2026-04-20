@@ -448,8 +448,8 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **acceptance:**
 - [x] Approval routing via DB policy → defaults (>$20k super_admin; ≤$20k partner) with override via TASK-049 admin UI
 - [x] Approve in `/approvals` queue → Invoice status flips to `approved` (audit event in same tx)
-- [ ] Push to Xero as draft — **blocked on TASK-050 (Xero OAuth)**
-- [ ] Send button + Xero status webhook — **blocked on TASK-050/053**
+- [x] Push to Xero as draft (auto on approval, best-effort; manual retry button on detail page)
+- [ ] Send button + Xero status webhook — **deferred to TASK-053b** (needs inbound webhook infra)
 
 ### TASK-046 — Bill (AP): upload + draft
 **status:** doing
@@ -501,36 +501,45 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 ## Phase 1E — Xero integration
 
 ### TASK-050 — Xero OAuth connect
-**status:** todo
+**status:** done
 **depends on:** TASK-010
 **acceptance:**
-- [ ] `/admin/integrations/xero` connect button → OAuth dance
-- [ ] Access + refresh tokens stored encrypted
-- [ ] Disconnect button
-- [ ] Webhook signature verification middleware
+- [x] `/admin/integrations/xero` connect button → OAuth dance
+- [x] Access + refresh tokens stored encrypted (AES-256-GCM via `encryptJson`)
+- [x] Disconnect button (revokes refresh token on Xero, clears local state)
+- [ ] Webhook signature verification middleware — **deferred to TASK-053** (only needed once we receive webhooks)
+
+**note:** Authorization code flow (Web App). Granular scopes required — app was registered post-2026-03-02. Scopes: `openid profile email offline_access accounting.contacts accounting.settings accounting.invoices accounting.banktransactions`. User verified end-to-end connect/disconnect works.
 
 ### TASK-051 — Xero: contact sync
-**status:** todo
+**status:** done
 **depends on:** TASK-050, TASK-024
 **acceptance:**
-- [ ] On Client create/edit: upsert Xero contact, store `xero_contact_id`
-- [ ] Contractor Person rows also sync as contacts
-- [ ] Nightly reconciliation job finds drift
+- [x] On Client create: upsert Xero contact, store `xero_contact_id` (best-effort, non-blocking)
+- [x] Manual re-sync button on client detail page (covers "edit" path — there is no separate edit form yet)
+- [ ] Contractor Person rows also sync as contacts — **deferred to TASK-023c** (matches prior decision)
+- [ ] Nightly reconciliation job finds drift — **deferred** (not blocking MVP; add once cron infra lands in TASK-055)
 
 ### TASK-052 — Xero: tracking category sync
-**status:** todo
+**status:** done
 **depends on:** TASK-050, TASK-030
 **acceptance:**
-- [ ] On project create: ensure tracking category value exists
-- [ ] Nightly: list Xero tracking categories, warn on orphans
+- [x] On project create: ensure tracking category value exists (`ensureProjectTrackingOption`, best-effort)
+- [ ] Nightly: list Xero tracking categories, warn on orphans — **deferred** (same reasoning as TASK-051 nightly)
 
 ### TASK-053 — Xero: invoice push + status webhook
-**status:** todo
+**status:** done
 **depends on:** TASK-045
 **acceptance:**
-- [ ] On invoice approve: push to Xero as draft invoice with line items + tracking
-- [ ] Webhook updates status (`authorised`, `paid`, `voided`) + paid_at
-- [ ] Conflict flag raised if Xero invoice is edited after push
+- [x] On invoice approve: push to Xero as draft invoice with line items + tracking (`pushInvoiceToXero`, called best-effort after the approval transaction commits)
+- [x] Idempotent on `Invoice.xeroInvoiceId` — re-push updates the existing Xero invoice instead of duplicating
+- [x] Auto-ensures prerequisites: creates missing Xero contact for the client and tracking option for the project
+- [x] "Push to Xero" / "Re-push to Xero" button on invoice detail page (super_admin / admin / partner)
+- [x] Audit event `xero_pushed` written on successful push
+- [ ] Webhook updates status (`authorised`, `paid`, `voided`) + paid_at — **deferred to TASK-053b** (needs signed-webhook infra)
+- [ ] Conflict flag raised if Xero invoice is edited after push — **deferred to TASK-053b**
+
+**note:** Invoice line items use `TaxType=OUTPUT` (AU GST) and `LineAmountTypes=Exclusive`, so Xero computes GST from the line subtotals. Sales `AccountCode` is optional via `XERO_SALES_ACCOUNT_CODE` env — Xero applies org default when absent. Pure payload builder is unit-tested (`src/__tests__/xero-invoices.test.ts`).
 
 ### TASK-054 — Xero: bill push + status webhook
 **status:** todo

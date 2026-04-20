@@ -2,8 +2,10 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { prisma } from '@/server/db';
+import { hasAnyRole } from '@/server/roles';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { XeroPushInvoiceButton } from './xero-push-button';
 import {
   Table,
   TableBody,
@@ -45,6 +47,8 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
     },
   });
   if (!invoice) notFound();
+
+  const canPushToXero = hasAnyRole(session, ['super_admin', 'admin', 'partner']);
 
   return (
     <div className="space-y-6">
@@ -104,11 +108,17 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
           <CardHeader>
             <CardTitle>Xero</CardTitle>
           </CardHeader>
-          <CardContent className="text-sm text-ink-3">
+          <CardContent className="flex flex-col items-start gap-2 text-sm text-ink-3">
             {invoice.xeroInvoiceId ? (
               <span className="font-mono text-xs">{invoice.xeroInvoiceId}</span>
             ) : (
-              'Not yet pushed (TASK-053)'
+              <span>Not yet pushed.</span>
+            )}
+            {canPushToXero && invoice.status !== 'draft' && invoice.status !== 'pending_approval' && (
+              <XeroPushInvoiceButton
+                invoiceId={invoice.id}
+                alreadyPushed={Boolean(invoice.xeroInvoiceId)}
+              />
             )}
           </CardContent>
         </Card>

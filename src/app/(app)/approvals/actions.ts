@@ -6,6 +6,8 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireSession } from '@/server/roles';
 import { writeAudit } from '@/server/audit';
+import { getXeroIntegration } from '@/server/integrations/xero';
+import { pushInvoiceToXero } from '@/server/integrations/xero-invoices';
 
 const DecisionSchema = z.object({
   approvalId: z.string().min(1),
@@ -50,6 +52,7 @@ export async function decideApproval(
     return { status: 'error', message: 'Not authorized for this approval level' };
   }
 
+  let pushInvoiceId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
       await tx.approval.update({
@@ -81,6 +84,7 @@ export async function decideApproval(
           where: { id: approval.subjectId },
           data: { status: nextStatus },
         });
+        if (decision === 'approved') pushInvoiceId = approval.subjectId;
       } else if (approval.subjectType === 'bill') {
         // Approved bills are ready for payment scheduling (TASK-100 ABA generator);
         // Rejected bills flip to BillStatus.rejected.
@@ -113,7 +117,35 @@ export async function decideApproval(
     return { status: 'error', message: 'Decision failed — try again.' };
   }
 
+  // Best-effort Xero push after the approval commits. If Xero is down or the
+  // push fails the invoice stays 'approved' locally and the detail-page
+  // "Push to Xero" retry button picks up the slack.
+  if (pushInvoiceId) {
+    try {
+      const xeroRow = await getXeroIntegration();
+      if (xeroRow?.status === 'connected') {
+        const xeroInvoiceId = await pushInvoiceToXero(pushInvoiceId);
+        await prisma.$transaction(async (tx) => {
+          await writeAudit(tx, {
+            actor: { type: 'person', id: session.person.id },
+            action: 'xero_pushed',
+            entity: {
+              type: 'invoice',
+              id: pushInvoiceId!,
+              after: { xeroInvoiceId },
+            },
+            source: 'web',
+          });
+        });
+      }
+    } catch (err) {
+      console.error('[approvals.decide] Xero invoice push failed:', err);
+    }
+  }
+
   revalidatePath('/approvals');
   revalidatePath('/expenses');
+  revalidatePath('/invoices');
+  if (pushInvoiceId) revalidatePath(`/invoices/${pushInvoiceId}`);
   return { status: 'success' };
 }
