@@ -253,7 +253,7 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
           <Card>
             <CardContent className="space-y-3 py-8 text-center text-sm text-ink-3">
               {project.sharepointFolderUrl || project.sharepointAdminFolderUrl ? (
-                <div className="flex flex-col items-center gap-2">
+                <div className="flex flex-col items-center gap-3">
                   {project.sharepointFolderUrl && (
                     <a
                       href={project.sharepointFolderUrl}
@@ -274,9 +274,7 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
                       Open admin folder (invoices + receipts + payments) →
                     </a>
                   )}
-                  {(!project.sharepointFolderUrl || !project.sharepointAdminFolderUrl) && (
-                    <ProvisionSharePointButton projectCode={project.code} />
-                  )}
+                  <ProvisionSharePointButton projectCode={project.code} hasExisting />
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-3">
