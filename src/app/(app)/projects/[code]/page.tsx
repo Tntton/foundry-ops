@@ -94,6 +94,7 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
           <TabsTrigger value="milestones">Milestones</TabsTrigger>
           <TabsTrigger value="pnl">P&amp;L</TabsTrigger>
           <TabsTrigger value="files">Files</TabsTrigger>
+          <TabsTrigger value="risks">Risks</TabsTrigger>
         </TabsList>
 
         <TabsContent value="brief">
@@ -221,6 +222,20 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
           <Card>
             <CardContent className="py-8 text-center text-sm text-ink-3">
               P&amp;L tab lands with TASK-037 (deferred — depends on Xero sync).
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="risks">
+          <Card>
+            <CardContent className="py-6 text-center text-sm text-ink-3">
+              Risk register is managed on its own page.{' '}
+              <Link
+                href={`/projects/${project.code}/risks`}
+                className="text-brand hover:underline"
+              >
+                Open risk register →
+              </Link>
             </CardContent>
           </Card>
         </TabsContent>
