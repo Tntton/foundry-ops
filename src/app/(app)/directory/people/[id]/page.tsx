@@ -65,8 +65,8 @@ export default async function PersonDetailPage({ params }: { params: { id: strin
           </div>
         </div>
         {canEdit && (
-          <Button variant="outline" disabled>
-            Edit (TASK-022c)
+          <Button asChild variant="outline">
+            <Link href={`/directory/people/${person.id}/edit`}>Edit</Link>
           </Button>
         )}
       </div>

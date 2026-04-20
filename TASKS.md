@@ -209,12 +209,22 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **depends on:** TASK-021
 **acceptance:**
 - [x] Tabbed detail surface: Profile, Employment, Pay, Integrations — at `/directory/people/[id]` as a full page (not drawer yet)
-- [ ] Drawer overlay (~640px) using the Drawer primitive from TASK-008 — **deferred to TASK-022b** (requires Next.js parallel/intercepting route setup for URL-driven drawer state)
+- [ ] Drawer overlay (~640px) using the Drawer primitive from TASK-008 — **deferred to TASK-022b**
 - [x] Pay tab gated on `ratecard.view`; friendly fallback message when caller lacks the cap
 - [x] Integrations tab shows M365 user ID + Xero contact ID (hinting at TASK-051 for contractor Xero sync); employment-aware copy
-- [ ] Edit form with dirty-state navigation guard + audit event on save — **deferred to TASK-022c**; Edit button present but disabled with "TASK-022c" tooltip
+- [x] Edit form with audit event on save — shipped in TASK-022c (see below). Dirty-state navigation guard still pending.
 
-**note:** Full-page read-only view shipped so TT/JN can browse the seeded team (39 people) in the live app right now. Drawer overlay + edit form are separate follow-on tasks split out to keep this commit focused.
+### TASK-022c — Person edit form + audit on save
+**status:** done
+**depends on:** TASK-022
+**acceptance:**
+- [x] `/directory/people/[id]/edit` route, gated on `person.edit` capability
+- [x] Form fields: firstName, lastName, phone, whatsappNumber, band, level, employment, FTE, region, rateUnit, rate (AUD dollars on the form, stored as cents), roles (multi-checkbox)
+- [x] Email + initials shown as read-only (changing them safely needs its own flow — unique constraints + downstream references)
+- [x] Server action `updatePerson(id, prev, formData)` uses Zod validation, updates inside a `prisma.$transaction`, writes an `AuditEvent { action: 'updated', entity: { type:'person', before, after } }` in the same tx
+- [x] Returns field-level errors to the form on validation fail; redirects to the detail page on success
+- [x] Detail page's Edit button wired up (gated on `person.edit`)
+- [ ] Dirty-state navigation guard — **deferred** (standard `beforeunload` confirm is annoying; proper solution uses client-side state tracking, which TT can add when real users start editing)
 
 ### TASK-022 — Person detail drawer
 **status:** todo
@@ -253,14 +263,16 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Writes `AuditEvent`
 
 ### TASK-026 — Rate card view + edit
-**status:** todo
+**status:** doing
 **depends on:** TASK-020
 **acceptance:**
-- [ ] `/admin/rate-card` — Super Admin only
-- [ ] Table: role_code, effective_from, cost_rate, bill_rate_low, bill_rate_high
-- [ ] Edit creates a new versioned row (never mutates existing)
-- [ ] Audit event on every change
-- [ ] "Active as of <date>" selector shows historical rate cards
+- [x] `/admin/rate-card` view — gated on `ratecard.view` (super_admin, admin, partner)
+- [x] Table: role code (badge), role label, band, effective from, cost/hr, bill rate low, bill rate high
+- [x] "Active as of <date>" selector with Today shortcut — resolves to the most-recent row per role with `effectiveFrom <= asOf`
+- [ ] Edit creates a new versioned row — **deferred to TASK-026b** (needs a form + action similar to Person edit, plus a "compare to previous version" preview)
+- [ ] Audit event on every change — will land with 026b
+
+**note:** Listing logic in `src/server/rate-card.ts` — `listRateCardAsOf(asOf)` picks one row per roleCode (newest `effectiveFrom <= asOf`) and sorts by a business-sensible order (Leadership → Expert → Fellow → Consultant → Analyst → Intern). Bill rate low/high are MVP heuristics (cost × 2 / × 3) per TASK-020 seed — replace once Foundry's real pricing matrix is ingested.
 
 ---
 
