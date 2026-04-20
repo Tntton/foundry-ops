@@ -7,7 +7,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
-import { requiredRoleForExpense } from '@/server/approvals';
+import { resolveRequiredRole } from '@/server/approval-policies';
 
 const EXPENSE_CATEGORIES = [
   'travel',
@@ -71,7 +71,7 @@ export async function submitExpense(
   const data = parsed.data;
   const amountCents = Math.round(data.amountDollars * 100);
   const gstCents = Math.round(data.gstDollars * 100);
-  const requiredRole = requiredRoleForExpense(amountCents);
+  const requiredRole = await resolveRequiredRole('expense', amountCents);
 
   try {
     await prisma.$transaction(async (tx) => {

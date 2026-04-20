@@ -469,13 +469,16 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [x] Decided rows disappear from queue (`where: { status: 'pending' }`)
 
 ### TASK-049 — Approvals: threshold config UI
-**status:** todo
+**status:** doing
 **depends on:** TASK-048
 **acceptance:**
-- [ ] `/admin/approval-policies` (Super Admin only)
-- [ ] Edit invoice / expense / pay run thresholds; which role required
-- [ ] Audit event on change
-- [ ] Thresholds fetched server-side per request (no hard-coding)
+- [x] `/admin/approval-policies` gated on `approval.policy.edit` (super_admin only)
+- [x] Add-policy form — subject type, comparator (gt / gte / lt / lte / any), threshold (AUD dollars → cents), required role, require-MFA flag
+- [x] Audit event on upsert (entity: `approval_policy`, before/after)
+- [x] `resolveRequiredRole(subjectType, amountCents)` in `src/server/approval-policies.ts` fetches active DB policies first, falls back to `DEFAULT_POLICIES` (code-level) when no row matches — no hard-coding in call sites. Expense submit action now uses it.
+- [ ] Edit / disable / delete existing policies — **deferred to TASK-049b**; add-only for MVP is enough to override defaults
+
+**note:** DEFAULT_POLICIES table mirrors the hard-coded thresholds from the initial approvals.ts so behaviour is unchanged when DB is empty. Admin can add a matching row with a different `requiredRole` to override a built-in. Invoice and bill flows will pick this up automatically once they submit approvals through `resolveRequiredRole`.
 
 ---
 
