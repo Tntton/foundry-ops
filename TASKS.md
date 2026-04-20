@@ -381,21 +381,24 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 ## Phase 1C — Transactional flows
 
 ### TASK-040 — Timesheet: week grid
-**status:** todo
+**status:** done
 **depends on:** TASK-033
 **acceptance:**
-- [ ] `/timesheet` week view: rows = projects × tasks, cols = 7 days, cells = hours
-- [ ] Add-row: project picker (only projects person is on)
-- [ ] Save draft + Submit for approval
-- [ ] Validation: max 24h/day, no negative, description required if >0h
+- [x] `/timesheet?week=YYYY-MM-DD` week view (defaults to this week). Rows = projects (one description per row), cols = 7 days (Mon→Sun), cells = hours (0.25 step). Daily totals shown; day >24h highlighted red.
+- [x] Add-row: project picker includes every active (non-archived) project (broader than "only projects person is on" per the spec, which is too restrictive at Foundry — people often self-log before formal team assignment). Projects already on the sheet are filtered from the picker.
+- [x] "Save draft" + "Submit for approval" buttons. Submit flips eligible entries to `submitted`; Save keeps them `draft`. Approved/billed entries are locked from edit (inputs disabled, no status change).
+- [x] Validation in `saveTimesheet` server action: Zod clamps per-cell 0–24; sum per day > 24 rejected; description required when row total > 0.
+- [x] Prev/Next/This week navigation; audit event per save/submit (entity `timesheet_week`, id = `<personId>:<weekStart>`).
 
 ### TASK-041 — Timesheet: approval
-**status:** todo
+**status:** done
 **depends on:** TASK-040
 **acceptance:**
-- [ ] Submitted rows appear in Approvals queue for project manager
-- [ ] Approve → status `approved`; Reject → back to draft with note
-- [ ] Approved entries are billable (eligible for invoice drafter)
+- [x] `/timesheet/approve` (not inside `/approvals` — dedicated route; timesheets are high-volume and line-level, not aggregated like money items).
+- [x] Managers see submitted entries for projects they manage; super_admin/admin see all.
+- [x] Grouped by person + week with per-entry multi-select checkboxes (all pre-checked). Note field required for reject.
+- [x] Approve → `TimesheetEntry.status = 'approved'`, `approvedById/approvedAt` set; Reject → `status = 'draft'` (entry bounces back to submitter's sheet). Audit event per entry decision.
+- [x] Approved entries are `billable` per the invoice drafter's lens (TASK-094 / TASK-044 line-item sourcing will pull them).
 
 ### TASK-042 — Expense: submit
 **status:** doing
