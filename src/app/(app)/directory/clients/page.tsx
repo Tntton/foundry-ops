@@ -31,17 +31,23 @@ function formatMoney(cents: number): string {
 export default async function ClientsPage({
   searchParams,
 }: {
-  searchParams: { q?: string };
+  searchParams: { q?: string; deleted?: string };
 }) {
   const session = await getSession();
   if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
 
   const canCreate = hasCapability(session, 'client.create');
   const q = searchParams.q ?? '';
+  const deletedFlag = searchParams.deleted === '1';
   const rows = await listClients(q);
 
   return (
     <div className="space-y-6">
+      {deletedFlag && (
+        <div className="rounded-md border border-status-green bg-status-green-soft px-3 py-2 text-sm text-status-green">
+          Client deleted.
+        </div>
+      )}
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-ink">Directory</h1>

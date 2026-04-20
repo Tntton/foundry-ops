@@ -2,11 +2,13 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
+import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { XeroSyncClientButton } from './xero-sync-button';
+import { DeleteClientButton } from './delete-dialog';
 
 export default async function ClientDetailPage({ params }: { params: { id: string } }) {
   const session = await getSession();
@@ -26,6 +28,21 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   });
   if (!client) notFound();
 
+  const canDelete = hasCapability(session, 'client.delete');
+  const [projectCount, dealCount, invoiceCount] = canDelete
+    ? await Promise.all([
+        prisma.project.count({ where: { clientId: client.id } }),
+        prisma.deal.count({ where: { clientId: client.id } }),
+        prisma.invoice.count({ where: { clientId: client.id } }),
+      ])
+    : [0, 0, 0];
+  const deleteBlockers: string[] = [];
+  if (projectCount)
+    deleteBlockers.push(`${projectCount} project${projectCount === 1 ? '' : 's'}`);
+  if (dealCount) deleteBlockers.push(`${dealCount} deal${dealCount === 1 ? '' : 's'}`);
+  if (invoiceCount)
+    deleteBlockers.push(`${invoiceCount} invoice${invoiceCount === 1 ? '' : 's'}`);
+
   return (
     <div className="space-y-6">
       <div className="text-sm">
@@ -34,7 +51,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         </Link>
       </div>
 
-      <header className="flex items-start justify-between">
+      <header className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="font-mono">
@@ -46,6 +63,14 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
             <p className="mt-1 text-sm text-ink-3">trading as {client.tradingName}</p>
           )}
         </div>
+        {canDelete && (
+          <DeleteClientButton
+            clientId={client.id}
+            clientCode={client.code}
+            clientName={client.legalName}
+            deleteBlockers={deleteBlockers}
+          />
+        )}
       </header>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

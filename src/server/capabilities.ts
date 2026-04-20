@@ -30,6 +30,7 @@ export type Capability =
   | 'person.edit'
   | 'client.create'
   | 'client.edit'
+  | 'client.delete'
   | 'ratecard.edit'
   | 'ratecard.view'
   | 'integration.manage'
@@ -72,6 +73,10 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   'person.edit': ['super_admin', 'admin'],
   'client.create': ['super_admin', 'admin', 'partner'],
   'client.edit': ['super_admin', 'admin', 'partner'],
+  // Client hard-delete: super_admin only, and handler refuses if the client has
+  // any projects / deals / invoices attached. No soft-archive yet — add it with
+  // a migration when mid-engagement "close" becomes a need.
+  'client.delete': ['super_admin'],
 
   // Rate card
   'ratecard.edit': ['super_admin'],
