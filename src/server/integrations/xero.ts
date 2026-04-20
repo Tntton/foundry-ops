@@ -7,9 +7,9 @@ const TOKEN_URL = 'https://identity.xero.com/connect/token';
 const REVOCATION_URL = 'https://identity.xero.com/connect/revocation';
 const CONNECTIONS_URL = 'https://api.xero.com/connections';
 
-// Minimal scope set while debugging. Add accounting.contacts + accounting.settings
-// back once the baseline works.
-const SCOPES = ['openid', 'email', 'offline_access', 'accounting.transactions'];
+// Absolute minimum scope set while debugging. No OIDC scopes. Add them back
+// once the baseline works.
+const SCOPES = ['offline_access', 'accounting.transactions'];
 
 export type XeroTokens = {
   accessToken: string;

@@ -30,5 +30,8 @@ export async function GET() {
   });
 
   const url = buildAuthorizeUrl(state, defaultRedirectUri());
+  // Log the URL so we can see exactly what's sent to Xero while debugging
+  // scope / redirect-URI issues. Remove once connect works reliably.
+  console.log('[xero/connect] redirecting to:', url);
   return NextResponse.redirect(url);
 }
