@@ -67,12 +67,27 @@ export default async function TimesheetPage({
         </div>
       </header>
 
-      <TimesheetGrid
-        weekStart={formatIsoDate(weekStart)}
-        initialRows={rows}
-        weekDates={weekDates}
-        allProjects={allProjects}
-      />
+      {allProjects.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-line bg-card p-10 text-center">
+          <h2 className="text-sm font-medium text-ink">No active projects yet</h2>
+          <p className="mt-2 text-sm text-ink-3">
+            There&apos;s nothing to log time against. Ask a partner or admin to create a project
+            first.
+          </p>
+          {hasAnyRole(session, ['super_admin', 'admin', 'partner']) && (
+            <Button asChild size="sm" className="mt-4">
+              <Link href="/projects/new">Create project</Link>
+            </Button>
+          )}
+        </div>
+      ) : (
+        <TimesheetGrid
+          weekStart={formatIsoDate(weekStart)}
+          initialRows={rows}
+          weekDates={weekDates}
+          allProjects={allProjects}
+        />
+      )}
     </div>
   );
 }

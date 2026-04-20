@@ -866,10 +866,12 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Migration job on first login pulls localStorage → server (client posts once)
 
 ### TASK-202 — Empty / loading / error states sweep
-**status:** todo
+**status:** doing
 **depends on:** phases 1–2 done
 **acceptance:**
-- [ ] Every page has all three; a checklist in the PR proves each
+- [x] Global loading / error / not-found handlers under `src/app/(app)/` cover every route
+- [x] List-view empty states audited; gaps patched — timesheet (no active projects), rate card (no rows as-of date), dashboard (stale placeholder replaced with real counts + quick actions)
+- [ ] Full-surface PR-grade checklist on every page — **deferred** until real testing flushes the last cracks (staff-role views likely have a few more)
 
 ### TASK-203 — Runbook
 **status:** todo

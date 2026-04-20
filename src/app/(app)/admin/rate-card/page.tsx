@@ -103,9 +103,18 @@ export default async function RateCardPage({
 
       <Card className="p-0">
         {rows.length === 0 ? (
-          <div className="p-12 text-center text-sm text-ink-3">
-            No rate card rows before {asOf.toISOString().slice(0, 10)}. Run the seed
-            (`pnpm db:seed`) or pick a later date.
+          <div className="space-y-3 p-12 text-center">
+            <h2 className="text-sm font-medium text-ink">No rate card rows yet</h2>
+            <p className="text-sm text-ink-3">
+              Nothing effective on or before{' '}
+              <span className="font-mono text-ink-2">{asOf.toISOString().slice(0, 10)}</span>.
+              Pick a later date, or add a rate card version if this is a new environment.
+            </p>
+            {canEdit && (
+              <Button asChild size="sm">
+                <Link href="/admin/rate-card/new">+ New version</Link>
+              </Button>
+            )}
           </div>
         ) : (
           <Table>
