@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
-import { DEFAULT_POLICIES, listActivePolicies } from '@/server/approval-policies';
+import { DEFAULT_POLICIES, listAllPolicies } from '@/server/approval-policies';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import {
@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { NewPolicyForm } from './form';
+import { NewPolicyForm, TogglePolicyActive } from './form';
 
 function formatThreshold(cents: number | null, comparator: string): string {
   if (comparator === 'any') return 'any amount';
@@ -30,7 +30,7 @@ export default async function ApprovalPoliciesPage() {
   const session = await getSession();
   if (!hasCapability(session, 'approval.policy.edit')) notFound();
 
-  const db = await listActivePolicies();
+  const db = await listAllPolicies();
 
   return (
     <div className="space-y-6">
@@ -52,6 +52,7 @@ export default async function ApprovalPoliciesPage() {
               <TableHead>MFA</TableHead>
               <TableHead>Active</TableHead>
               <TableHead>Source</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -73,6 +74,9 @@ export default async function ApprovalPoliciesPage() {
                 <TableCell>
                   <Badge variant="blue">DB</Badge>
                 </TableCell>
+                <TableCell className="text-right">
+                  <TogglePolicyActive id={p.id} active={p.active} />
+                </TableCell>
               </TableRow>
             ))}
             {DEFAULT_POLICIES.map((p) => (
@@ -93,6 +97,7 @@ export default async function ApprovalPoliciesPage() {
                 <TableCell>
                   <Badge variant="outline">code</Badge>
                 </TableCell>
+                <TableCell />
               </TableRow>
             ))}
           </TableBody>
@@ -102,9 +107,10 @@ export default async function ApprovalPoliciesPage() {
       <NewPolicyForm />
 
       <div className="rounded-md border border-line bg-surface-subtle p-3 text-xs text-ink-3">
-        Edit-existing / disable / delete flows land with TASK-049b — for MVP, add a new row
-        to override the default. `resolveRequiredRole()` in
-        `src/server/approval-policies.ts` checks DB first then built-ins.
+        Disable a DB policy to fall back to the built-in default below it.
+        Full inline-edit (comparator / threshold / role in place) lands later — for now,
+        disable + add a new row to change. `resolveRequiredRole()` in
+        `src/server/approval-policies.ts` checks active DB rows first then defaults.
       </div>
     </div>
   );

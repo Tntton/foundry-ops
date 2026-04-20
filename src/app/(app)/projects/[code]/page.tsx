@@ -79,11 +79,19 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
             </Link>
           </p>
         </div>
-        <div className="text-right text-sm">
-          <div className="text-ink-3">Contract value</div>
-          <div className="text-lg font-semibold tabular-nums text-ink">
-            {formatMoney(project.contractValue)}
+        <div className="flex items-start gap-4">
+          <div className="text-right text-sm">
+            <div className="text-ink-3">Contract value</div>
+            <div className="text-lg font-semibold tabular-nums text-ink">
+              {formatMoney(project.contractValue)}
+            </div>
           </div>
+          <Link
+            href={`/projects/${project.code}/settings`}
+            className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+          >
+            Settings
+          </Link>
         </div>
       </header>
 

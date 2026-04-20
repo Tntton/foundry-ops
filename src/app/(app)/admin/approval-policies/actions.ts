@@ -117,3 +117,57 @@ export async function upsertPolicy(
   revalidatePath('/admin/approval-policies');
   return { status: 'success', message: 'Policy saved.' };
 }
+
+const ToggleSchema = z.object({
+  id: z.string().min(1),
+  active: z.enum(['true', 'false']),
+});
+
+export async function togglePolicyActive(
+  _prev: PolicyState,
+  formData: FormData,
+): Promise<PolicyState> {
+  const session = await getSession();
+  try {
+    requireCapability(session, 'approval.policy.edit');
+  } catch {
+    return { status: 'error', message: 'Not authorized' };
+  }
+
+  const parsed = ToggleSchema.safeParse({
+    id: formData.get('id'),
+    active: formData.get('active'),
+  });
+  if (!parsed.success) return { status: 'error', message: 'Invalid input' };
+
+  const existing = await prisma.approvalPolicy.findUnique({ where: { id: parsed.data.id } });
+  if (!existing) return { status: 'error', message: 'Policy not found' };
+  const nextActive = parsed.data.active === 'true';
+  if (existing.active === nextActive) return { status: 'idle' };
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.approvalPolicy.update({
+        where: { id: parsed.data.id },
+        data: { active: nextActive },
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: nextActive ? 'activated' : 'deactivated',
+        entity: {
+          type: 'approval_policy',
+          id: parsed.data.id,
+          before: { active: existing.active },
+          after: { active: nextActive },
+        },
+        source: 'web',
+      });
+    });
+  } catch (err) {
+    console.error('[approval-policies.toggle] failed:', err);
+    return { status: 'error', message: 'Update failed — try again.' };
+  }
+
+  revalidatePath('/admin/approval-policies');
+  return { status: 'success', message: nextActive ? 'Policy re-enabled.' : 'Policy disabled.' };
+}

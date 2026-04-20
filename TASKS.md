@@ -371,12 +371,13 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Upload button opens SharePoint in new tab (we don't handle binaries)
 
 ### TASK-039 — Project detail: Settings + Risks tabs
-**status:** doing
+**status:** done
 **depends on:** TASK-034
 **acceptance:**
-- [ ] Settings tab (stage / dates / partner / manager / billing freq / reporting period) — **deferred to TASK-039b**; project editing requires a separate form+action similar to Person edit.
+- [x] Settings form at `/projects/[code]/settings` — name / description / stage / startDate / endDate / actualEndDate / contractValue / primaryPartner / manager. Zod validation with endDate > startDate refine. Audit event with before/after snapshot.
 - [x] Risks: CRUD at `/projects/[code]/risks` — title, severity (low/medium/high), status (open/mitigating/closed), owner (optional), mitigation (optional). Inline severity + status dropdowns auto-submit. Risks tab on project detail links to the manage page.
-- [x] Audit event per create + per field update.
+- [x] Audit event per every mutation.
+- [ ] Billing freq / reporting period — **deferred to TASK-039c**; neither is on the Project schema yet.
 
 ---
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useFormState, useFormStatus } from 'react-dom';
-import { upsertPolicy, type PolicyState } from './actions';
+import { upsertPolicy, togglePolicyActive, type PolicyState } from './actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -102,5 +102,31 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <label className="block text-xs font-medium text-ink-3">{label}</label>
       {children}
     </div>
+  );
+}
+
+export function TogglePolicyActive({ id, active }: { id: string; active: boolean }) {
+  const [, action] = useFormState<PolicyState, FormData>(togglePolicyActive, {
+    status: 'idle',
+  });
+  return (
+    <form action={action} className="inline">
+      <input type="hidden" name="id" value={id} />
+      <input type="hidden" name="active" value={active ? 'false' : 'true'} />
+      <ToggleButton active={active} />
+    </form>
+  );
+}
+
+function ToggleButton({ active }: { active: boolean }) {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="text-xs text-ink-3 hover:text-ink disabled:opacity-50"
+    >
+      {pending ? '…' : active ? 'Disable' : 'Enable'}
+    </button>
   );
 }

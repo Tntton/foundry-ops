@@ -76,7 +76,28 @@ export async function listActivePolicies(subjectType?: ApprovalSubjectType): Pro
     where,
     orderBy: [{ subjectType: 'asc' }, { thresholdCents: 'asc' }],
   });
-  return rows.map((r) => ({
+  return rows.map(toPolicyRow);
+}
+
+export async function listAllPolicies(): Promise<PolicyRow[]> {
+  const rows = await prisma.approvalPolicy.findMany({
+    orderBy: [{ active: 'desc' }, { subjectType: 'asc' }, { thresholdCents: 'asc' }],
+  });
+  return rows.map(toPolicyRow);
+}
+
+function toPolicyRow(r: {
+  id: string;
+  subjectType: ApprovalSubjectType;
+  thresholdCents: number | null;
+  comparator: string;
+  requiredRole: Role;
+  channel: string;
+  requireMfa: boolean;
+  active: boolean;
+  effectiveFrom: Date;
+}): PolicyRow {
+  return {
     id: r.id,
     subjectType: r.subjectType,
     thresholdCents: r.thresholdCents,
@@ -86,7 +107,7 @@ export async function listActivePolicies(subjectType?: ApprovalSubjectType): Pro
     requireMfa: r.requireMfa,
     active: r.active,
     effectiveFrom: r.effectiveFrom,
-  }));
+  };
 }
 
 /**
