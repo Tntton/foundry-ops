@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
@@ -6,6 +7,19 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DecisionForm } from './decision-form';
+
+function subjectHref(subjectType: string, subjectId: string): string | null {
+  switch (subjectType) {
+    case 'invoice':
+      return `/invoices/${subjectId}`;
+    case 'bill':
+      return `/bills/${subjectId}`;
+    case 'expense':
+      return `/expenses/${subjectId}`;
+    default:
+      return null;
+  }
+}
 
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
@@ -135,7 +149,9 @@ export default async function ApprovalsPage() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {queue.map((item) => (
+          {queue.map((item) => {
+            const href = subjectHref(item.subjectType, item.subjectId);
+            return (
             <Card key={item.id} className="p-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 space-y-2">
@@ -153,7 +169,15 @@ export default async function ApprovalsPage() {
                       {ageLabel(item.createdAt)}
                     </Badge>
                   </div>
-                  <p className="text-sm text-ink-2">{item.summary}</p>
+                  <p className="text-sm text-ink-2">
+                    {href ? (
+                      <Link href={href} className="hover:underline">
+                        {item.summary}
+                      </Link>
+                    ) : (
+                      item.summary
+                    )}
+                  </p>
                   <div className="flex items-center gap-2 text-xs text-ink-3">
                     <Avatar className="h-5 w-5">
                       <AvatarFallback className="text-[9px]">
@@ -164,6 +188,14 @@ export default async function ApprovalsPage() {
                       {item.requestedBy.firstName} {item.requestedBy.lastName} · submitted{' '}
                       {item.createdAt.toLocaleDateString('en-AU')}
                     </span>
+                    {href && (
+                      <>
+                        <span>·</span>
+                        <Link href={href} className="text-brand hover:underline">
+                          View details →
+                        </Link>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -172,7 +204,8 @@ export default async function ApprovalsPage() {
                 </div>
               </div>
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

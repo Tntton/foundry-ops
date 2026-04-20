@@ -202,7 +202,9 @@ export default async function ExpensesPage({
               {rows.map((e) => (
                 <TableRow key={e.id}>
                   <TableCell className="tabular-nums">
-                    {e.date.toLocaleDateString('en-AU')}
+                    <Link href={`/expenses/${e.id}`} className="hover:underline">
+                      {e.date.toLocaleDateString('en-AU')}
+                    </Link>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
