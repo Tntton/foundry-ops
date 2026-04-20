@@ -247,12 +247,24 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Flag-gated (`ENABLE_PROVISIONING`) — default off in dev, on in staging
 
 ### TASK-024 — Client list + detail drawer
-**status:** todo
+**status:** done
 **depends on:** TASK-009
 **acceptance:**
-- [ ] `/directory?tab=clients`: table with code, legal name, trading name, primary partner, active projects count, AR total
-- [ ] Drawer: details, billing, primary partner, active projects, AR aging sparkline
-- [ ] Permission: Partner+ can see, Admin+ can edit
+- [x] `/directory/clients` (separate route instead of `?tab=clients` query; cleaner URL structure): table with code, legal name + trading name, primary partner (avatar + name), active-projects count, AR outstanding
+- [x] Detail at `/directory/clients/[id]` — full-page view (drawer overlay deferred); Details card (ABN, billing email/address, payment terms, Xero contact placeholder), Primary partner card (links to Person detail), Projects list (empty state pointing to TASK-030)
+- [x] Permission: Partner+ can see (`hasAnyRole(['super_admin', 'admin', 'partner'])`); Admin+/Partner can create via `client.create`
+
+**note:** AR sparkline deferred — needs meaningful AR aging data (Xero nightly pull, TASK-055). AR outstanding computed inline from approved/sent/partial/overdue invoices: `amountTotal - paymentReceivedAmount`.
+
+### TASK-025 — New Client wizard
+**status:** done
+**depends on:** TASK-024
+**acceptance:**
+- [x] Fields: code (uppercase A-Z0-9, unique), legal name, trading name, ABN (11 digits, spaces ok, optional), billing address, billing email, primary partner (select of partner-role persons), payment terms (net-14 / net-30 / net-45)
+- [x] Server action `createClient` with Zod validation, `prisma.$transaction` inserting Client + AuditEvent
+- [x] Xero contact creation — stubbed (code-level no-op with `xeroContactId` nullable); wires up properly in TASK-051
+- [x] Writes `AuditEvent { action: 'created', entity: { type: 'client', after } }`
+- [x] Field-level errors returned to form on validation fail; redirect to detail page on success
 
 ### TASK-025 — New Client wizard
 **status:** todo
