@@ -41,8 +41,8 @@ export default async function NewInvoicePage({
       <header>
         <h1 className="text-xl font-semibold text-ink">New invoice</h1>
         <p className="text-sm text-ink-3">
-          Manual draft with free-form line items. Milestone / T&amp;M auto-fill lands with
-          TASK-094 (invoice drafter agent).
+          Manual draft with free-form line items. Auto-fill from milestones + T&amp;M via
+          the invoice drafter agent ships later.
         </p>
       </header>
 

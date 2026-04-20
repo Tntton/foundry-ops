@@ -110,13 +110,13 @@ export default async function DirectoryPage({
           />
         </TabsContent>
         <TabsContent value="clients">
-          <EmptyTab message="Client directory lands with TASK-024." />
+          <EmptyTab message="Open the Clients tab above to view and manage clients." />
         </TabsContent>
         <TabsContent value="contractors">
-          <EmptyTab message="Contractor list is filtered from people once contractor-specific fields settle." />
+          <EmptyTab message="Contractors live on the People tab — filter by Employment = contractor once the filter ships." />
         </TabsContent>
         <TabsContent value="suppliers">
-          <EmptyTab message="Supplier directory lands with TASK-046 (bill intake)." />
+          <EmptyTab message="Suppliers are tracked implicitly through Bills. A dedicated supplier directory isn't planned for MVP." />
         </TabsContent>
       </Tabs>
     </div>

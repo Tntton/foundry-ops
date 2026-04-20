@@ -119,19 +119,11 @@ export default async function XeroIntegrationPage({
           <CardTitle>What connecting enables</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm text-ink-2">
-          <Row label="Invoice push (TASK-053)">
-            Approved invoices auto-pushed as Xero drafts.
-          </Row>
-          <Row label="Bill push (TASK-054)">Approved bills auto-pushed as Xero drafts.</Row>
-          <Row label="Bank feed (TASK-055)">
-            Nightly bank-transaction pull for the Xero reconciler agent.
-          </Row>
-          <Row label="Client sync (TASK-051)">
-            Clients + contractor Persons upserted as Xero contacts.
-          </Row>
-          <Row label="Tracking categories (TASK-052)">
-            One Xero tracking-category value per project code.
-          </Row>
+          <Row label="Invoice push">Approved invoices auto-pushed as Xero drafts.</Row>
+          <Row label="Bill push">Approved bills auto-pushed as Xero drafts.</Row>
+          <Row label="Bank feed">Nightly bank-transaction pull (feeds the future reconciler agent).</Row>
+          <Row label="Client sync">Clients + contractor people upserted as Xero contacts.</Row>
+          <Row label="Tracking categories">One Xero tracking-category value per project code.</Row>
         </CardContent>
       </Card>
     </div>

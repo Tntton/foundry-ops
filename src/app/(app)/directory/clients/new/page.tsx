@@ -21,7 +21,7 @@ export default async function NewClientPage() {
       <header>
         <h1 className="text-xl font-semibold text-ink">New client</h1>
         <p className="text-sm text-ink-3">
-          Creates the Client record + audit event. Xero contact sync lands with TASK-051.
+          Creates the Client record. If Xero is connected, a Xero contact is created too (best-effort — re-sync any time from the detail page).
         </p>
       </header>
       <NewClientForm partners={partners} />

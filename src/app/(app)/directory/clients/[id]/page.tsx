@@ -138,7 +138,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         <CardContent>
           {client.projects.length === 0 ? (
             <p className="text-sm text-ink-3">
-              No projects yet. Create one via TASK-030 once the wizard lands.
+              No projects yet. Click + New project to start one for this client.
             </p>
           ) : (
             <ul className="space-y-1 text-sm">

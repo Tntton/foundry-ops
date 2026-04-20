@@ -32,7 +32,7 @@ export default async function NewBillPage() {
       <header>
         <h1 className="text-xl font-semibold text-ink">New bill</h1>
         <p className="text-sm text-ink-3">
-          Manual AP entry. Email intake via the AP intake agent lands with TASK-093.
+          Manual AP entry. Auto-intake from email via the AP intake agent ships later.
         </p>
       </header>
       <NewBillForm projects={projects} contractors={contractors} />

@@ -195,7 +195,7 @@ export default async function PersonDetailPage({
                 ) : (
                   <span className="text-ink-3">
                     {person.employment === 'contractor'
-                      ? 'Not linked (will sync with TASK-051)'
+                      ? 'Not linked — contractor syncs on first bill push'
                       : 'Only contractors sync to Xero'}
                   </span>
                 )}

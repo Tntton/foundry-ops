@@ -53,7 +53,7 @@ export default async function DashboardPage() {
         <KPI
           label="Cash on hand"
           value="—"
-          sub="Xero bank-feed — TASK-083"
+          sub="From Xero once reconciler agent ships"
           trend="flat"
         />
       </div>

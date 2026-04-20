@@ -22,8 +22,9 @@ export default async function NewProjectPage() {
       <header>
         <h1 className="text-xl font-semibold text-ink">New project</h1>
         <p className="text-sm text-ink-3">
-          Basics + commercials + team. Milestones, SharePoint provisioning, and Xero
-          tracking-category creation land in TASK-031/032/036.
+          Basics + commercials + team. SharePoint folders auto-provision on save; Xero
+          tracking category is created on the first invoice or bill push. Milestones are
+          editable from the project detail after create.
         </p>
       </header>
 

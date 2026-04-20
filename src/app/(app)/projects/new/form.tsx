@@ -120,7 +120,7 @@ export function NewProjectForm({
         </FieldRow>
         <p className="text-xs text-ink-3">
           Team allocations and milestones can be edited from the project detail page after
-          create (TASK-035 / TASK-036).
+          create.
         </p>
       </Section>
 

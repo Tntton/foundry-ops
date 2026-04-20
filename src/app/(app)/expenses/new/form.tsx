@@ -117,8 +117,8 @@ export function NewExpenseForm({ projects }: { projects: ProjectOpt[] }) {
       </Section>
 
       <div className="rounded-md border border-line bg-surface-subtle p-3 text-xs text-ink-3">
-        Receipts and the Receipt Parser agent land with TASK-090. Attach via SharePoint link
-        manually for now.
+        Receipt OCR via the Receipt Parser agent ships later. For now, upload the receipt
+        to SharePoint and paste the file link when you need to attach one.
       </div>
 
       <div className="flex justify-end gap-2">

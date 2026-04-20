@@ -143,7 +143,7 @@ export function NewBillForm({
       <Section title="Attachment">
         <Field
           label="SharePoint URL (optional)"
-          hint="Paste the file link after uploading to SharePoint; full upload UX lands with TASK-046b"
+          hint="Paste the file link after uploading to SharePoint — in-app upload ships later"
         >
           <Input name="attachmentSharepointUrl" type="url" placeholder="https://…" />
         </Field>
