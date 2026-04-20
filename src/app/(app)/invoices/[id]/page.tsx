@@ -3,9 +3,11 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { prisma } from '@/server/db';
 import { hasAnyRole } from '@/server/roles';
+import { hasCapability } from '@/server/capabilities';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { XeroPushInvoiceButton } from './xero-push-button';
+import { DeleteDraftInvoiceButton } from './delete-button';
 import {
   Table,
   TableBody,
@@ -49,6 +51,9 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
   if (!invoice) notFound();
 
   const canPushToXero = hasAnyRole(session, ['super_admin', 'admin', 'partner']);
+  const canDeleteDraft =
+    hasCapability(session, 'invoice.delete_draft') &&
+    (invoice.status === 'draft' || invoice.status === 'pending_approval');
 
   return (
     <div className="space-y-6">
@@ -79,11 +84,16 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
             </Link>
           </p>
         </div>
-        <div className="text-right text-sm">
-          <div className="text-ink-3">Amount due</div>
-          <div className="text-2xl font-semibold tabular-nums text-ink">
-            {formatMoney(invoice.amountTotal)}
+        <div className="flex flex-col items-end gap-2 text-sm">
+          <div className="text-right">
+            <div className="text-ink-3">Amount due</div>
+            <div className="text-2xl font-semibold tabular-nums text-ink">
+              {formatMoney(invoice.amountTotal)}
+            </div>
           </div>
+          {canDeleteDraft && (
+            <DeleteDraftInvoiceButton invoiceId={invoice.id} invoiceNumber={invoice.number} />
+          )}
         </div>
       </header>
 

@@ -16,6 +16,7 @@ export type Capability =
   | 'invoice.approve.under_20k'
   | 'invoice.create'
   | 'invoice.send'
+  | 'invoice.delete_draft'
   | 'expense.approve.over_2k'
   | 'expense.approve.under_2k'
   | 'expense.submit'
@@ -46,6 +47,9 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   'invoice.approve.under_20k': ['super_admin', 'admin', 'partner'],
   'invoice.create': ['super_admin', 'admin', 'partner', 'manager'],
   'invoice.send': ['super_admin', 'admin', 'partner'],
+  // Delete only allowed for pre-approval invoices (draft / pending_approval).
+  // Once approved / pushed to Xero, use Xero's void flow instead.
+  'invoice.delete_draft': ['super_admin', 'admin', 'partner'],
 
   // Expenses
   'expense.approve.over_2k': ['super_admin'],
