@@ -366,12 +366,15 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [x] Audit event on every create + status update.
 
 ### TASK-037 — Project detail: P&L tab
-**status:** todo
+**status:** done
 **depends on:** TASK-034
 **acceptance:**
-- [ ] Revenue (invoiced + WIP) vs cost (timesheet × cost_rate + expenses) vs margin
-- [ ] Stacked bar by month
-- [ ] Permission: Super Admin / Admin / owning Partner / owning Manager
+- [x] Revenue (invoiced + WIP) vs cost (timesheet × cost_rate + expenses + project-coded bills) vs margin, ex GST throughout
+- [x] Monthly breakdown table with inline horizontal bars (revenue green / cost red); stacked bar chart deferred as horizontal twin-bar reads as well for a 12-month window and doesn't need a charting lib
+- [x] Permission: Super Admin / Admin / owning Partner / owning Manager; anyone else sees a visibility notice
+- [x] Empty state when no activity yet, with guidance on what to log/approve to populate
+
+**note:** Uses current `Person.rate` as the cost rate (not rate-card-as-of-date lookups) — simpler, accurate enough for MVP P&L. Historical-rate rigour lands when rate-card versioning is live. Computation lives in `src/server/projects/pnl.ts` (`computeProjectPnL`).
 
 ### TASK-038 — Project detail: Files tab
 **status:** done

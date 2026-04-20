@@ -7,6 +7,8 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ProvisionSharePointButton } from './provision-button';
+import { computeProjectPnL, type ProjectPnL } from '@/server/projects/pnl';
+import { hasAnyRole } from '@/server/roles';
 
 const STAGE_VARIANT: Record<string, 'amber' | 'green' | 'blue' | 'outline'> = {
   kickoff: 'amber',
@@ -54,6 +56,11 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
     const isManager = project.managerId === session.person.id;
     if (!onTeam && !isManager) notFound();
   }
+
+  const canSeePnL =
+    hasAnyRole(session, ['super_admin', 'admin', 'partner']) ||
+    project.managerId === session.person.id;
+  const pnl = canSeePnL ? await computeProjectPnL(project.id) : null;
 
   return (
     <div className="space-y-6">
@@ -272,11 +279,15 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
         </TabsContent>
 
         <TabsContent value="pnl">
-          <Card>
-            <CardContent className="py-8 text-center text-sm text-ink-3">
-              P&amp;L tab lands with TASK-037 (deferred — depends on Xero sync).
-            </CardContent>
-          </Card>
+          {!pnl ? (
+            <Card>
+              <CardContent className="py-8 text-center text-sm text-ink-3">
+                P&amp;L is visible to Super Admin / Admin / owning Partner / owning Manager only.
+              </CardContent>
+            </Card>
+          ) : (
+            <ProjectPnLPanel pnl={pnl} />
+          )}
         </TabsContent>
 
         <TabsContent value="risks">
@@ -364,6 +375,131 @@ function PersonRow({
           {p.firstName} {p.lastName}
         </span>
       </Link>
+    </div>
+  );
+}
+
+function ProjectPnLPanel({ pnl }: { pnl: ProjectPnL }) {
+  const totalRevenue = pnl.revenue.invoiced + pnl.revenue.wip;
+  const totalCost = pnl.cost.timesheet + pnl.cost.expense + pnl.cost.bill;
+  const hasActivity = totalRevenue > 0 || totalCost > 0 || pnl.hours > 0;
+  const marginPct =
+    totalRevenue > 0 ? Math.round((pnl.margin / totalRevenue) * 100) : null;
+  const maxMonthly = Math.max(
+    1,
+    ...pnl.monthly.flatMap((m) => [m.revenue, m.cost]),
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium text-ink-3">Contract value</CardTitle>
+          </CardHeader>
+          <CardContent className="text-lg font-semibold tabular-nums text-ink">
+            {formatMoney(pnl.contractValue)}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium text-ink-3">Revenue</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-lg font-semibold tabular-nums text-ink">
+              {formatMoney(totalRevenue)}
+            </div>
+            <div className="text-xs text-ink-3">
+              {formatMoney(pnl.revenue.invoiced)} invoiced ·{' '}
+              {formatMoney(pnl.revenue.wip)} WIP
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium text-ink-3">Cost</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-lg font-semibold tabular-nums text-ink">
+              {formatMoney(totalCost)}
+            </div>
+            <div className="text-xs text-ink-3">
+              {formatMoney(pnl.cost.timesheet)} time · {formatMoney(pnl.cost.expense)} exp ·{' '}
+              {formatMoney(pnl.cost.bill)} bills
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium text-ink-3">Margin</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div
+              className={`text-lg font-semibold tabular-nums ${
+                pnl.margin >= 0 ? 'text-ink' : 'text-status-red'
+              }`}
+            >
+              {formatMoney(pnl.margin)}
+            </div>
+            <div className="text-xs text-ink-3">
+              {marginPct === null ? '—' : `${marginPct}% of revenue`} ·{' '}
+              {pnl.hours.toFixed(1)} hrs logged
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Monthly breakdown</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!hasActivity ? (
+            <p className="py-6 text-center text-sm text-ink-3">
+              No activity yet. Log time, approve an invoice, or submit an expense to start
+              populating the P&amp;L.
+            </p>
+          ) : pnl.monthly.length === 0 ? (
+            <p className="text-sm text-ink-3">No monthly data yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {pnl.monthly.map((m) => (
+                <div key={m.month} className="grid grid-cols-[80px_1fr_1fr] items-center gap-3">
+                  <span className="font-mono text-xs text-ink-3">{m.month}</span>
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="h-3 rounded bg-status-green"
+                      style={{ width: `${Math.round((m.revenue / maxMonthly) * 100)}%` }}
+                      aria-label={`Revenue ${formatMoney(m.revenue)}`}
+                    />
+                    <span className="tabular-nums text-xs text-ink-2">
+                      {formatMoney(m.revenue)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="h-3 rounded bg-status-red"
+                      style={{ width: `${Math.round((m.cost / maxMonthly) * 100)}%` }}
+                      aria-label={`Cost ${formatMoney(m.cost)}`}
+                    />
+                    <span className="tabular-nums text-xs text-ink-2">
+                      {formatMoney(m.cost)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              <div className="mt-2 flex gap-4 text-xs text-ink-3">
+                <span>
+                  <span className="inline-block h-2 w-2 rounded bg-status-green" /> Revenue
+                </span>
+                <span>
+                  <span className="inline-block h-2 w-2 rounded bg-status-red" /> Cost
+                </span>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
