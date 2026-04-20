@@ -28,6 +28,7 @@ export type Capability =
   | 'project.delete'
   | 'person.create'
   | 'person.edit'
+  | 'person.delete'
   | 'client.create'
   | 'client.edit'
   | 'client.delete'
@@ -71,6 +72,12 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   // Directory
   'person.create': ['super_admin', 'admin'],
   'person.edit': ['super_admin', 'admin'],
+  // Hard-delete a Person only when they have no transactional footprint at all
+  // (no timesheets, expenses, owned clients/projects/deals, team memberships,
+  // approvals, risks, or audit events they were actor on). For typical
+  // end-of-tenure cases, archive is the right tool — this is strictly for
+  // cleaning up mistyped / never-used Person rows.
+  'person.delete': ['super_admin'],
   'client.create': ['super_admin', 'admin', 'partner'],
   'client.edit': ['super_admin', 'admin', 'partner'],
   // Client hard-delete: super_admin only, and handler refuses if the client has

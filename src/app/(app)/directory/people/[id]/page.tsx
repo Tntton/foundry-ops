@@ -4,6 +4,7 @@ import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { getPerson } from '@/server/directory';
+import { prisma } from '@/server/db';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -33,7 +34,53 @@ export default async function PersonDetailPage({
 
   const canSeePay = hasCapability(session, 'ratecard.view');
   const canEdit = hasCapability(session, 'person.edit');
+  const canDelete = hasCapability(session, 'person.delete');
   const tempPassword = searchParams.tempPassword;
+
+  const [
+    tsMine,
+    tsApproved,
+    expMine,
+    expApproved,
+    teamCount,
+    clientsLed,
+    projectsOwned,
+    dealsOwned,
+    approvalsTouched,
+    auditCount,
+  ] = canDelete
+    ? await Promise.all([
+        prisma.timesheetEntry.count({ where: { personId: person.id } }),
+        prisma.timesheetEntry.count({ where: { approvedById: person.id } }),
+        prisma.expense.count({ where: { personId: person.id } }),
+        prisma.expense.count({ where: { approvedById: person.id } }),
+        prisma.projectTeam.count({ where: { personId: person.id } }),
+        prisma.client.count({ where: { primaryPartnerId: person.id } }),
+        prisma.project.count({
+          where: { OR: [{ primaryPartnerId: person.id }, { managerId: person.id }] },
+        }),
+        prisma.deal.count({ where: { ownerId: person.id } }),
+        prisma.approval.count({
+          where: { OR: [{ requestedById: person.id }, { decidedById: person.id }] },
+        }),
+        prisma.auditEvent.count({ where: { actorId: person.id } }),
+      ])
+    : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+  const deleteBlockers: string[] = [];
+  if (tsMine || tsApproved) {
+    const n = tsMine + tsApproved;
+    deleteBlockers.push(`${n} timesheet ${n === 1 ? 'entry' : 'entries'}`);
+  }
+  if (expMine || expApproved) {
+    const n = expMine + expApproved;
+    deleteBlockers.push(`${n} expense${n === 1 ? '' : 's'}`);
+  }
+  if (teamCount) deleteBlockers.push(`${teamCount} team membership${teamCount === 1 ? '' : 's'}`);
+  if (clientsLed) deleteBlockers.push(`${clientsLed} client${clientsLed === 1 ? '' : 's'} (primary partner)`);
+  if (projectsOwned) deleteBlockers.push(`${projectsOwned} project${projectsOwned === 1 ? '' : 's'} (owner)`);
+  if (dealsOwned) deleteBlockers.push(`${dealsOwned} deal${dealsOwned === 1 ? '' : 's'}`);
+  if (approvalsTouched) deleteBlockers.push(`${approvalsTouched} approval${approvalsTouched === 1 ? '' : 's'}`);
+  if (auditCount) deleteBlockers.push(`${auditCount} audit event${auditCount === 1 ? '' : 's'}`);
 
   return (
     <div className="space-y-6">
@@ -87,6 +134,8 @@ export default async function PersonDetailPage({
                 personEmail={person.email}
                 personName={`${person.firstName} ${person.lastName}`}
                 isSelf={person.id === session.person.id}
+                canDelete={canDelete && person.id !== session.person.id}
+                deleteBlockers={deleteBlockers}
               />
             ) : (
               <ReactivatePersonButton personId={person.id} />

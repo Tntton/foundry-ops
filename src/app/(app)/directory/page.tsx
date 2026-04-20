@@ -35,6 +35,7 @@ export default async function DirectoryPage({
     region?: string;
     employment?: string;
     active?: string;
+    deleted?: string;
   };
 }) {
   const session = await getSession();
@@ -67,8 +68,15 @@ export default async function DirectoryPage({
       ? await listPeople({ search: q, band, region, employment, active })
       : [];
 
+  const deletedFlag = searchParams.deleted === '1';
+
   return (
     <div className="space-y-6">
+      {deletedFlag && (
+        <div className="rounded-md border border-status-green bg-status-green-soft px-3 py-2 text-sm text-status-green">
+          Person deleted.
+        </div>
+      )}
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-ink">Directory</h1>
