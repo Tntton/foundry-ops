@@ -291,15 +291,16 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 ## Phase 1B — Project lifecycle
 
 ### TASK-030 — New Project wizard (core fields)
-**status:** todo
+**status:** doing
 **depends on:** TASK-024
 **acceptance:**
-- [ ] Sidebar: Basics → Team → Milestones → Review
-- [ ] Basics: code (unique), client, name, description, contract value, start, end, primary partner, manager
-- [ ] Team: add people with role_on_project + allocation_pct
-- [ ] Milestones: label, due, amount, status
-- [ ] Creates `Project` + commits all in one transaction
-- [ ] Permission: Admin+ or Partner (creating own)
+- [ ] ~~Stepped sidebar wizard~~ — shipped as single-form with three `<section>` groups (Basics / Commercials / Team). Stepped sidebar deferred to TASK-030b when real wizard UX is needed — works fine as a single form for MVP.
+- [x] Basics: code (unique, `/^[A-Z][A-Z0-9]{2,9}$/`), client (select), name, description
+- [x] Commercials: contract value (AUD dollars, stored as cents), start, end (end > start enforced by Zod refine)
+- [x] Team leadership: primary partner (partner-band persons only), project manager (any active person)
+- [ ] Team allocations + milestones at create — **deferred to TASK-035/TASK-036**; empty state on detail page points to those tasks
+- [x] Creates `Project` + audit event in `prisma.$transaction`
+- [x] Permission: `project.create` (super_admin, admin, partner)
 
 ### TASK-031 — Project SharePoint folder provision
 **status:** todo
@@ -319,13 +320,14 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Reuses category "Projects" — creates the value, not the category
 
 ### TASK-033 — Projects list
-**status:** todo
+**status:** doing
 **depends on:** TASK-030
 **acceptance:**
-- [ ] `/projects` list: code, client, name, stage, primary partner, manager, contract value, actual spend, margin
-- [ ] Filters: stage, partner, client, active/archived
-- [ ] Role-scoped: Manager sees projects where they're manager; Staff sees projects they're on
-- [ ] Empty / loading / error states
+- [x] `/projects` list: code, name, client (linked), stage (badge colour by stage), primary partner, manager, contract value
+- [ ] Actual spend / margin columns — **deferred**; need timesheet cost aggregation (TASK-040 onward) + expense totals (TASK-042). Currently only contract value surfaces.
+- [x] Filters: stage, active/archived. Client + partner filters deferred until the directory surfaces them meaningfully at scale.
+- [x] Role-scoped via `listProjects(session, …)`: super_admin/admin/partner see all; manager sees where `managerId === self`; staff sees `team.some(personId === self)`; scope filter also applied on detail page (`/projects/[code]`) — non-owners get 404.
+- [x] Empty state with CTA; loading via Next suspense; error via Next error boundary.
 
 ### TASK-034 — Project detail: Brief tab
 **status:** todo
