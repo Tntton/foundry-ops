@@ -31,15 +31,25 @@ const STATUS_VARIANT: Record<string, 'outline' | 'amber' | 'green' | 'blue' | 'r
   paid: 'green',
 };
 
-export default async function BillsPage() {
+export default async function BillsPage({
+  searchParams,
+}: {
+  searchParams: { deleted?: string };
+}) {
   const session = await getSession();
   if (!session) notFound();
 
   const rows = await listBills(session);
   const canCreate = hasCapability(session, 'bill.create');
+  const deletedFlag = searchParams.deleted === '1';
 
   return (
     <div className="space-y-6">
+      {deletedFlag && (
+        <div className="rounded-md border border-status-green bg-status-green-soft px-3 py-2 text-sm text-status-green">
+          Bill deleted.
+        </div>
+      )}
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-ink">Bills</h1>

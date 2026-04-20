@@ -22,6 +22,7 @@ export type Capability =
   | 'expense.submit'
   | 'bill.approve'
   | 'bill.create'
+  | 'bill.delete_draft'
   | 'payrun.approve'
   | 'payrun.create'
   | 'project.create'
@@ -60,6 +61,9 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   // Bills (AP)
   'bill.approve': ['super_admin'],
   'bill.create': ['super_admin', 'admin'],
+  // Only pre-approval bills can be deleted. Approved/scheduled/paid bills are
+  // either in Xero or attached to a pay-run — void there, not here.
+  'bill.delete_draft': ['super_admin', 'admin'],
 
   // Pay run
   'payrun.approve': ['super_admin'],

@@ -3,9 +3,11 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { prisma } from '@/server/db';
 import { hasAnyRole } from '@/server/roles';
+import { hasCapability } from '@/server/capabilities';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { XeroPushBillButton } from './xero-push-button';
+import { DeleteDraftBillButton } from './delete-button';
 
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
@@ -38,6 +40,8 @@ export default async function BillDetailPage({ params }: { params: { id: string 
   const canPushToXero = hasAnyRole(session, ['super_admin']);
   const isPushable =
     bill.status === 'approved' || bill.status === 'scheduled_for_payment' || bill.status === 'paid';
+  const canDeleteDraft =
+    hasCapability(session, 'bill.delete_draft') && bill.status === 'pending_review';
 
   return (
     <div className="space-y-6">
@@ -61,12 +65,20 @@ export default async function BillDetailPage({ params }: { params: { id: string 
             </p>
           )}
         </div>
-        <div className="text-right text-sm">
-          <div className="text-ink-3">Amount due</div>
-          <div className="text-2xl font-semibold tabular-nums text-ink">
-            {formatMoney(bill.amountTotal)}
+        <div className="flex flex-col items-end gap-2 text-sm">
+          <div className="text-right">
+            <div className="text-ink-3">Amount due</div>
+            <div className="text-2xl font-semibold tabular-nums text-ink">
+              {formatMoney(bill.amountTotal)}
+            </div>
+            <div className="text-xs text-ink-3">incl. {formatMoney(bill.gst)} GST</div>
           </div>
-          <div className="text-xs text-ink-3">incl. {formatMoney(bill.gst)} GST</div>
+          {canDeleteDraft && (
+            <DeleteDraftBillButton
+              billId={bill.id}
+              supplierName={bill.supplierName ?? 'supplier'}
+            />
+          )}
         </div>
       </header>
 
