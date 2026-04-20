@@ -7,13 +7,31 @@ const TOKEN_URL = 'https://identity.xero.com/connect/token';
 const REVOCATION_URL = 'https://identity.xero.com/connect/revocation';
 const CONNECTIONS_URL = 'https://api.xero.com/connections';
 
-// Absolute minimum scope set while debugging. No OIDC scopes. Add them back
-// once the baseline works.
-const SCOPES = ['offline_access', 'accounting.transactions'];
+// Foundry's Xero app was created after 2 March 2026, so it only has the new
+// granular scope model — the legacy accounting.transactions scope now throws
+// "unauthorized_client Invalid scope for client". The replacement granular
+// scopes for what we use:
+//   accounting.invoices       — invoices + credit notes + POs + quotes + items
+//   accounting.banktransactions — bank transactions + transfers (bank-feed pull)
+// accounting.contacts and accounting.settings are unchanged under the new model.
+// See https://developer.xero.com/faq/granular-scopes
+const SCOPES = [
+  'openid',
+  'profile',
+  'email',
+  'offline_access',
+  'accounting.contacts',
+  'accounting.settings',
+  'accounting.invoices',
+  'accounting.banktransactions',
+];
 
 export type XeroTokens = {
   accessToken: string;
-  refreshToken: string;
+  /** Custom Connections have no refresh token — we re-authenticate via
+   * client_credentials when the access token expires. Kept optional on the
+   * type so a Web-App future can reuse it. */
+  refreshToken?: string;
   /** Milliseconds since epoch when the access token expires */
   expiresAt: number;
   scopes: string[];
@@ -61,12 +79,15 @@ function basicAuthHeader(): string {
 
 type RawTokenResponse = {
   access_token: string;
-  refresh_token: string;
+  refresh_token?: string;
   expires_in: number;
-  scope: string;
+  scope?: string;
   token_type: string;
 };
 
+/**
+ * Exchange the OAuth authorization code for tokens (Web App flow).
+ */
 export async function exchangeCodeForTokens(
   code: string,
   redirectUri: string,
@@ -106,8 +127,7 @@ export async function refreshTokens(refreshToken: string): Promise<XeroTokens> {
     body,
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Xero token refresh failed: ${res.status} ${text}`);
+    throw new Error(`Xero refresh_token failed: ${res.status} ${await res.text()}`);
   }
   const json = (await res.json()) as RawTokenResponse;
   return rawToTokens(json);
@@ -116,10 +136,10 @@ export async function refreshTokens(refreshToken: string): Promise<XeroTokens> {
 function rawToTokens(json: RawTokenResponse): XeroTokens {
   return {
     accessToken: json.access_token,
-    refreshToken: json.refresh_token,
+    ...(json.refresh_token ? { refreshToken: json.refresh_token } : {}),
     // Refresh 60s early to avoid window races.
     expiresAt: Date.now() + Math.max(60, json.expires_in - 60) * 1000,
-    scopes: json.scope.split(' '),
+    scopes: (json.scope ?? SCOPES.join(' ')).split(' '),
   };
 }
 
@@ -220,6 +240,9 @@ export async function getActiveAccessToken(): Promise<string | null> {
   if (!cfg.tokens) return null;
   let tokens = decryptJson<XeroTokens>(cfg.tokens);
   if (tokens.expiresAt <= Date.now()) {
+    if (!tokens.refreshToken) {
+      throw new Error('Xero tokens expired and no refresh token is available — reconnect.');
+    }
     const refreshed = await refreshTokens(tokens.refreshToken);
     tokens = refreshed;
     await prisma.integration.update({

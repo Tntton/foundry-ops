@@ -30,11 +30,14 @@ export async function POST(req: Request) {
   }
 
   // Best-effort revoke on Xero's side before we clear local state.
+  // Custom Connections don't have refresh tokens; Web App flow does.
   const cfg = existing.config as XeroConfig;
   if (cfg.tokens) {
     try {
       const tokens = decryptJson<XeroTokens>(cfg.tokens);
-      await revokeRefreshToken(tokens.refreshToken);
+      if (tokens.refreshToken) {
+        await revokeRefreshToken(tokens.refreshToken);
+      }
     } catch (err) {
       console.error('[xero/disconnect] revoke failed:', err);
     }

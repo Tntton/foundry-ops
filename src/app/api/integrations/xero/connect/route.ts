@@ -6,7 +6,6 @@ import { requireCapability } from '@/server/capabilities';
 import { buildAuthorizeUrl, defaultRedirectUri, xeroConfigured } from '@/server/integrations/xero';
 
 export const runtime = 'nodejs';
-
 const STATE_COOKIE = 'xero.oauth.state';
 
 export async function GET() {
@@ -26,12 +25,10 @@ export async function GET() {
     sameSite: 'lax',
     secure: process.env['NODE_ENV'] === 'production',
     path: '/api/integrations/xero',
-    maxAge: 10 * 60, // 10 minutes — enough for the OAuth round trip
+    maxAge: 10 * 60,
   });
 
   const url = buildAuthorizeUrl(state, defaultRedirectUri());
-  // Log the URL so we can see exactly what's sent to Xero while debugging
-  // scope / redirect-URI issues. Remove once connect works reliably.
   console.log('[xero/connect] redirecting to:', url);
   return NextResponse.redirect(url);
 }
