@@ -33,9 +33,13 @@ export function NewProjectForm({
         </div>
       )}
 
+      <p className="text-xs text-ink-3">
+        Fields marked with <span className="text-status-red">*</span> are required.
+      </p>
+
       <Section title="Basics">
         <FieldRow>
-          <Field label="Code" hint="e.g. IFM001, NIB042" error={errs['code']}>
+          <Field label="Code" hint="e.g. IFM001, NIB042" error={errs['code']} required>
             <Input
               name="code"
               required
@@ -44,7 +48,7 @@ export function NewProjectForm({
               className="max-w-[200px] font-mono uppercase"
             />
           </Field>
-          <Field label="Client" error={errs['clientId']}>
+          <Field label="Client" error={errs['clientId']} required>
             <Select name="clientId" required>
               <option value="">— Choose client —</option>
               {clients.map((c) => (
@@ -55,7 +59,7 @@ export function NewProjectForm({
             </Select>
           </Field>
         </FieldRow>
-        <Field label="Name" error={errs['name']}>
+        <Field label="Name" error={errs['name']} required>
           <Input name="name" required placeholder="Market landscape diligence" />
         </Field>
         <Field label="Description" error={errs['description']} hint="Optional">
@@ -70,7 +74,7 @@ export function NewProjectForm({
 
       <Section title="Commercials">
         <FieldRow>
-          <Field label="Contract value (AUD, ex GST)" error={errs['contractValueDollars']}>
+          <Field label="Contract value (AUD, ex GST)" error={errs['contractValueDollars']} required>
             <Input
               name="contractValueDollars"
               type="number"
@@ -82,10 +86,10 @@ export function NewProjectForm({
               className="max-w-[200px]"
             />
           </Field>
-          <Field label="Start date" error={errs['startDate']}>
+          <Field label="Start date" error={errs['startDate']} required>
             <Input name="startDate" type="date" required defaultValue={today} />
           </Field>
-          <Field label="End date" error={errs['endDate']}>
+          <Field label="End date" error={errs['endDate']} required>
             <Input name="endDate" type="date" required defaultValue={inOneYear} />
           </Field>
         </FieldRow>
@@ -93,7 +97,7 @@ export function NewProjectForm({
 
       <Section title="Team">
         <FieldRow>
-          <Field label="Primary partner" error={errs['primaryPartnerId']}>
+          <Field label="Primary partner" error={errs['primaryPartnerId']} required>
             <Select name="primaryPartnerId" required>
               <option value="">— Choose partner —</option>
               {partners.map((p) => (
@@ -103,7 +107,7 @@ export function NewProjectForm({
               ))}
             </Select>
           </Field>
-          <Field label="Project manager" error={errs['managerId']}>
+          <Field label="Project manager" error={errs['managerId']} required>
             <Select name="managerId" required>
               <option value="">— Choose manager —</option>
               {managers.map((p) => (
@@ -156,17 +160,20 @@ function Field({
   label,
   hint,
   error,
+  required,
   children,
 }: {
   label: string;
   hint?: string;
   error?: string;
+  required?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1">
       <label className="block text-xs font-medium text-ink-3">
         {label}
+        {required && <span className="ml-1 text-status-red">*</span>}
         {hint && <span className="ml-2 text-ink-4">· {hint}</span>}
       </label>
       {children}

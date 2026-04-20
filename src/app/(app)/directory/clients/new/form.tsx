@@ -28,9 +28,13 @@ export function NewClientForm({ partners }: { partners: PartnerOption[] }) {
         </div>
       )}
 
+      <p className="text-xs text-ink-3">
+        Fields marked with <span className="text-status-red">*</span> are required.
+      </p>
+
       <Section title="Identity">
         <FieldRow>
-          <Field label="Code" error={errs['code']} hint="Short uppercase ID, e.g. IFM, NIB, CHM">
+          <Field label="Code" error={errs['code']} hint="Short uppercase ID, e.g. IFM, NIB, CHM" required>
             <Input
               name="code"
               required
@@ -38,7 +42,7 @@ export function NewClientForm({ partners }: { partners: PartnerOption[] }) {
               className="font-mono uppercase max-w-[200px]"
             />
           </Field>
-          <Field label="Legal name" error={errs['legalName']}>
+          <Field label="Legal name" error={errs['legalName']} required>
             <Input name="legalName" required />
           </Field>
         </FieldRow>
@@ -64,9 +68,10 @@ export function NewClientForm({ partners }: { partners: PartnerOption[] }) {
           <Field label="Billing email" error={errs['billingEmail']}>
             <Input name="billingEmail" type="email" placeholder="ap@…" />
           </Field>
-          <Field label="Payment terms" error={errs['paymentTerms']}>
+          <Field label="Payment terms" error={errs['paymentTerms']} required>
             <select
               name="paymentTerms"
+              required
               defaultValue="net-30"
               className="flex h-9 w-full rounded-md border border-line bg-surface-elev px-2 text-sm text-ink shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
             >
@@ -81,7 +86,7 @@ export function NewClientForm({ partners }: { partners: PartnerOption[] }) {
       </Section>
 
       <Section title="Relationship">
-        <Field label="Primary partner" error={errs['primaryPartnerId']}>
+        <Field label="Primary partner" error={errs['primaryPartnerId']} required>
           <select
             name="primaryPartnerId"
             required
@@ -133,17 +138,20 @@ function Field({
   label,
   hint,
   error,
+  required,
   children,
 }: {
   label: string;
   hint?: string;
   error?: string;
+  required?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1">
       <label className="block text-xs font-medium text-ink-3">
         {label}
+        {required && <span className="ml-1 text-status-red">*</span>}
         {hint && <span className="ml-2 text-ink-4">· {hint}</span>}
       </label>
       {children}

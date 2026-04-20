@@ -35,12 +35,16 @@ export function NewExpenseForm({ projects }: { projects: ProjectOpt[] }) {
         </div>
       )}
 
+      <p className="text-xs text-ink-3">
+        Fields marked with <span className="text-status-red">*</span> are required.
+      </p>
+
       <Section title="Details">
         <FieldRow>
-          <Field label="Date" error={errs['date']}>
+          <Field label="Date" error={errs['date']} required>
             <Input name="date" type="date" required defaultValue={today} />
           </Field>
-          <Field label="Category" error={errs['category']}>
+          <Field label="Category" error={errs['category']} required>
             <Select name="category" required defaultValue="travel">
               {CATEGORIES.map((c) => (
                 <option key={c.v} value={c.v}>
@@ -64,7 +68,7 @@ export function NewExpenseForm({ projects }: { projects: ProjectOpt[] }) {
 
       <Section title="Amount">
         <FieldRow>
-          <Field label="Total (AUD, inc GST)" error={errs['amountDollars']}>
+          <Field label="Total (AUD, inc GST)" error={errs['amountDollars']} required>
             <Input
               name="amountDollars"
               type="number"
@@ -80,6 +84,7 @@ export function NewExpenseForm({ projects }: { projects: ProjectOpt[] }) {
             label="GST (AUD)"
             error={errs['gstDollars']}
             hint="Auto-calc = total ÷ 11; override if needed"
+            required
           >
             <Input
               name="gstDollars"
@@ -152,17 +157,20 @@ function Field({
   label,
   hint,
   error,
+  required,
   children,
 }: {
   label: string;
   hint?: string;
   error?: string;
+  required?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1">
       <label className="block text-xs font-medium text-ink-3">
         {label}
+        {required && <span className="ml-1 text-status-red">*</span>}
         {hint && <span className="ml-2 text-ink-4">· {hint}</span>}
       </label>
       {children}

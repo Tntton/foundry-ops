@@ -40,9 +40,13 @@ export function NewBillForm({
         </div>
       )}
 
+      <p className="text-xs text-ink-3">
+        Fields marked with <span className="text-status-red">*</span> are required.
+      </p>
+
       <Section title="Supplier">
         <FieldRow>
-          <Field label="Supplier name">
+          <Field label="Supplier name" required>
             <Input name="supplierName" required placeholder="Vercel Inc., Linear B.V., …" />
           </Field>
           <Field
@@ -69,13 +73,13 @@ export function NewBillForm({
 
       <Section title="Amount + classification">
         <FieldRow>
-          <Field label="Issue date">
+          <Field label="Issue date" required>
             <Input name="issueDate" type="date" required defaultValue={today} />
           </Field>
-          <Field label="Due date">
+          <Field label="Due date" required>
             <Input name="dueDate" type="date" required defaultValue={in30} />
           </Field>
-          <Field label="Category">
+          <Field label="Category" required>
             <select
               name="category"
               required
@@ -91,7 +95,7 @@ export function NewBillForm({
           </Field>
         </FieldRow>
         <FieldRow>
-          <Field label="Total (AUD, inc GST)">
+          <Field label="Total (AUD, inc GST)" required>
             <Input
               name="amountDollars"
               type="number"
@@ -103,7 +107,7 @@ export function NewBillForm({
               className="max-w-[200px]"
             />
           </Field>
-          <Field label="GST (auto ÷ 11, overridable)">
+          <Field label="GST (auto ÷ 11, overridable)" required>
             <Input
               name="gstDollars"
               type="number"
@@ -189,16 +193,19 @@ function FieldRow({ children }: { children: React.ReactNode }) {
 function Field({
   label,
   hint,
+  required,
   children,
 }: {
   label: string;
   hint?: string;
+  required?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1">
       <label className="block text-xs font-medium text-ink-3">
         {label}
+        {required && <span className="ml-1 text-status-red">*</span>}
         {hint && <span className="ml-2 text-ink-4">· {hint}</span>}
       </label>
       {children}

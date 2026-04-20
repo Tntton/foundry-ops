@@ -59,7 +59,14 @@ export function NewInvoiceForm({
         </div>
       )}
 
+      <p className="text-xs text-ink-3">
+        Fields marked with <span className="text-status-red">*</span> are required.
+      </p>
+
       <Section title="Project">
+        <label className="block text-xs font-medium text-ink-3">
+          Project<span className="ml-1 text-status-red">*</span>
+        </label>
         <select
           name="projectId"
           required
@@ -79,17 +86,25 @@ export function NewInvoiceForm({
       <Section title="Dates">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <div className="space-y-1">
-            <label className="block text-xs font-medium text-ink-3">Issue date</label>
+            <label className="block text-xs font-medium text-ink-3">
+              Issue date<span className="ml-1 text-status-red">*</span>
+            </label>
             <Input name="issueDate" type="date" required defaultValue={today} />
           </div>
           <div className="space-y-1">
-            <label className="block text-xs font-medium text-ink-3">Due date (defaults to +30 days)</label>
+            <label className="block text-xs font-medium text-ink-3">
+              Due date<span className="ml-1 text-status-red">*</span>
+              <span className="ml-2 text-ink-4">· defaults to +30 days</span>
+            </label>
             <Input name="dueDate" type="date" required defaultValue={in30} />
           </div>
         </div>
       </Section>
 
       <Section title="Line items">
+        <p className="text-xs text-ink-3">
+          At least one line item<span className="ml-1 text-status-red">*</span> with label and amount.
+        </p>
         <div className="space-y-2">
           {lines.map((l, i) => (
             <div key={i} className="flex items-center gap-2">
@@ -99,6 +114,7 @@ export function NewInvoiceForm({
                 onChange={(e) => updateLine(i, { label: e.target.value })}
                 placeholder="Milestone 1 — Kickoff"
                 className="flex-1"
+                required
               />
               <Input
                 name="lineAmount"
@@ -108,6 +124,7 @@ export function NewInvoiceForm({
                 value={l.amountDollars}
                 onChange={(e) => updateLine(i, { amountDollars: e.target.value })}
                 className="w-40 text-right"
+                required
               />
               <Button type="button" variant="ghost" size="sm" onClick={() => removeLine(i)}>
                 ✕
