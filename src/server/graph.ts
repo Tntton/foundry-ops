@@ -56,16 +56,7 @@ export async function graph<T>(
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const token = await getAppToken();
-  const url = path.startsWith('http') ? path : `https://graph.microsoft.com/v1.0${path}`;
-  const res = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const res = await graphRaw(method, path, body);
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   let data: unknown;
@@ -76,6 +67,28 @@ export async function graph<T>(
   }
   if (!res.ok) throw new GraphError(res.status, data);
   return data as T;
+}
+
+/**
+ * Variant that returns the raw Response so callers can read headers (e.g.
+ * the Location header returned by /copy for async monitoring). Does NOT throw
+ * on non-2xx — the caller decides.
+ */
+export async function graphRaw(
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+  path: string,
+  body?: unknown,
+): Promise<Response> {
+  const token = await getAppToken();
+  const url = path.startsWith('http') ? path : `https://graph.microsoft.com/v1.0${path}`;
+  return fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
 }
 
 /**
