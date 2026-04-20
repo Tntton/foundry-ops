@@ -134,13 +134,25 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
 
         <TabsContent value="team">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Team ({project.team.length})</CardTitle>
+              <Link
+                href={`/projects/${project.code}/team/edit`}
+                className="text-sm text-brand hover:underline"
+              >
+                Manage →
+              </Link>
             </CardHeader>
             <CardContent>
               {project.team.length === 0 ? (
                 <p className="text-sm text-ink-3">
-                  No team yet. Add members via TASK-035 (pending).
+                  No team yet.{' '}
+                  <Link
+                    href={`/projects/${project.code}/team/edit`}
+                    className="text-brand hover:underline"
+                  >
+                    Add members →
+                  </Link>
                 </p>
               ) : (
                 <ul className="space-y-2 text-sm">
@@ -166,13 +178,25 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
 
         <TabsContent value="milestones">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Milestones ({project.milestones.length})</CardTitle>
+              <Link
+                href={`/projects/${project.code}/milestones`}
+                className="text-sm text-brand hover:underline"
+              >
+                Manage →
+              </Link>
             </CardHeader>
             <CardContent>
               {project.milestones.length === 0 ? (
                 <p className="text-sm text-ink-3">
-                  No milestones yet. Add via TASK-036 (pending).
+                  No milestones yet.{' '}
+                  <Link
+                    href={`/projects/${project.code}/milestones`}
+                    className="text-brand hover:underline"
+                  >
+                    Add one →
+                  </Link>
                 </p>
               ) : (
                 <ul className="space-y-2 text-sm">
