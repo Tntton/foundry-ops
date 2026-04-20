@@ -420,22 +420,24 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Approved → reimbursement pay-run batching — **deferred to TASK-100 (ABA generator)**
 
 ### TASK-044 — Invoice: draft (manual)
-**status:** todo
+**status:** doing
 **depends on:** TASK-036, TASK-041
 **acceptance:**
-- [ ] `/invoices/new` against a project
-- [ ] Line items: milestone or T&M (pulls approved timesheet entries at bill rate)
-- [ ] Auto-calculates GST + total
-- [ ] Save as draft; submit for approval
+- [x] `/invoices/new?projectId=…` single-form with dynamic line items (label + AUD amount rows), live 10% GST + total
+- [ ] Milestone / T&M auto-fill — **deferred to TASK-094** (Invoice Drafter agent); manual lines only for MVP
+- [x] Auto-calculates GST + total
+- [x] Save as draft (status `draft`) or Save + submit (status `pending_approval` + Approval row via `resolveRequiredRole('invoice', total)`)
+- [x] Auto invoice-number `<ProjectCode>-INV-<NN>` per project (max seq + 1)
+- [x] `/invoices` list + `/invoices/[id]` detail, role-scoped
 
 ### TASK-045 — Invoice: approval + send
-**status:** todo
+**status:** doing
 **depends on:** TASK-044
 **acceptance:**
-- [ ] Approval routing: ≤$20k → owning Partner or Admin; >$20k → Super Admin
-- [ ] Approve → push to Xero as draft
-- [ ] Send button available after approve — sends via Xero
-- [ ] Status webhook from Xero updates paid_at + payment_received_amount
+- [x] Approval routing via DB policy → defaults (>$20k super_admin; ≤$20k partner) with override via TASK-049 admin UI
+- [x] Approve in `/approvals` queue → Invoice status flips to `approved` (audit event in same tx)
+- [ ] Push to Xero as draft — **blocked on TASK-050 (Xero OAuth)**
+- [ ] Send button + Xero status webhook — **blocked on TASK-050/053**
 
 ### TASK-046 — Bill (AP): upload + draft
 **status:** todo
