@@ -99,7 +99,14 @@ export default async function SuppliersPage() {
             <TableBody>
               {rows.map((s) => (
                 <TableRow key={s.name}>
-                  <TableCell className="font-medium text-ink">{s.name}</TableCell>
+                  <TableCell className="font-medium text-ink">
+                    <Link
+                      href={`/directory/suppliers/${encodeURIComponent(s.name)}`}
+                      className="hover:underline"
+                    >
+                      {s.name}
+                    </Link>
+                  </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
                       {s.categories.map((c) => (
