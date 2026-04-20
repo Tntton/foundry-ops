@@ -7,6 +7,8 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
+import { getXeroIntegration } from '@/server/integrations/xero';
+import { syncClientToXero } from '@/server/integrations/xero-contacts';
 
 const PAYMENT_TERMS = ['net-14', 'net-30', 'net-45'] as const;
 
@@ -117,6 +119,17 @@ export async function createClient(
   } catch (err) {
     console.error('[client.create] failed:', err);
     return { status: 'error', message: 'Create failed — try again.' };
+  }
+
+  // Best-effort Xero contact sync. If Xero isn't connected or the push fails,
+  // the client record stays in place; retry via the detail page button.
+  const xeroRow = await getXeroIntegration();
+  if (xeroRow?.status === 'connected') {
+    try {
+      await syncClientToXero(newId);
+    } catch (err) {
+      console.error('[client.create] Xero sync failed:', err);
+    }
   }
 
   revalidatePath('/directory/clients');

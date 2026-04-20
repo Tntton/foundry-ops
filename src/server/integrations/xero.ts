@@ -242,3 +242,63 @@ export async function getActiveAccessToken(): Promise<string | null> {
   }
   return tokens.accessToken;
 }
+
+/**
+ * Return the default Xero tenant (first tenant the user connected). For MVP
+ * we assume Foundry has exactly one Xero org. Multi-tenant picker lands if /
+ * when Foundry operates across multiple Xero entities.
+ */
+export async function getDefaultTenantId(): Promise<string | null> {
+  const row = await getXeroIntegration();
+  if (!row || row.status !== 'connected') return null;
+  const cfg = row.config as XeroConfig;
+  return cfg.tenants[0]?.tenantId ?? null;
+}
+
+export class XeroApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly body: unknown,
+  ) {
+    super(`Xero ${status}: ${typeof body === 'string' ? body : JSON.stringify(body)}`);
+    this.name = 'XeroApiError';
+  }
+}
+
+/**
+ * Authenticated Xero API call. Auto-refreshes tokens, injects the tenant
+ * header, parses JSON. Throws XeroApiError on 4xx/5xx so callers can inspect
+ * the status.
+ */
+export async function xeroRequest<T>(
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const accessToken = await getActiveAccessToken();
+  if (!accessToken) throw new Error('Xero not connected');
+  const tenantId = await getDefaultTenantId();
+  if (!tenantId) throw new Error('Xero connected but no tenant selected');
+
+  const url = path.startsWith('http') ? path : `https://api.xero.com${path}`;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Xero-tenant-id': tenantId,
+      Accept: 'application/json',
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  let data: unknown;
+  try {
+    data = text ? JSON.parse(text) : undefined;
+  } catch {
+    data = text;
+  }
+  if (!res.ok) throw new XeroApiError(res.status, data);
+  return data as T;
+}

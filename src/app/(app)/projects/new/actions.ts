@@ -8,6 +8,8 @@ import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
 import { provisionProjectFolder } from '@/server/integrations/sharepoint';
+import { getXeroIntegration } from '@/server/integrations/xero';
+import { ensureProjectTrackingOption } from '@/server/integrations/xero-projects';
 
 const ProjectCreate = z
   .object({
@@ -148,6 +150,17 @@ export async function createProject(
     }
   } catch (err) {
     console.error('[project.create] SharePoint provisioning failed:', err);
+  }
+
+  // Xero tracking-category option — best-effort; retry button on the project
+  // detail page if Xero isn't connected yet or the API is flaky.
+  try {
+    const xeroRow = await getXeroIntegration();
+    if (xeroRow?.status === 'connected') {
+      await ensureProjectTrackingOption(newProjectId);
+    }
+  } catch (err) {
+    console.error('[project.create] Xero tracking-category provisioning failed:', err);
   }
 
   revalidatePath('/projects');

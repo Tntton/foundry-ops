@@ -6,6 +6,7 @@ import { prisma } from '@/server/db';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { XeroSyncClientButton } from './xero-sync-button';
 
 export default async function ClientDetailPage({ params }: { params: { id: string } }) {
   const session = await getSession();
@@ -65,9 +66,15 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
             <Row label="Payment terms">{client.paymentTerms}</Row>
             <Row label="Xero contact">
               {client.xeroContactId ? (
-                <span className="font-mono text-xs">{client.xeroContactId}</span>
+                <div className="flex flex-col gap-1">
+                  <span className="font-mono text-xs">{client.xeroContactId}</span>
+                  <XeroSyncClientButton clientId={client.id} hasContactId={true} />
+                </div>
               ) : (
-                <span className="text-ink-3">Not synced (TASK-051)</span>
+                <div className="flex flex-col gap-1">
+                  <span className="text-ink-3">Not synced</span>
+                  <XeroSyncClientButton clientId={client.id} hasContactId={false} />
+                </div>
               )}
             </Row>
           </CardContent>
