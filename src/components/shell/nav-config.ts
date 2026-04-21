@@ -13,6 +13,7 @@ import {
   CircleDollarSign,
   Sparkles,
   BarChart3,
+  HandCoins,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -64,6 +65,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: 'P&L',
         href: '/pnl',
         icon: BarChart3,
+        roles: ['super_admin', 'admin', 'partner'],
+      },
+      {
+        label: 'AR aging',
+        href: '/ar',
+        icon: HandCoins,
         roles: ['super_admin', 'admin', 'partner'],
       },
       // BD pipeline: phase 2.
