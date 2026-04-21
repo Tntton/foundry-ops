@@ -91,6 +91,8 @@ export type PersonDetail = PersonListRow & {
   xeroContactId: string | null;
   startDate: Date;
   endDate: Date | null;
+  bankBsb: string | null; // encrypted blob — never render; test for presence only
+  bankAcc: string | null;
 };
 
 export async function getPerson(id: string): Promise<PersonDetail | null> {
@@ -116,6 +118,8 @@ export async function getPerson(id: string): Promise<PersonDetail | null> {
       entraUserId: true,
       xeroContactId: true,
       startDate: true,
+      bankBsb: true,
+      bankAcc: true,
     },
   });
   if (!p) return null;
@@ -140,5 +144,7 @@ export async function getPerson(id: string): Promise<PersonDetail | null> {
     endDate: p.endDate,
     active: p.endDate === null,
     roles: p.roles,
+    bankBsb: p.bankBsb,
+    bankAcc: p.bankAcc,
   };
 }

@@ -608,18 +608,50 @@ export default async function PersonDetailPage({
 
         <TabsContent value="pay">
           {canSeePay ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Pay</CardTitle>
-                <CardDescription>
-                  Visible to Super Admin / Admin / Partner only.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <Field label="Rate">{formatRateCents(person.rate, person.rateUnit)}</Field>
-                <Field label="Unit">{person.rateUnit === 'hour' ? 'Hourly' : 'Daily'}</Field>
-              </CardContent>
-            </Card>
+            <div className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Pay</CardTitle>
+                  <CardDescription>
+                    Visible to Super Admin / Admin / Partner only.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  <Field label="Rate">{formatRateCents(person.rate, person.rateUnit)}</Field>
+                  <Field label="Unit">{person.rateUnit === 'hour' ? 'Hourly' : 'Daily'}</Field>
+                </CardContent>
+              </Card>
+              {canEdit && (
+                <Card>
+                  <CardHeader className="flex flex-row items-center justify-between gap-2">
+                    <div>
+                      <CardTitle>Bank details</CardTitle>
+                      <CardDescription>
+                        Encrypted. Required before this person can be included on a
+                        contractor pay-run.
+                      </CardDescription>
+                    </div>
+                    <Link
+                      href={`/directory/people/${person.id}/bank`}
+                      className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+                    >
+                      {person.bankBsb || person.bankAcc ? 'Update' : 'Add'}
+                    </Link>
+                  </CardHeader>
+                  <CardContent className="text-sm text-ink-3">
+                    {person.bankBsb && person.bankAcc ? (
+                      <span>BSB + account on file. Values are masked — click Update to change.</span>
+                    ) : person.bankBsb || person.bankAcc ? (
+                      <span className="text-status-amber">
+                        Partial — only one of BSB / account is set. Pay-runs will reject this person until both are in.
+                      </span>
+                    ) : (
+                      <span>Not set.</span>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+            </div>
           ) : (
             <Card>
               <CardContent className="py-8 text-center text-sm text-ink-3">

@@ -8,6 +8,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
+import { decryptText } from '@/server/crypto';
 
 const PayRunCreate = z.object({
   type: z.enum(['payroll', 'super', 'contractor_ap', 'supplier_ap', 'mixed']),
@@ -119,14 +120,25 @@ export async function createPayRun(
       for (const bill of bills) {
         const p = bill.supplierPersonId ? personById.get(bill.supplierPersonId) : null;
         if (!p?.bankBsb || !p?.bankAcc) continue; // already validated above
+        let bsbPlain: string;
+        let accPlain: string;
+        try {
+          bsbPlain = decryptText(p.bankBsb);
+          accPlain = decryptText(p.bankAcc);
+        } catch (err) {
+          console.error('[payrun.create] decrypt failed for personId', bill.supplierPersonId, err);
+          throw new Error(
+            `Could not decrypt bank details for ${p.firstName} ${p.lastName}. Re-enter on their bank details page.`,
+          );
+        }
         await tx.payRunLine.create({
           data: {
             payRunId: payRun.id,
             ...(bill.supplierPersonId ? { personId: bill.supplierPersonId } : {}),
             billId: bill.id,
             amount: bill.amountTotal,
-            bsb: p.bankBsb,
-            acc: p.bankAcc,
+            bsb: bsbPlain,
+            acc: accPlain,
             reference: (bill.supplierInvoiceNumber ?? bill.id).slice(0, 18).toUpperCase(),
           },
         });

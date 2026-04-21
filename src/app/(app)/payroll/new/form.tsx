@@ -178,8 +178,16 @@ export function NewPayRunForm({ bills }: { bills: BillOption[] }) {
                         </Badge>
                       )}
                     </div>
-                    <div className="text-xs text-ink-3">
-                      Due {b.dueDate.toLocaleDateString('en-AU')}
+                    <div className="flex items-center gap-3 text-xs text-ink-3">
+                      <span>Due {b.dueDate.toLocaleDateString('en-AU')}</span>
+                      {!eligible && b.supplierPersonId && (
+                        <a
+                          href={`/directory/people/${b.supplierPersonId}/bank`}
+                          className="text-brand hover:underline"
+                        >
+                          Add bank details →
+                        </a>
+                      )}
                     </div>
                   </div>
                   <div className="text-right font-semibold tabular-nums text-ink">

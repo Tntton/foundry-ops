@@ -48,3 +48,35 @@ export function decryptJson<T>(ciphertext: string): T {
   );
   return JSON.parse(plaintext) as T;
 }
+
+/**
+ * Encrypt / decrypt an opaque string (BSB, account number, TFN, super fund
+ * id). Same AES-GCM envelope as encryptJson, just without the JSON roundtrip.
+ */
+export function encryptText(plaintext: string): string {
+  const iv = randomBytes(IV_LEN);
+  const cipher = createCipheriv(ALG, getKey(), iv);
+  const payload = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, payload]).toString('base64');
+}
+
+export function decryptText(ciphertext: string): string {
+  const buf = Buffer.from(ciphertext, 'base64');
+  const iv = buf.subarray(0, IV_LEN);
+  const tag = buf.subarray(IV_LEN, IV_LEN + TAG_LEN);
+  const payload = buf.subarray(IV_LEN + TAG_LEN);
+  const decipher = createDecipheriv(ALG, getKey(), iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(payload), decipher.final()]).toString('utf8');
+}
+
+/**
+ * Last-4 helper — safe to display when full BSB/acc shouldn't leak. Handles
+ * short inputs gracefully.
+ */
+export function last4(s: string): string {
+  const digits = s.replace(/\D/g, '');
+  if (digits.length <= 4) return digits;
+  return digits.slice(-4);
+}
