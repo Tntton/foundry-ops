@@ -209,3 +209,152 @@ export async function draftInvoiceFromTimesheets(
   });
   return result;
 }
+
+export type DraftableMilestone = {
+  id: string;
+  label: string;
+  dueDate: Date;
+  amountCents: number;
+  status: string;
+};
+
+export type MilestonePreview = {
+  projectId: string;
+  projectCode: string;
+  projectName: string;
+  clientId: string;
+  available: DraftableMilestone[];
+  alreadyInvoiced: DraftableMilestone[];
+};
+
+/**
+ * Preview milestones for a project — splits into available (not yet on an
+ * invoice) and already-invoiced. The UI uses this to render the picker.
+ */
+export async function previewMilestonesForInvoice(
+  projectId: string,
+): Promise<MilestonePreview> {
+  const project = await prisma.project.findUniqueOrThrow({
+    where: { id: projectId },
+    select: { id: true, code: true, name: true, clientId: true },
+  });
+  const milestones = await prisma.milestone.findMany({
+    where: { projectId },
+    orderBy: { dueDate: 'asc' },
+    select: {
+      id: true,
+      label: true,
+      dueDate: true,
+      amount: true,
+      status: true,
+      invoiceId: true,
+    },
+  });
+  const available: DraftableMilestone[] = [];
+  const alreadyInvoiced: DraftableMilestone[] = [];
+  for (const m of milestones) {
+    const row: DraftableMilestone = {
+      id: m.id,
+      label: m.label,
+      dueDate: m.dueDate,
+      amountCents: m.amount,
+      status: m.status,
+    };
+    if (m.invoiceId) alreadyInvoiced.push(row);
+    else available.push(row);
+  }
+  return {
+    projectId: project.id,
+    projectCode: project.code,
+    projectName: project.name,
+    clientId: project.clientId,
+    available,
+    alreadyInvoiced,
+  };
+}
+
+/**
+ * Draft an invoice from a set of milestone ids. Each milestone becomes one
+ * invoice line and gets its invoiceId stamped + status flipped to 'invoiced'.
+ * Invoice number / dates / GST same logic as the timesheet drafter.
+ */
+export async function draftInvoiceFromMilestones(
+  session: Session,
+  projectId: string,
+  milestoneIds: string[],
+): Promise<{ invoiceId: string; invoiceNumber: string }> {
+  if (milestoneIds.length === 0) {
+    throw new Error('Pick at least one milestone.');
+  }
+
+  const project = await prisma.project.findUniqueOrThrow({
+    where: { id: projectId },
+    select: { code: true, clientId: true },
+  });
+
+  const milestones = await prisma.milestone.findMany({
+    where: { id: { in: milestoneIds }, projectId },
+  });
+  if (milestones.length !== milestoneIds.length) {
+    throw new Error('Some milestones are not on this project.');
+  }
+  const alreadyInvoiced = milestones.filter((m) => m.invoiceId !== null);
+  if (alreadyInvoiced.length > 0) {
+    throw new Error(
+      `Already invoiced: ${alreadyInvoiced.map((m) => m.label).join(', ')}. Refresh and try again.`,
+    );
+  }
+
+  const invoiceNumber = await nextInvoiceNumber(project.code);
+  const today = new Date();
+  const dueDate = new Date(Date.now() + 30 * 24 * 3600 * 1000);
+  const amountExGst = milestones.reduce((s, m) => s + m.amount, 0);
+  const gst = Math.round(amountExGst * 0.1);
+  const amountTotal = amountExGst + gst;
+
+  const result = await prisma.$transaction(async (tx) => {
+    const invoice = await tx.invoice.create({
+      data: {
+        number: invoiceNumber,
+        projectId,
+        clientId: project.clientId,
+        issueDate: today,
+        dueDate,
+        amountExGst,
+        gst,
+        amountTotal,
+        status: 'draft',
+      },
+    });
+    for (const m of milestones) {
+      await tx.invoiceLine.create({
+        data: {
+          invoiceId: invoice.id,
+          label: `Milestone: ${m.label}`,
+          amount: m.amount,
+        },
+      });
+      await tx.milestone.update({
+        where: { id: m.id },
+        data: { invoiceId: invoice.id, status: 'invoiced' },
+      });
+    }
+    await writeAudit(tx, {
+      actor: { type: 'person', id: session.person.id },
+      action: 'drafted_from_milestones',
+      entity: {
+        type: 'invoice',
+        id: invoice.id,
+        after: {
+          number: invoice.number,
+          projectId,
+          milestoneIds,
+          amountExGst,
+        },
+      },
+      source: 'web',
+    });
+    return { invoiceId: invoice.id, invoiceNumber: invoice.number };
+  });
+  return result;
+}
