@@ -19,6 +19,13 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
+function buildQs(params: Record<string, string | undefined>): string {
+  const entries = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== '')
+    .map(([k, v]) => `${k}=${encodeURIComponent(v as string)}`);
+  return entries.length ? `?${entries.join('&')}` : '';
+}
+
 function formatMoney(cents: number): string {
   if (cents === 0) return '—';
   return new Intl.NumberFormat('en-AU', {
@@ -84,11 +91,19 @@ export default async function BdPipelinePage({
             Active opportunities across Foundry. Weighted value = expected × probability.
           </p>
         </div>
-        {canCreate && (
-          <Button asChild>
-            <Link href="/bd/new">+ New deal</Link>
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          <a
+            href={`/api/reports/deals${buildQs({ q, stage })}`}
+            className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+          >
+            Download CSV
+          </a>
+          {canCreate && (
+            <Button asChild>
+              <Link href="/bd/new">+ New deal</Link>
+            </Button>
+          )}
+        </div>
       </header>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">

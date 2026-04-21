@@ -17,6 +17,13 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
+function buildQs(params: Record<string, string | undefined>): string {
+  const entries = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== '')
+    .map(([k, v]) => `${k}=${encodeURIComponent(v as string)}`);
+  return entries.length ? `?${entries.join('&')}` : '';
+}
+
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
     style: 'currency',
@@ -79,11 +86,19 @@ export default async function InvoicesPage({
           <h1 className="text-xl font-semibold text-ink">Invoices</h1>
           <p className="text-sm text-ink-3">Drafts, pending approvals, and AR.</p>
         </div>
-        {canCreate && (
-          <Button asChild>
-            <Link href="/invoices/new">+ New invoice</Link>
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          <a
+            href={`/api/reports/invoices${buildQs({ q, status })}`}
+            className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+          >
+            Download CSV
+          </a>
+          {canCreate && (
+            <Button asChild>
+              <Link href="/invoices/new">+ New invoice</Link>
+            </Button>
+          )}
+        </div>
       </header>
 
       <form

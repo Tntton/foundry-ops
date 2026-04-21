@@ -18,6 +18,13 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
+function buildQs(params: Record<string, string | undefined>): string {
+  const entries = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== '')
+    .map(([k, v]) => `${k}=${encodeURIComponent(v as string)}`);
+  return entries.length ? `?${entries.join('&')}` : '';
+}
+
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
     style: 'currency',
@@ -89,11 +96,24 @@ export default async function ExpensesPage({
             {scope === 'all' ? 'All expenses in scope.' : 'Your submitted expenses.'}
           </p>
         </div>
-        {canSubmit && (
-          <Button asChild>
-            <Link href="/expenses/new">+ New expense</Link>
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          <a
+            href={`/api/reports/expenses${buildQs({
+              q,
+              status,
+              category,
+              scope: scope === 'all' ? 'all' : undefined,
+            })}`}
+            className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+          >
+            Download CSV
+          </a>
+          {canSubmit && (
+            <Button asChild>
+              <Link href="/expenses/new">+ New expense</Link>
+            </Button>
+          )}
+        </div>
       </header>
 
       <form
