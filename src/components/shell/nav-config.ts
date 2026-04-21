@@ -17,6 +17,7 @@ import {
   Gauge,
   Wallet,
   TrendingUp,
+  LineChart,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -99,6 +100,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         href: '/ap',
         icon: Wallet,
         roles: ['super_admin', 'admin'],
+      },
+      {
+        label: 'Cash flow',
+        href: '/cashflow',
+        icon: LineChart,
+        roles: ['super_admin', 'admin', 'partner'],
       },
       {
         label: 'Utilisation',
