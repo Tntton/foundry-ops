@@ -20,6 +20,7 @@ import {
   LineChart,
   Banknote,
   ShieldAlert,
+  PieChart,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -125,6 +126,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: 'Utilisation',
         href: '/utilisation',
         icon: Gauge,
+        roles: ['super_admin', 'admin', 'partner'],
+      },
+      {
+        label: 'Client concentration',
+        href: '/concentration',
+        icon: PieChart,
         roles: ['super_admin', 'admin', 'partner'],
       },
     ],

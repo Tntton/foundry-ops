@@ -3,6 +3,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { approvalRoleFilter } from '@/server/roles';
 import { computeBudgetWatch } from '@/server/reports/budget-watch';
+import { computeClientConcentration } from '@/server/reports/client-concentration';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -152,7 +153,10 @@ export default async function DashboardPage() {
     ['super_admin', 'admin', 'partner'].includes(r),
   );
   if (canSeeBudgets) {
-    const budget = await computeBudgetWatch();
+    const [budget, concentration] = await Promise.all([
+      computeBudgetWatch(),
+      computeClientConcentration(),
+    ]);
     if (budget.summary.overBudget > 0) {
       alerts.push({
         label: `${budget.summary.overBudget} project${budget.summary.overBudget === 1 ? '' : 's'} over budget`,
@@ -163,6 +167,13 @@ export default async function DashboardPage() {
       alerts.push({
         label: `${budget.summary.nearBudget} project${budget.summary.nearBudget === 1 ? '' : 's'} ≥ 80% of contract cost`,
         href: '/budget-watch',
+        severity: 'amber',
+      });
+    }
+    if ((concentration.top1Pct ?? 0) > 40) {
+      alerts.push({
+        label: `Top client is ${concentration.top1Pct!.toFixed(0)}% of firm revenue — concentration risk`,
+        href: '/concentration',
         severity: 'amber',
       });
     }
