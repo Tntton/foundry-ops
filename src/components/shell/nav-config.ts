@@ -18,6 +18,7 @@ import {
   Wallet,
   TrendingUp,
   LineChart,
+  Banknote,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -141,6 +142,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: 'Bills',
         href: '/bills',
         icon: CircleDollarSign,
+        roles: ['super_admin', 'admin'],
+      },
+      {
+        label: 'Pay runs',
+        href: '/payroll',
+        icon: Banknote,
         roles: ['super_admin', 'admin'],
       },
     ],
