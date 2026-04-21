@@ -8,6 +8,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ProvisionSharePointButton } from './provision-button';
 import { computeProjectPnL, type ProjectPnL } from '@/server/projects/pnl';
+import {
+  computeProjectTeamUtilisation,
+  type ProjectTeamUtilisation,
+} from '@/server/projects/team-utilisation';
 import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { ArchiveProjectButton, ReactivateProjectButton } from './archive/dialog';
@@ -62,7 +66,12 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
   const canSeePnL =
     hasAnyRole(session, ['super_admin', 'admin', 'partner']) ||
     project.managerId === session.person.id;
-  const pnl = canSeePnL ? await computeProjectPnL(project.id) : null;
+  const [pnl, teamUtil] = await Promise.all([
+    canSeePnL ? computeProjectPnL(project.id) : Promise.resolve(null),
+    canSeePnL
+      ? computeProjectTeamUtilisation(project.id)
+      : Promise.resolve(null),
+  ]);
 
   const canEditProject =
     hasAnyRole(session, ['super_admin', 'admin']) ||
@@ -257,47 +266,46 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
         </TabsContent>
 
         <TabsContent value="team">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Team ({project.team.length})</CardTitle>
-              <Link
-                href={`/projects/${project.code}/team/edit`}
-                className="text-sm text-brand hover:underline"
-              >
-                Manage →
-              </Link>
-            </CardHeader>
-            <CardContent>
-              {project.team.length === 0 ? (
-                <p className="text-sm text-ink-3">
-                  No team yet.{' '}
-                  <Link
-                    href={`/projects/${project.code}/team/edit`}
-                    className="text-brand hover:underline"
-                  >
-                    Add members →
-                  </Link>
-                </p>
-              ) : (
-                <ul className="space-y-2 text-sm">
-                  {project.team.map((t) => (
-                    <li key={t.id} className="flex items-center gap-2">
-                      <Avatar className="h-7 w-7">
-                        <AvatarFallback className="text-[10px]">
-                          {t.person.initials}
-                        </AvatarFallback>
-                      </Avatar>
-                      <span className="font-medium text-ink">
-                        {t.person.firstName} {t.person.lastName}
-                      </span>
-                      <span className="text-ink-3">· {t.roleOnProject}</span>
-                      <span className="text-ink-3">· {t.allocationPct}%</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
+          {teamUtil ? (
+            <ProjectTeamUtilisationView
+              projectCode={project.code}
+              util={teamUtil}
+            />
+          ) : (
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>Team ({project.team.length})</CardTitle>
+                <Link
+                  href={`/projects/${project.code}/team/edit`}
+                  className="text-sm text-brand hover:underline"
+                >
+                  Manage →
+                </Link>
+              </CardHeader>
+              <CardContent>
+                {project.team.length === 0 ? (
+                  <p className="text-sm text-ink-3">No team yet.</p>
+                ) : (
+                  <ul className="space-y-2 text-sm">
+                    {project.team.map((t) => (
+                      <li key={t.id} className="flex items-center gap-2">
+                        <Avatar className="h-7 w-7">
+                          <AvatarFallback className="text-[10px]">
+                            {t.person.initials}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="font-medium text-ink">
+                          {t.person.firstName} {t.person.lastName}
+                        </span>
+                        <span className="text-ink-3">· {t.roleOnProject}</span>
+                        <span className="text-ink-3">· {t.allocationPct}%</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="milestones">
@@ -563,6 +571,207 @@ function ProjectPnLPanel({ pnl }: { pnl: ProjectPnL }) {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function ProjectTeamUtilisationView({
+  projectCode,
+  util,
+}: {
+  projectCode: string;
+  util: ProjectTeamUtilisation;
+}) {
+  const onTeam = util.rows.filter((r) => r.onTeam);
+  const ghosts = util.rows.filter((r) => !r.onTeam);
+  const billablePct =
+    util.totals.billableValueCents > 0
+      ? Math.round(
+          (util.totals.marginCents / util.totals.billableValueCents) * 100,
+        )
+      : null;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Card>
+          <CardHeader className="pb-1">
+            <CardTitle className="text-xs font-medium uppercase tracking-wide text-ink-3">
+              Team size
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-lg font-semibold tabular-nums text-ink">
+              {onTeam.length}
+            </div>
+            <div className="text-[11px] text-ink-3">
+              {ghosts.length > 0
+                ? `${ghosts.length} ghost contributor${ghosts.length === 1 ? '' : 's'}`
+                : 'No unassigned time'}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-1">
+            <CardTitle className="text-xs font-medium uppercase tracking-wide text-ink-3">
+              Hours logged
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-lg font-semibold tabular-nums text-ink">
+              {util.totals.hoursApproved.toFixed(1)}
+            </div>
+            <div className="text-[11px] text-ink-3">
+              {util.totals.hoursBilled.toFixed(1)} billed
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-1">
+            <CardTitle className="text-xs font-medium uppercase tracking-wide text-ink-3">
+              Billable value
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-lg font-semibold tabular-nums text-ink">
+              {formatMoney(util.totals.billableValueCents)}
+            </div>
+            <div className="text-[11px] text-ink-3">hrs × bill rate</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-1">
+            <CardTitle className="text-xs font-medium uppercase tracking-wide text-ink-3">
+              Margin
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div
+              className={`text-lg font-semibold tabular-nums ${
+                util.totals.marginCents < 0 ? 'text-status-red' : 'text-ink'
+              }`}
+            >
+              {formatMoney(util.totals.marginCents)}
+            </div>
+            <div className="text-[11px] text-ink-3">
+              {billablePct === null ? '—' : `${billablePct}% of billable`}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="p-0">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Team utilisation</CardTitle>
+          <Link
+            href={`/projects/${projectCode}/team/edit`}
+            className="text-sm text-brand hover:underline"
+          >
+            Manage →
+          </Link>
+        </CardHeader>
+        {util.rows.length === 0 ? (
+          <CardContent>
+            <p className="text-sm text-ink-3">
+              No team yet.{' '}
+              <Link
+                href={`/projects/${projectCode}/team/edit`}
+                className="text-brand hover:underline"
+              >
+                Add members →
+              </Link>
+            </p>
+          </CardContent>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-line text-[10px] uppercase tracking-wide text-ink-3">
+                <th className="px-4 py-2 text-left">Person</th>
+                <th className="px-4 py-2 text-left">Role</th>
+                <th className="px-4 py-2 text-right">Alloc</th>
+                <th className="px-4 py-2 text-right">Hours</th>
+                <th className="px-4 py-2 text-right">Bill rate</th>
+                <th className="px-4 py-2 text-right">Billable</th>
+                <th className="px-4 py-2 text-right">Margin</th>
+              </tr>
+            </thead>
+            <tbody>
+              {util.rows.map((r) => (
+                <tr
+                  key={r.personId}
+                  className={`border-b border-line last:border-b-0 ${
+                    !r.onTeam ? 'bg-status-amber-soft/30' : ''
+                  }`}
+                >
+                  <td className="px-4 py-2">
+                    <Link
+                      href={`/directory/people/${r.personId}`}
+                      className="flex items-center gap-2 hover:underline"
+                    >
+                      <Avatar className="h-6 w-6">
+                        <AvatarFallback className="text-[10px]">
+                          {r.initials}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="text-ink">
+                        {r.firstName} {r.lastName}
+                      </span>
+                      {!r.onTeam && (
+                        <Badge variant="amber" className="text-[10px]">
+                          Ghost
+                        </Badge>
+                      )}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-2 text-xs text-ink-2">
+                    {r.roleOnProject ?? '—'}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums text-xs text-ink-3">
+                    {r.allocationPct === null ? '—' : `${r.allocationPct}%`}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums text-ink">
+                    {r.hoursApproved.toFixed(1)}
+                    {r.hoursBilled > 0 && (
+                      <span className="ml-1 text-[10px] text-ink-3">
+                        ({r.hoursBilled.toFixed(1)} billed)
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums text-xs text-ink-3">
+                    {r.billableRateCents === null
+                      ? '—'
+                      : formatMoney(r.billableRateCents) + '/h'}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums text-ink">
+                    {formatMoney(r.billableValueCents)}
+                  </td>
+                  <td
+                    className={`px-4 py-2 text-right tabular-nums ${
+                      r.marginCents < 0 ? 'text-status-red' : 'text-ink-2'
+                    }`}
+                  >
+                    {formatMoney(r.marginCents)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      {util.totals.ghostHours > 0 && (
+        <p className="text-xs text-ink-3">
+          <strong>Ghost contributors</strong> have logged time against this project without
+          being on the team roster. Add them via{' '}
+          <Link
+            href={`/projects/${projectCode}/team/edit`}
+            className="text-brand hover:underline"
+          >
+            Manage team
+          </Link>{' '}
+          or challenge the entries on the timesheet approval queue.
+        </p>
+      )}
     </div>
   );
 }
