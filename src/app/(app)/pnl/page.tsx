@@ -46,12 +46,20 @@ export default async function FirmPnLPage() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-xl font-semibold text-ink">Firm P&amp;L</h1>
-        <p className="text-sm text-ink-3">
-          Lifetime revenue vs cost across every project, including archived. Revenue
-          is ex GST; cost uses current Person.rate for timesheets.
-        </p>
+      <header className="flex items-start justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-ink">Firm P&amp;L</h1>
+          <p className="text-sm text-ink-3">
+            Lifetime revenue vs cost across every project, including archived. Revenue
+            is ex GST; cost uses current Person.rate for timesheets.
+          </p>
+        </div>
+        <a
+          href="/api/reports/pnl"
+          className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+        >
+          Download CSV
+        </a>
       </header>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">

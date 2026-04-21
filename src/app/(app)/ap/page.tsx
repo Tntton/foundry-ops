@@ -65,12 +65,20 @@ export default async function ApAgingPage() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-xl font-semibold text-ink">AP aging</h1>
-        <p className="text-sm text-ink-3">
-          Approved and scheduled bills Foundry still owes, bucketed by days past
-          due. Total is inc GST. Paid and pending-review bills are excluded.
-        </p>
+      <header className="flex items-start justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-ink">AP aging</h1>
+          <p className="text-sm text-ink-3">
+            Approved and scheduled bills Foundry still owes, bucketed by days past
+            due. Total is inc GST. Paid and pending-review bills are excluded.
+          </p>
+        </div>
+        <a
+          href="/api/reports/ap"
+          className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+        >
+          Download CSV
+        </a>
       </header>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-6">

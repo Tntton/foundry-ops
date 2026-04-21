@@ -55,13 +55,21 @@ export default async function UtilisationPage({
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-xl font-semibold text-ink">Utilisation</h1>
-        <p className="text-sm text-ink-3">
-          Approved + billed hours vs target (FTE × 160h/month) for{' '}
-          {monthLabel(month)}. Target scales pro-rata for joiners / leavers
-          mid-month.
-        </p>
+      <header className="flex items-start justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-ink">Utilisation</h1>
+          <p className="text-sm text-ink-3">
+            Approved + billed hours vs target (FTE × 160h/month) for{' '}
+            {monthLabel(month)}. Target scales pro-rata for joiners / leavers
+            mid-month.
+          </p>
+        </div>
+        <a
+          href={`/api/reports/utilisation?month=${month}`}
+          className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+        >
+          Download CSV
+        </a>
       </header>
 
       <form
