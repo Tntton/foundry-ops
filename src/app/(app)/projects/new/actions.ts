@@ -80,6 +80,8 @@ export async function createProject(
   }
 
   const contractValue = Math.round(data.contractValueDollars * 100);
+  const fromDealIdRaw = formData.get('fromDealId');
+  const fromDealId = typeof fromDealIdRaw === 'string' && fromDealIdRaw ? fromDealIdRaw : null;
   let newCode: string;
   let newProjectId: string;
   let clientCode: string;
@@ -122,6 +124,37 @@ export async function createProject(
         },
         source: 'web',
       });
+      // If this project came from a deal, link them and stamp the won stage.
+      if (fromDealId) {
+        const deal = await tx.deal.findUnique({ where: { id: fromDealId } });
+        if (deal && !deal.convertedProjectId) {
+          await tx.deal.update({
+            where: { id: fromDealId },
+            data: {
+              convertedProjectId: project.id,
+              stage: deal.stage === 'won' ? deal.stage : 'won',
+            },
+          });
+          await writeAudit(tx, {
+            actor: { type: 'person', id: session.person.id },
+            action: 'converted_to_project',
+            entity: {
+              type: 'deal',
+              id: fromDealId,
+              before: {
+                stage: deal.stage,
+                convertedProjectId: deal.convertedProjectId,
+              },
+              after: {
+                stage: 'won',
+                convertedProjectId: project.id,
+                projectCode: project.code,
+              },
+            },
+            source: 'web',
+          });
+        }
+      }
       return {
         newCode: project.code,
         newProjectId: project.id,
@@ -164,5 +197,9 @@ export async function createProject(
   }
 
   revalidatePath('/projects');
+  if (fromDealId) {
+    revalidatePath('/bd');
+    revalidatePath(`/bd/${fromDealId}`);
+  }
   redirect(`/projects/${newCode}`);
 }

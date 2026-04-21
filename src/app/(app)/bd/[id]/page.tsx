@@ -172,23 +172,37 @@ export default async function DealDetailPage({
         </CardContent>
       </Card>
 
-      {deal.stage === 'won' && !convertedProject && (
+      {!convertedProject && canEdit && (
         <Card>
           <CardHeader>
             <CardTitle>Convert to project</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm text-ink-2">
-            <p>
-              This deal is marked Won. To create a project from it, use the standard{' '}
-              <Link href="/projects/new" className="text-brand hover:underline">
-                + New project
-              </Link>{' '}
-              flow and link back here once the project is set up.
-            </p>
-            <p className="text-xs text-ink-3">
-              Auto-convert with pre-filled client + contract value lands when the BD → Project
-              handoff flow ships.
-            </p>
+          <CardContent className="space-y-3 text-sm text-ink-2">
+            {deal.clientId ? (
+              <>
+                <p>
+                  Creates a new project pre-filled with this deal&apos;s client, name,
+                  expected value (→ contract), owner (→ primary partner), and notes (→
+                  description). Marks this deal as Won and links the project back here.
+                </p>
+                <Link
+                  href={`/projects/new?fromDeal=${deal.id}`}
+                  className="inline-flex h-9 items-center rounded-md bg-brand px-4 text-sm font-medium text-brand-ink hover:opacity-90"
+                >
+                  Convert to project →
+                </Link>
+              </>
+            ) : (
+              <>
+                <p className="text-status-amber">
+                  This deal is on a prospective org. Create the client record first, then
+                  come back here to convert.
+                </p>
+                <Link href="/directory/clients/new" className="text-brand hover:underline">
+                  + New client →
+                </Link>
+              </>
+            )}
           </CardContent>
         </Card>
       )}

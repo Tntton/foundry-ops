@@ -8,14 +8,25 @@ import { Input } from '@/components/ui/input';
 type PersonOpt = { id: string; initials: string; firstName: string; lastName: string };
 type ClientOpt = { id: string; code: string; legalName: string };
 
+type Prefill = {
+  clientId?: string;
+  name?: string;
+  description?: string;
+  contractValueDollars?: number;
+  primaryPartnerId?: string;
+  dealId?: string;
+};
+
 export function NewProjectForm({
   clients,
   partners,
   managers,
+  prefill,
 }: {
   clients: ClientOpt[];
   partners: PersonOpt[];
   managers: PersonOpt[];
+  prefill?: Prefill;
 }) {
   const [state, action] = useFormState<NewProjectState, FormData>(createProject, {
     status: 'idle',
@@ -37,6 +48,8 @@ export function NewProjectForm({
         Fields marked with <span className="text-status-red">*</span> are required.
       </p>
 
+      {prefill?.dealId && <input type="hidden" name="fromDealId" value={prefill.dealId} />}
+
       <Section title="Basics">
         <FieldRow>
           <Field label="Code" hint="e.g. IFM001, NIB042" error={errs['code']} required>
@@ -49,7 +62,11 @@ export function NewProjectForm({
             />
           </Field>
           <Field label="Client" error={errs['clientId']} required>
-            <Select name="clientId" required>
+            <Select
+              name="clientId"
+              required
+              {...(prefill?.clientId ? { defaultValue: prefill.clientId } : {})}
+            >
               <option value="">— Choose client —</option>
               {clients.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -60,12 +77,18 @@ export function NewProjectForm({
           </Field>
         </FieldRow>
         <Field label="Name" error={errs['name']} required>
-          <Input name="name" required placeholder="Market landscape diligence" />
+          <Input
+            name="name"
+            required
+            placeholder="Market landscape diligence"
+            {...(prefill?.name ? { defaultValue: prefill.name } : {})}
+          />
         </Field>
         <Field label="Description" error={errs['description']} hint="Optional">
           <textarea
             name="description"
             rows={3}
+            defaultValue={prefill?.description ?? ''}
             className="w-full rounded-md border border-line bg-surface-elev px-3 py-2 text-sm text-ink shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
             placeholder="Scope, key questions, deliverables…"
           />
@@ -82,7 +105,11 @@ export function NewProjectForm({
               max="10000000"
               step="1"
               required
-              defaultValue="0"
+              defaultValue={
+                prefill?.contractValueDollars !== undefined
+                  ? String(prefill.contractValueDollars)
+                  : '0'
+              }
               className="max-w-[200px]"
             />
           </Field>
@@ -98,7 +125,11 @@ export function NewProjectForm({
       <Section title="Team">
         <FieldRow>
           <Field label="Primary partner" error={errs['primaryPartnerId']} required>
-            <Select name="primaryPartnerId" required>
+            <Select
+              name="primaryPartnerId"
+              required
+              {...(prefill?.primaryPartnerId ? { defaultValue: prefill.primaryPartnerId } : {})}
+            >
               <option value="">— Choose partner —</option>
               {partners.map((p) => (
                 <option key={p.id} value={p.id}>
