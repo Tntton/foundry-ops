@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { Resend } from 'resend';
 import { prisma } from '@/server/db';
-import { requireEnv, optionalEnv } from '@/server/env';
+import { optionalEnv } from '@/server/env';
+import { EmailError, sendEmail } from '@/server/email';
 
 const TOKEN_BYTES = 32;
 const TTL_MS = 15 * 60 * 1000; // 15 minutes
@@ -72,30 +72,30 @@ export async function sendMagicLink(
     },
   });
 
-  const resend = new Resend(requireEnv('RESEND_API_KEY'));
-  const from = requireEnv('EMAIL_FROM');
   const link = `${getAppUrl()}/auth/magic-link/verify?token=${encodeURIComponent(token)}`;
 
-  const { error } = await resend.emails.send({
-    from: `Foundry Ops <${from}>`,
-    to: normalised,
-    subject: 'Your Foundry Ops sign-in link',
-    text: `Sign in to Foundry Ops:\n\n${link}\n\nThis link is valid for 15 minutes and can only be used once. If you didn't request it, you can ignore this email.`,
-    html: `
-      <div style="font-family:Helvetica Neue,Helvetica,Arial,sans-serif;max-width:560px;margin:40px auto;color:#1a1a17">
-        <h1 style="font-size:20px;margin:0 0 16px">Sign in to Foundry Ops</h1>
-        <p style="line-height:1.5;margin:0 0 24px">Click the button below to sign in. This link is valid for 15 minutes and can only be used once.</p>
-        <p style="margin:0 0 32px">
-          <a href="${link}" style="background:#688b71;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;display:inline-block">Sign in</a>
-        </p>
-        <p style="line-height:1.5;color:#8b8984;font-size:13px;margin:0">If the button doesn't work, paste this into your browser:<br/><span style="word-break:break-all">${link}</span></p>
-        <p style="line-height:1.5;color:#8b8984;font-size:13px;margin:24px 0 0">If you didn't request this, you can ignore this email.</p>
-      </div>
-    `,
-  });
-
-  if (error) {
-    throw new MagicLinkError('send_failed', `Resend error: ${error.message}`);
+  try {
+    await sendEmail({
+      to: normalised,
+      subject: 'Your Foundry Ops sign-in link',
+      text: `Sign in to Foundry Ops:\n\n${link}\n\nThis link is valid for 15 minutes and can only be used once. If you didn't request it, you can ignore this email.`,
+      html: `
+        <div style="font-family:Helvetica Neue,Helvetica,Arial,sans-serif;max-width:560px;margin:40px auto;color:#1a1a17">
+          <h1 style="font-size:20px;margin:0 0 16px">Sign in to Foundry Ops</h1>
+          <p style="line-height:1.5;margin:0 0 24px">Click the button below to sign in. This link is valid for 15 minutes and can only be used once.</p>
+          <p style="margin:0 0 32px">
+            <a href="${link}" style="background:#688b71;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;display:inline-block">Sign in</a>
+          </p>
+          <p style="line-height:1.5;color:#8b8984;font-size:13px;margin:0">If the button doesn't work, paste this into your browser:<br/><span style="word-break:break-all">${link}</span></p>
+          <p style="line-height:1.5;color:#8b8984;font-size:13px;margin:24px 0 0">If you didn't request this, you can ignore this email.</p>
+        </div>
+      `,
+    });
+  } catch (err) {
+    if (err instanceof EmailError) {
+      throw new MagicLinkError('send_failed', err.message);
+    }
+    throw err;
   }
 }
 
