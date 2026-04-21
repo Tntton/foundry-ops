@@ -12,6 +12,7 @@ import {
   ScrollText,
   CircleDollarSign,
   Sparkles,
+  BarChart3,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -59,8 +60,13 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: Inbox,
         roles: ['super_admin', 'admin', 'partner', 'manager'],
       },
-      // Firm-wide P&L + BD pipeline: deferred. P&L needs aggregated
-      // timesheet/expense data; BD pipeline is phase 2.
+      {
+        label: 'P&L',
+        href: '/pnl',
+        icon: BarChart3,
+        roles: ['super_admin', 'admin', 'partner'],
+      },
+      // BD pipeline: phase 2.
       {
         label: 'Directory',
         href: '/directory',
