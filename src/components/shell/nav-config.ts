@@ -19,6 +19,7 @@ import {
   TrendingUp,
   LineChart,
   Banknote,
+  ShieldAlert,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -70,6 +71,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: 'BD pipeline',
         href: '/bd',
         icon: TrendingUp,
+        roles: ['super_admin', 'admin', 'partner'],
+      },
+      {
+        label: 'Risks',
+        href: '/risks',
+        icon: ShieldAlert,
         roles: ['super_admin', 'admin', 'partner'],
       },
       {

@@ -59,6 +59,7 @@ export default async function DashboardPage() {
     overdueInvoices,
     unpaidBillsOverdue,
     draftPayRuns,
+    highRisks,
   ] = await Promise.all([
     prisma.project.count({ where: { stage: { not: 'archived' } } }),
     prisma.approval.count({
@@ -94,6 +95,13 @@ export default async function DashboardPage() {
       },
     }),
     prisma.payRun.count({ where: { status: 'draft' } }),
+    prisma.risk.count({
+      where: {
+        severity: 'high',
+        status: { in: ['open', 'mitigating'] },
+        project: { stage: { not: 'archived' } },
+      },
+    }),
   ]);
 
   const alerts: Array<{
@@ -127,6 +135,13 @@ export default async function DashboardPage() {
       label: `${draftPayRuns} pay run${draftPayRuns === 1 ? '' : 's'} still in draft`,
       href: '/payroll',
       severity: 'amber',
+    });
+  }
+  if (highRisks > 0) {
+    alerts.push({
+      label: `${highRisks} high-severity risk${highRisks === 1 ? '' : 's'} open across active projects`,
+      href: '/risks?severity=high',
+      severity: 'red',
     });
   }
 
