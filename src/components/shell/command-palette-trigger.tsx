@@ -10,15 +10,28 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 
+type EntityKind = 'project' | 'person' | 'client' | 'invoice' | 'bill' | 'deal';
+type ActionKind = 'action';
+type AnyKind = EntityKind | ActionKind;
+
 type SearchResult = {
-  kind: 'project' | 'person' | 'client' | 'invoice' | 'bill' | 'deal';
+  kind: EntityKind;
   id: string;
   label: string;
   hint?: string;
   href: string;
 };
 
-const KIND_LABEL: Record<SearchResult['kind'], string> = {
+type QuickAction = {
+  kind: ActionKind;
+  label: string;
+  hint?: string;
+  href: string;
+  keywords: string[]; // extra filter terms
+};
+
+const KIND_LABEL: Record<AnyKind, string> = {
+  action: 'Actions',
   project: 'Projects',
   person: 'People',
   client: 'Clients',
@@ -27,7 +40,8 @@ const KIND_LABEL: Record<SearchResult['kind'], string> = {
   deal: 'Deals',
 };
 
-const KIND_ORDER: SearchResult['kind'][] = [
+const KIND_ORDER: AnyKind[] = [
+  'action',
   'project',
   'person',
   'client',
@@ -35,6 +49,117 @@ const KIND_ORDER: SearchResult['kind'][] = [
   'invoice',
   'bill',
 ];
+
+const QUICK_ACTIONS: QuickAction[] = [
+  {
+    kind: 'action',
+    label: '+ New project',
+    href: '/projects/new',
+    keywords: ['new', 'project', 'create'],
+  },
+  {
+    kind: 'action',
+    label: '+ New client',
+    href: '/directory/clients/new',
+    keywords: ['new', 'client', 'create'],
+  },
+  {
+    kind: 'action',
+    label: '+ New person',
+    href: '/directory/people/new',
+    keywords: ['new', 'person', 'hire', 'contractor', 'create'],
+  },
+  {
+    kind: 'action',
+    label: '+ New invoice',
+    href: '/invoices/new',
+    keywords: ['new', 'invoice', 'bill-out', 'revenue', 'create'],
+  },
+  {
+    kind: 'action',
+    label: '+ New bill',
+    href: '/bills/new',
+    keywords: ['new', 'bill', 'ap', 'supplier', 'create'],
+  },
+  {
+    kind: 'action',
+    label: '+ New expense',
+    href: '/expenses/new',
+    keywords: ['new', 'expense', 'receipt', 'create'],
+  },
+  {
+    kind: 'action',
+    label: '+ New deal',
+    href: '/bd/new',
+    keywords: ['new', 'deal', 'bd', 'pipeline', 'create'],
+  },
+  {
+    kind: 'action',
+    label: '+ New pay run',
+    href: '/payroll/new',
+    keywords: ['new', 'pay', 'run', 'payroll', 'aba', 'create'],
+  },
+  {
+    kind: 'action',
+    label: 'Approvals queue',
+    href: '/approvals',
+    keywords: ['approvals', 'queue', 'decide', 'pending'],
+  },
+  {
+    kind: 'action',
+    label: 'Timesheet',
+    href: '/timesheet',
+    keywords: ['timesheet', 'hours', 'time'],
+  },
+  {
+    kind: 'action',
+    label: 'Firm P&L',
+    href: '/pnl',
+    keywords: ['pnl', 'p&l', 'profit', 'loss', 'margin'],
+  },
+  {
+    kind: 'action',
+    label: 'AR aging',
+    href: '/ar',
+    keywords: ['ar', 'receivables', 'overdue', 'chase'],
+  },
+  {
+    kind: 'action',
+    label: 'AP aging',
+    href: '/ap',
+    keywords: ['ap', 'payables', 'owe', 'supplier'],
+  },
+  {
+    kind: 'action',
+    label: 'Cash flow',
+    href: '/cashflow',
+    keywords: ['cashflow', 'cash', 'flow', 'forecast'],
+  },
+  {
+    kind: 'action',
+    label: 'Utilisation',
+    href: '/utilisation',
+    keywords: ['utilisation', 'utilization', 'billable', 'hours'],
+  },
+  {
+    kind: 'action',
+    label: 'Audit log',
+    href: '/admin/audit',
+    keywords: ['audit', 'log', 'history', 'who'],
+  },
+  {
+    kind: 'action',
+    label: 'Integrations',
+    href: '/admin/integrations',
+    keywords: ['integrations', 'xero', 'm365', 'sharepoint'],
+  },
+];
+
+function matchesAction(a: QuickAction, q: string): boolean {
+  const needle = q.toLowerCase();
+  if (a.label.toLowerCase().includes(needle)) return true;
+  return a.keywords.some((k) => k.includes(needle));
+}
 
 export function CommandPaletteTrigger() {
   const router = useRouter();
@@ -95,11 +220,19 @@ export function CommandPaletteTrigger() {
   }, [query]);
 
   // Build grouped index that maps linear cursor ↔ result index.
-  const grouped = KIND_ORDER.map((kind) => ({
-    kind,
-    items: results.filter((r) => r.kind === kind),
-  })).filter((g) => g.items.length > 0);
-  const flat = grouped.flatMap((g) => g.items);
+  const q = query.trim();
+  const matchedActions: QuickAction[] = q.length >= 2
+    ? QUICK_ACTIONS.filter((a) => matchesAction(a, q)).slice(0, 6)
+    : [];
+  type GroupItem = SearchResult | QuickAction;
+  const groupedRaw: { kind: AnyKind; items: GroupItem[] }[] = KIND_ORDER.map((kind) => {
+    if (kind === 'action') {
+      return { kind, items: matchedActions as GroupItem[] };
+    }
+    return { kind, items: results.filter((r) => r.kind === kind) as GroupItem[] };
+  });
+  const grouped = groupedRaw.filter((g) => g.items.length > 0);
+  const flat: GroupItem[] = grouped.flatMap((g) => g.items);
 
   function navigate(href: string) {
     setOpen(false);
@@ -118,6 +251,11 @@ export function CommandPaletteTrigger() {
       const pick = flat[cursor];
       if (pick) navigate(pick.href);
     }
+  }
+
+  function itemHint(r: GroupItem): string | undefined {
+    if ('hint' in r) return r.hint;
+    return undefined;
   }
 
   return (
@@ -169,12 +307,15 @@ export function CommandPaletteTrigger() {
                   <div className="border-b border-line bg-surface-subtle px-3 py-1 text-[10px] uppercase tracking-wide text-ink-3">
                     {KIND_LABEL[group.kind]}
                   </div>
-                  {group.items.map((r) => {
+                  {group.items.map((r, i) => {
                     const flatIndex = flat.indexOf(r);
                     const active = flatIndex === cursor;
+                    const hint = itemHint(r);
+                    const key =
+                      'id' in r ? `${r.kind}-${r.id}` : `${r.kind}-${r.href}-${i}`;
                     return (
                       <button
-                        key={r.id}
+                        key={key}
                         type="button"
                         onMouseEnter={() => setCursor(flatIndex)}
                         onClick={() => navigate(r.href)}
@@ -185,8 +326,8 @@ export function CommandPaletteTrigger() {
                         }`}
                       >
                         <span className="truncate">{r.label}</span>
-                        {r.hint && (
-                          <span className="shrink-0 text-xs text-ink-3">{r.hint}</span>
+                        {hint && (
+                          <span className="shrink-0 text-xs text-ink-3">{hint}</span>
                         )}
                       </button>
                     );
