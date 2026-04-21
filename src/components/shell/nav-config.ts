@@ -16,6 +16,7 @@ import {
   HandCoins,
   Gauge,
   Wallet,
+  TrendingUp,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -64,6 +65,24 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         roles: ['super_admin', 'admin', 'partner', 'manager'],
       },
       {
+        label: 'BD pipeline',
+        href: '/bd',
+        icon: TrendingUp,
+        roles: ['super_admin', 'admin', 'partner'],
+      },
+      {
+        label: 'Directory',
+        href: '/directory',
+        icon: Users,
+        roles: ['super_admin', 'admin', 'partner'],
+      },
+    ],
+  },
+  {
+    id: 'reports',
+    label: 'Reports',
+    items: [
+      {
         label: 'P&L',
         href: '/pnl',
         icon: BarChart3,
@@ -85,13 +104,6 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: 'Utilisation',
         href: '/utilisation',
         icon: Gauge,
-        roles: ['super_admin', 'admin', 'partner'],
-      },
-      // BD pipeline: phase 2.
-      {
-        label: 'Directory',
-        href: '/directory',
-        icon: Users,
         roles: ['super_admin', 'admin', 'partner'],
       },
     ],
