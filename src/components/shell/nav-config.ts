@@ -98,6 +98,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         roles: ['super_admin', 'admin', 'partner'],
       },
       {
+        label: 'Budget watch',
+        href: '/budget-watch',
+        icon: Shield,
+        roles: ['super_admin', 'admin', 'partner'],
+      },
+      {
         label: 'AR aging',
         href: '/ar',
         icon: HandCoins,

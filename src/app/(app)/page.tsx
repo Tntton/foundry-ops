@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { approvalRoleFilter } from '@/server/roles';
+import { computeBudgetWatch } from '@/server/reports/budget-watch';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -143,6 +144,28 @@ export default async function DashboardPage() {
       href: '/risks?severity=high',
       severity: 'red',
     });
+  }
+
+  // Budget-watch pulls the firm P&L which is a bigger query than the others
+  // above — only run it for viewers who would act on it.
+  const canSeeBudgets = session.person.roles.some((r) =>
+    ['super_admin', 'admin', 'partner'].includes(r),
+  );
+  if (canSeeBudgets) {
+    const budget = await computeBudgetWatch();
+    if (budget.summary.overBudget > 0) {
+      alerts.push({
+        label: `${budget.summary.overBudget} project${budget.summary.overBudget === 1 ? '' : 's'} over budget`,
+        href: '/budget-watch',
+        severity: 'red',
+      });
+    } else if (budget.summary.nearBudget > 0) {
+      alerts.push({
+        label: `${budget.summary.nearBudget} project${budget.summary.nearBudget === 1 ? '' : 's'} ≥ 80% of contract cost`,
+        href: '/budget-watch',
+        severity: 'amber',
+      });
+    }
   }
 
   return (
