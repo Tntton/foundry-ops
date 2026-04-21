@@ -121,6 +121,14 @@ export default async function ProjectDetailPage({ params }: { params: { code: st
               {formatMoney(project.contractValue)}
             </div>
           </div>
+          {hasCapability(session, 'invoice.create') && project.stage !== 'archived' && (
+            <Link
+              href={`/projects/${project.code}/draft-invoice`}
+              className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+            >
+              Draft invoice from time
+            </Link>
+          )}
           <Link
             href={`/projects/${project.code}/settings`}
             className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
