@@ -46,23 +46,89 @@ export default async function DashboardPage() {
     );
   }
 
-  const [activeProjectCount, pendingApprovals, pendingInvoices, recentActivity] =
-    await Promise.all([
-      prisma.project.count({ where: { stage: { not: 'archived' } } }),
-      prisma.approval.count({
-        where: { status: 'pending', ...approvalRoleFilter(session.person.roles) },
-      }),
-      prisma.invoice.count({ where: { status: 'pending_approval' } }),
-      prisma.auditEvent.findMany({
-        orderBy: { at: 'desc' },
-        take: 8,
-        include: {
-          actor: {
-            select: { id: true, initials: true, firstName: true, lastName: true },
-          },
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
+  const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 3600 * 1000);
+
+  const [
+    activeProjectCount,
+    pendingApprovals,
+    pendingInvoices,
+    recentActivity,
+    staleApprovals,
+    overdueInvoices,
+    unpaidBillsOverdue,
+    draftPayRuns,
+  ] = await Promise.all([
+    prisma.project.count({ where: { stage: { not: 'archived' } } }),
+    prisma.approval.count({
+      where: { status: 'pending', ...approvalRoleFilter(session.person.roles) },
+    }),
+    prisma.invoice.count({ where: { status: 'pending_approval' } }),
+    prisma.auditEvent.findMany({
+      orderBy: { at: 'desc' },
+      take: 8,
+      include: {
+        actor: {
+          select: { id: true, initials: true, firstName: true, lastName: true },
         },
-      }),
-    ]);
+      },
+    }),
+    prisma.approval.count({
+      where: {
+        status: 'pending',
+        createdAt: { lte: threeDaysAgo },
+        ...approvalRoleFilter(session.person.roles),
+      },
+    }),
+    prisma.invoice.count({
+      where: {
+        status: { in: ['approved', 'sent', 'partial', 'overdue'] },
+        dueDate: { lt: thirtyDaysAgo },
+      },
+    }),
+    prisma.bill.count({
+      where: {
+        status: { in: ['approved', 'scheduled_for_payment'] },
+        dueDate: { lt: now },
+      },
+    }),
+    prisma.payRun.count({ where: { status: 'draft' } }),
+  ]);
+
+  const alerts: Array<{
+    label: string;
+    href: string;
+    severity: 'amber' | 'red';
+  }> = [];
+  if (staleApprovals > 0) {
+    alerts.push({
+      label: `${staleApprovals} approval${staleApprovals === 1 ? '' : 's'} waiting > 3 days`,
+      href: '/approvals',
+      severity: 'amber',
+    });
+  }
+  if (overdueInvoices > 0) {
+    alerts.push({
+      label: `${overdueInvoices} invoice${overdueInvoices === 1 ? '' : 's'} past due > 30 days`,
+      href: '/ar',
+      severity: 'red',
+    });
+  }
+  if (unpaidBillsOverdue > 0) {
+    alerts.push({
+      label: `${unpaidBillsOverdue} bill${unpaidBillsOverdue === 1 ? '' : 's'} past due — schedule payment`,
+      href: '/ap',
+      severity: 'red',
+    });
+  }
+  if (draftPayRuns > 0) {
+    alerts.push({
+      label: `${draftPayRuns} pay run${draftPayRuns === 1 ? '' : 's'} still in draft`,
+      href: '/payroll',
+      severity: 'amber',
+    });
+  }
 
   return (
     <div className="space-y-6">
@@ -99,6 +165,30 @@ export default async function DashboardPage() {
           trend="flat"
         />
       </div>
+
+      {alerts.length > 0 && (
+        <Card className="border-status-amber bg-status-amber-soft/30">
+          <CardHeader>
+            <CardTitle className="text-sm">Needs attention</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-1 text-sm">
+              {alerts.map((a) => (
+                <li key={a.href} className="flex items-center gap-2">
+                  <span
+                    className={`inline-block h-2 w-2 rounded-full ${
+                      a.severity === 'red' ? 'bg-status-red' : 'bg-status-amber'
+                    }`}
+                  />
+                  <Link href={a.href} className="text-ink hover:underline">
+                    {a.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
