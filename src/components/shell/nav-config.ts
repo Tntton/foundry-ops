@@ -15,6 +15,7 @@ import {
   BarChart3,
   HandCoins,
   Gauge,
+  Wallet,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -73,6 +74,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         href: '/ar',
         icon: HandCoins,
         roles: ['super_admin', 'admin', 'partner'],
+      },
+      {
+        label: 'AP aging',
+        href: '/ap',
+        icon: Wallet,
+        roles: ['super_admin', 'admin'],
       },
       {
         label: 'Utilisation',
