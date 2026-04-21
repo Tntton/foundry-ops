@@ -133,3 +133,122 @@ export async function deleteDraftBill(
   revalidatePath('/bills');
   redirect('/bills?deleted=1');
 }
+
+export type BillTransitionState =
+  | { status: 'idle' }
+  | { status: 'error'; message: string }
+  | { status: 'success'; message: string };
+
+/**
+ * Schedule an approved bill for payment. Represents "it's in the pay queue".
+ * Actual ABA file export ships with TASK-100 — this is a local bookkeeping flip.
+ */
+export async function scheduleBillForPayment(
+  billId: string,
+  _prev: BillTransitionState,
+  _formData: FormData,
+): Promise<BillTransitionState> {
+  const session = await getSession();
+  try {
+    requireCapability(session, 'bill.approve');
+  } catch {
+    return { status: 'error', message: 'Not authorized' };
+  }
+
+  const bill = await prisma.bill.findUnique({
+    where: { id: billId },
+    select: { id: true, status: true, supplierName: true },
+  });
+  if (!bill) return { status: 'error', message: 'Bill not found' };
+  if (bill.status !== 'approved') {
+    return {
+      status: 'error',
+      message: `Can't schedule — bill is ${bill.status}. Only approved bills can be scheduled.`,
+    };
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.bill.update({
+        where: { id: billId },
+        data: { status: 'scheduled_for_payment' },
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'scheduled_for_payment',
+        entity: {
+          type: 'bill',
+          id: billId,
+          before: { status: bill.status },
+          after: { status: 'scheduled_for_payment' },
+        },
+        source: 'web',
+      });
+    });
+  } catch (err) {
+    console.error('[bill.schedule] failed:', err);
+    return { status: 'error', message: 'Schedule failed — try again.' };
+  }
+
+  revalidatePath('/bills');
+  revalidatePath(`/bills/${billId}`);
+  revalidatePath('/ap');
+  return { status: 'success', message: 'Scheduled for payment.' };
+}
+
+/**
+ * Mark a bill as paid. Terminal state — no partial payments at the schema
+ * level (single-line bills).
+ */
+export async function markBillPaid(
+  billId: string,
+  _prev: BillTransitionState,
+  _formData: FormData,
+): Promise<BillTransitionState> {
+  const session = await getSession();
+  try {
+    requireCapability(session, 'bill.approve');
+  } catch {
+    return { status: 'error', message: 'Not authorized' };
+  }
+
+  const bill = await prisma.bill.findUnique({
+    where: { id: billId },
+    select: { id: true, status: true, supplierName: true },
+  });
+  if (!bill) return { status: 'error', message: 'Bill not found' };
+  if (bill.status !== 'approved' && bill.status !== 'scheduled_for_payment') {
+    return {
+      status: 'error',
+      message: `Can't mark paid — bill is ${bill.status}.`,
+    };
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.bill.update({
+        where: { id: billId },
+        data: { status: 'paid' },
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'marked_paid',
+        entity: {
+          type: 'bill',
+          id: billId,
+          before: { status: bill.status },
+          after: { status: 'paid' },
+        },
+        source: 'web',
+      });
+    });
+  } catch (err) {
+    console.error('[bill.markPaid] failed:', err);
+    return { status: 'error', message: 'Mark-paid failed — try again.' };
+  }
+
+  revalidatePath('/bills');
+  revalidatePath(`/bills/${billId}`);
+  revalidatePath('/ap');
+  return { status: 'success', message: 'Bill marked paid.' };
+}

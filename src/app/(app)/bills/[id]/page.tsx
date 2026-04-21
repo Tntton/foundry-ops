@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { XeroPushBillButton } from './xero-push-button';
 import { DeleteDraftBillButton } from './delete-button';
+import { MarkBillPaidButton, ScheduleBillButton } from './lifecycle-buttons';
 
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
@@ -42,6 +43,10 @@ export default async function BillDetailPage({ params }: { params: { id: string 
     bill.status === 'approved' || bill.status === 'scheduled_for_payment' || bill.status === 'paid';
   const canDeleteDraft =
     hasCapability(session, 'bill.delete_draft') && bill.status === 'pending_review';
+  const canApprove = hasCapability(session, 'bill.approve');
+  const canSchedule = canApprove && bill.status === 'approved';
+  const canMarkPaid =
+    canApprove && (bill.status === 'approved' || bill.status === 'scheduled_for_payment');
 
   return (
     <div className="space-y-6">
@@ -115,6 +120,22 @@ export default async function BillDetailPage({ params }: { params: { id: string 
           </CardContent>
         </Card>
       </div>
+
+      {(canSchedule || canMarkPaid) && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Payment lifecycle</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center gap-2 text-sm">
+            {canSchedule && <ScheduleBillButton billId={bill.id} />}
+            {canMarkPaid && <MarkBillPaidButton billId={bill.id} />}
+            <p className="text-xs text-ink-3">
+              Schedule moves the bill into the pay queue; Mark paid closes it out.
+              Actual pay-run + ABA export flow lands later.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
