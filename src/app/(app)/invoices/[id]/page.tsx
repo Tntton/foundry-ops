@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { XeroPushInvoiceButton } from './xero-push-button';
 import { DeleteDraftInvoiceButton } from './delete-button';
+import { MarkSentButton, RecordPaymentForm } from './status-forms';
 import {
   Table,
   TableBody,
@@ -54,6 +55,14 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
   const canDeleteDraft =
     hasCapability(session, 'invoice.delete_draft') &&
     (invoice.status === 'draft' || invoice.status === 'pending_approval');
+  const canSend = hasCapability(session, 'invoice.send');
+  const paidCents = invoice.paymentReceivedAmount ?? 0;
+  const outstandingCents = invoice.amountTotal - paidCents;
+  const canMarkSent = canSend && invoice.status === 'approved';
+  const canRecordPayment =
+    canSend &&
+    ['approved', 'sent', 'partial', 'overdue'].includes(invoice.status) &&
+    outstandingCents > 0;
 
   return (
     <div className="space-y-6">
@@ -133,6 +142,46 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
           </CardContent>
         </Card>
       </div>
+
+      {(canMarkSent || canRecordPayment || paidCents > 0) && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Lifecycle</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <div className="grid grid-cols-[140px_1fr] gap-2">
+              <div className="text-ink-3">Sent</div>
+              <div className="text-ink">
+                {invoice.sentAt
+                  ? invoice.sentAt.toLocaleDateString('en-AU')
+                  : canMarkSent
+                    ? <MarkSentButton invoiceId={invoice.id} />
+                    : <span className="text-ink-3">—</span>}
+              </div>
+              <div className="text-ink-3">Received</div>
+              <div className="text-ink">
+                {formatMoney(paidCents)}{' '}
+                <span className="text-xs text-ink-3">
+                  ({formatMoney(outstandingCents)} outstanding)
+                </span>
+                {invoice.paidAt && (
+                  <span className="ml-2 text-xs text-ink-3">
+                    · paid in full {invoice.paidAt.toLocaleDateString('en-AU')}
+                  </span>
+                )}
+              </div>
+            </div>
+            {canRecordPayment && (
+              <div>
+                <RecordPaymentForm
+                  invoiceId={invoice.id}
+                  outstandingDollars={outstandingCents / 100}
+                />
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="p-0">
         <Table>
