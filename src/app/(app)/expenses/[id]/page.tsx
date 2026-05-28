@@ -3,9 +3,10 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { prisma } from '@/server/db';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { TagProjectForm } from './tag-project-form';
 
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
@@ -36,7 +37,7 @@ export default async function ExpenseDetailPage({
     where: { id: params.id },
     include: {
       person: {
-        select: { id: true, initials: true, firstName: true, lastName: true, email: true },
+        select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true, email: true },
       },
       project: { select: { id: true, code: true, name: true, managerId: true, primaryPartnerId: true } },
     },
@@ -60,10 +61,41 @@ export default async function ExpenseDetailPage({
     expense.approvedById
       ? prisma.person.findUnique({
           where: { id: expense.approvedById },
-          select: { id: true, initials: true, firstName: true, lastName: true },
+          select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
         })
       : Promise.resolve(null),
   ]);
+
+  // Project picker is editable while the row is pre-decision and the
+  // viewer is either the submitter or an admin. After approval the project
+  // locks (would otherwise reshuffle a decided P&L).
+  // Reallocation policy (per TT, 2026-05-10): any signed-in person
+  // can re-tag a draft / submitted expense. Locks once it hits an
+  // approval-bound status — admin can still flip it via the approval
+  // decision flow.
+  const canTagProject =
+    expense.status === 'draft' || expense.status === 'submitted';
+  // Pull eligible projects + reorder so the three expense buckets
+  // (FHB000 BD, FHO000 Operations, FHX000 Uncategorised) sit at the
+  // top of the dropdown for easy expense routing. Internal FH projects
+  // (FHP*) and client projects sort below alphabetically.
+  const projectOptionsRaw = canTagProject
+    ? await prisma.project.findMany({
+        where: { stage: { not: 'archived' } },
+        orderBy: { code: 'asc' },
+        select: { id: true, code: true, name: true },
+      })
+    : [];
+  const BUCKET_CODES = ['FHB000', 'FHO000', 'FHX000'];
+  const bucketProjects = projectOptionsRaw
+    .filter((p) => BUCKET_CODES.includes(p.code))
+    .sort(
+      (a, b) => BUCKET_CODES.indexOf(a.code) - BUCKET_CODES.indexOf(b.code),
+    );
+  const otherProjects = projectOptionsRaw.filter(
+    (p) => !BUCKET_CODES.includes(p.code),
+  );
+  const projectOptions = [...bucketProjects, ...otherProjects];
 
   const amountExGst = expense.amount - expense.gst;
 
@@ -126,7 +158,7 @@ export default async function ExpenseDetailPage({
           <CardHeader>
             <CardTitle>Project</CardTitle>
           </CardHeader>
-          <CardContent className="text-sm">
+          <CardContent className="space-y-3 text-sm">
             {expense.project ? (
               <Link
                 href={`/projects/${expense.project.code}`}
@@ -140,6 +172,13 @@ export default async function ExpenseDetailPage({
             ) : (
               <span className="text-ink-3">OPEX — no project</span>
             )}
+            {canTagProject && (
+              <TagProjectForm
+                expenseId={expense.id}
+                currentProjectId={expense.projectId}
+                options={projectOptions}
+              />
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -150,11 +189,12 @@ export default async function ExpenseDetailPage({
             {approver ? (
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <Avatar className="h-6 w-6">
-                    <AvatarFallback className="text-[10px]">
-                      {approver.initials}
-                    </AvatarFallback>
-                  </Avatar>
+                  <PersonAvatar
+  className="h-6 w-6"
+  fallbackClassName="text-[10px]"
+  initials={approver.initials}
+  headshotUrl={approver.headshotUrl}
+/>
                   <span>
                     {approver.firstName} {approver.lastName}
                   </span>
@@ -197,14 +237,7 @@ export default async function ExpenseDetailPage({
             )}
             {expense.receiptSharepointUrl && (
               <Row label="Receipt">
-                <a
-                  href={expense.receiptSharepointUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-brand hover:underline"
-                >
-                  Open in SharePoint →
-                </a>
+                <ReceiptPreview url={expense.receiptSharepointUrl} />
               </Row>
             )}
             <Row label="Source">
@@ -227,5 +260,52 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <div className="text-ink-3">{label}</div>
       <div className="text-ink">{children}</div>
     </div>
+  );
+}
+
+/**
+ * Render a receipt URL inline. OCR-created expenses stash the raw file on
+ * the receipt URL as a `data:` URI — browsers can render those directly
+ * (PDF in iframe, images in <img>). SharePoint URLs fall through to the
+ * standard "Open →" link since we can't iframe them without SSO.
+ */
+function ReceiptPreview({ url }: { url: string }) {
+  const isDataUrl = url.startsWith('data:');
+  const dataMime = isDataUrl ? url.slice(5, url.indexOf(';')) : null;
+  const isPdfData = isDataUrl && dataMime === 'application/pdf';
+  const isImageData =
+    isDataUrl &&
+    (dataMime === 'image/jpeg' ||
+      dataMime === 'image/png' ||
+      dataMime === 'image/webp' ||
+      dataMime === 'image/gif');
+  if (isPdfData) {
+    return (
+      <div className="overflow-hidden rounded-md border border-line bg-card">
+        <iframe src={url} title="Receipt PDF" className="h-[480px] w-full" />
+      </div>
+    );
+  }
+  if (isImageData) {
+    return (
+      <div className="flex max-h-[560px] items-start overflow-auto rounded-md border border-line bg-card p-2">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={url}
+          alt="Receipt"
+          className="max-w-full rounded-sm shadow-sm"
+        />
+      </div>
+    );
+  }
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="text-brand hover:underline"
+    >
+      Open receipt →
+    </a>
   );
 }

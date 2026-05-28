@@ -5,16 +5,13 @@ import { useState } from 'react';
 import { createBill, type NewBillState } from './actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { EXPENSE_CATEGORIES } from '@/lib/expense-categories';
 
-const CATEGORIES = [
-  { v: 'subscriptions', label: 'Subscriptions' },
-  { v: 'hosting', label: 'Hosting / cloud' },
-  { v: 'office', label: 'Office' },
-  { v: 'professional_services', label: 'Professional services' },
-  { v: 'contractor_payment', label: 'Contractor payment' },
-  { v: 'travel', label: 'Travel' },
-  { v: 'other', label: 'Other' },
-];
+const CATEGORIES = EXPENSE_CATEGORIES.map((c) => ({
+  v: c.value,
+  label: c.label,
+  hint: c.hint,
+}));
 
 type ProjectOpt = { id: string; code: string; name: string };
 type PersonOpt = { id: string; initials: string; firstName: string; lastName: string };
@@ -83,11 +80,11 @@ export function NewBillForm({
             <select
               name="category"
               required
-              defaultValue="subscriptions"
+              defaultValue="software_subscriptions"
               className="flex h-9 w-full rounded-md border border-line bg-surface-elev px-2 text-sm text-ink"
             >
               {CATEGORIES.map((c) => (
-                <option key={c.v} value={c.v}>
+                <option key={c.v} value={c.v} title={c.hint}>
                   {c.label}
                 </option>
               ))}

@@ -4,19 +4,49 @@ import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
 import { listActivePeopleOptions, listClientOptions } from '@/server/projects';
+import { isLeadershipBand } from '@/lib/levels';
 import { Badge } from '@/components/ui/badge';
 import { NewProjectForm } from './form';
 
 export default async function NewProjectPage({
   searchParams,
 }: {
-  searchParams: { fromDeal?: string };
+  searchParams: { fromDeal?: string; clientId?: string; kind?: string };
 }) {
   const session = await getSession();
   if (!hasCapability(session, 'project.create')) notFound();
 
   const [clients, people] = await Promise.all([listClientOptions(), listActivePeopleOptions()]);
-  const partners = people.filter((p) => p.band === 'Partner' || p.band === 'MP');
+  // Project primary-partner picker draws from anyone with seniority
+  // to own delivery (MP / Partner / Associate Partner). The
+  // `isLeadershipBand` helper is shared with resource-planning,
+  // availability, etc.
+  const partners = people.filter((p) => isLeadershipBand(p.band));
+
+  // Internal-project bootstrapping: resolve the firm's internal client
+  // (`FH`) so we can auto-pin newly-created internal projects to it
+  // without making the operator pick from the dropdown, and pick the
+  // next free FHP code so the form can suggest e.g. "FHP007".
+  const fhInternalClient = await prisma.client.findUnique({
+    where: { code: 'FH' },
+    select: { id: true, legalName: true },
+  });
+  const lastFhp = await prisma.project.findFirst({
+    where: { code: { startsWith: 'FHP' } },
+    orderBy: { code: 'desc' },
+    select: { code: true },
+  });
+  const nextFhpCode = (() => {
+    const m = lastFhp?.code.match(/^FHP(\d{3})$/);
+    if (!m) return 'FHP001';
+    const next = Number(m[1]) + 1;
+    return `FHP${String(next).padStart(3, '0')}`;
+  })();
+  // Initial kind — query string lets links jump straight into one
+  // branch (e.g. "/projects/new?kind=internal" from the projects
+  // kanban). Default `client` matches existing behaviour.
+  const initialKind: 'client' | 'internal' =
+    searchParams.kind === 'internal' && fhInternalClient ? 'internal' : 'client';
 
   let prefill: {
     clientId?: string;
@@ -29,6 +59,16 @@ export default async function NewProjectPage({
     clientLegalName?: string;
   } = {};
 
+  if (searchParams.clientId && !searchParams.fromDeal) {
+    const c = await prisma.client.findUnique({
+      where: { id: searchParams.clientId },
+      select: { id: true, legalName: true },
+    });
+    if (c) {
+      prefill = { clientId: c.id, clientLegalName: c.legalName };
+    }
+  }
+
   if (searchParams.fromDeal) {
     const deal = await prisma.deal.findUnique({
       where: { id: searchParams.fromDeal },
@@ -40,7 +80,7 @@ export default async function NewProjectPage({
       prefill = {
         dealId: deal.id,
         dealCode: deal.code,
-        name: deal.name,
+        name: deal.name ?? undefined,
         ...(deal.notes ? { description: deal.notes } : {}),
         contractValueDollars: deal.expectedValue / 100,
         ...(deal.clientId ? { clientId: deal.clientId } : {}),
@@ -96,6 +136,9 @@ export default async function NewProjectPage({
           clients={clients}
           partners={partners}
           managers={people}
+          internalClient={fhInternalClient}
+          nextFhpCode={nextFhpCode}
+          initialKind={initialKind}
           {...(prefill.clientId ||
           prefill.name ||
           prefill.description ||

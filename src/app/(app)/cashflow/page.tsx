@@ -30,7 +30,9 @@ function weekLabel(iso: string): string {
 
 export default async function CashflowPage() {
   const session = await getSession();
-  if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
+  // Cash flow stays admin-only — partners get firm P&L + receivables
+  // but cash position / forecasting is an operations-seat surface.
+  if (!hasAnyRole(session, ['super_admin', 'admin'])) notFound();
 
   const cf = await computeCashflow(12);
   const maxAbs = Math.max(

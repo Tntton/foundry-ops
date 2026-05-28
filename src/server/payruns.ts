@@ -44,7 +44,12 @@ export type PayRunDetail = {
   periodEnd: Date;
   totalCents: number;
   approvedAt: Date | null;
-  approvedBy: { initials: string; firstName: string; lastName: string } | null;
+  approvedBy: {
+    initials: string;
+    firstName: string;
+    lastName: string;
+    headshotUrl: string | null;
+  } | null;
   createdAt: Date;
   lines: Array<{
     id: string;
@@ -63,6 +68,7 @@ export type PayRunDetail = {
       initials: string;
       firstName: string;
       lastName: string;
+      headshotUrl: string | null;
     } | null;
   }>;
   abaFileUrl: string | null;
@@ -82,7 +88,7 @@ export async function getPayRun(id: string): Promise<PayRunDetail | null> {
   const approver = payRun.approvedById
     ? await prisma.person.findUnique({
         where: { id: payRun.approvedById },
-        select: { initials: true, firstName: true, lastName: true },
+        select: { initials: true, headshotUrl: true, firstName: true, lastName: true },
       })
     : null;
 
@@ -107,7 +113,7 @@ export async function getPayRun(id: string): Promise<PayRunDetail | null> {
     personIds.length
       ? prisma.person.findMany({
           where: { id: { in: personIds } },
-          select: { id: true, initials: true, firstName: true, lastName: true },
+          select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
         })
       : Promise.resolve([]),
   ]);

@@ -1,17 +1,28 @@
 'use server';
 
-import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { revalidateScheduleSurfaces } from '@/server/revalidate-schedule';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
+import { emitUserUpdateMany } from '@/server/user-updates';
 
 const TeamMemberSchema = z.object({
   personId: z.string().min(1),
   roleOnProject: z.string().trim().min(1).max(80),
   allocationPct: z.coerce.number().int().min(0).max(100),
+  /** Optional per-project pay-rate override. Form sends dollars (the
+   *  string from the input); empty / 0 means "no override — fall back
+   *  to Person.rate". Stored as cents on ProjectTeam.customRateCents. */
+  customRateDollars: z
+    .union([
+      z.coerce.number().min(0).max(10_000),
+      z.literal('').transform(() => null),
+    ])
+    .optional()
+    .nullable(),
 });
 
 const SchemaRoot = z.object({
@@ -36,10 +47,15 @@ export async function saveProjectTeam(
   const personIds = formData.getAll('personId').map(String);
   const roles = formData.getAll('roleOnProject').map(String);
   const allocs = formData.getAll('allocationPct').map(String);
+  const customRates = formData.getAll('customRateDollars').map(String);
   const members = personIds.map((personId, i) => ({
     personId,
     roleOnProject: roles[i] ?? '',
     allocationPct: Number(allocs[i] ?? 0),
+    customRateDollars:
+      customRates[i] !== undefined && customRates[i] !== ''
+        ? Number(customRates[i])
+        : null,
   }));
 
   const parsed = SchemaRoot.safeParse({ projectId, members });
@@ -73,6 +89,10 @@ export async function saveProjectTeam(
       }
       // Upsert current
       for (const m of parsed.data.members) {
+        const customRateCents =
+          typeof m.customRateDollars === 'number' && m.customRateDollars > 0
+            ? Math.round(m.customRateDollars * 100)
+            : null;
         await tx.projectTeam.upsert({
           where: {
             projectId_personId: { projectId, personId: m.personId },
@@ -82,10 +102,12 @@ export async function saveProjectTeam(
             personId: m.personId,
             roleOnProject: m.roleOnProject,
             allocationPct: m.allocationPct,
+            customRateCents,
           },
           update: {
             roleOnProject: m.roleOnProject,
             allocationPct: m.allocationPct,
+            customRateCents,
           },
         });
       }
@@ -105,12 +127,43 @@ export async function saveProjectTeam(
         },
         source: 'web',
       });
+
+      // Per-person allocation feed. Self-edits are filtered so
+      // partners/managers don't get a chime for adding themselves.
+      const addedIds = parsed.data.members
+        .filter((m) => !beforeIds.has(m.personId))
+        .map((m) => m.personId)
+        .filter((id) => id !== session.person.id);
+      const removedIds = before
+        .filter((b) => !afterIds.has(b.personId))
+        .map((b) => b.personId)
+        .filter((id) => id !== session.person.id);
+
+      await emitUserUpdateMany(tx, addedIds, {
+        kind: 'project_allocated',
+        title: `You were allocated to ${project.code}`,
+        body: null,
+        href: `/projects/${project.code}`,
+        entityType: 'project',
+        entityId: project.id,
+      });
+      await emitUserUpdateMany(tx, removedIds, {
+        kind: 'project_unallocated',
+        title: `You were removed from ${project.code}`,
+        body: null,
+        href: `/projects/${project.code}`,
+        entityType: 'project',
+        entityId: project.id,
+      });
     });
   } catch (err) {
     console.error('[project-team.save] failed:', err);
     return { status: 'error', message: 'Save failed — try again.' };
   }
 
-  revalidatePath(`/projects/${project.code}`);
+  // Reconcile schedule surfaces — adding / removing a team member
+  // changes utilisation on the heatmap, the resource pool, and the
+  // dashboard team-week. The redirect below covers the project page.
+  revalidateScheduleSurfaces({ projectCode: project.code });
   redirect(`/projects/${project.code}`);
 }

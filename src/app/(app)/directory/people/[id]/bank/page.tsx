@@ -25,6 +25,7 @@ export default async function BankDetailsPage({
       firstName: true,
       lastName: true,
       initials: true,
+      headshotUrl: true,
       email: true,
       employment: true,
       bankBsb: true,

@@ -28,38 +28,58 @@ function ym(d: Date): string {
 }
 
 export async function computeProjectPnL(projectId: string): Promise<ProjectPnL> {
-  const [project, invoices, expenses, bills, tsEntries] = await Promise.all([
-    prisma.project.findUniqueOrThrow({
-      where: { id: projectId },
-      select: { contractValue: true },
-    }),
-    prisma.invoice.findMany({
-      where: { projectId },
-      select: {
-        amountExGst: true,
-        amountTotal: true,
-        paymentReceivedAmount: true,
-        status: true,
-        issueDate: true,
-      },
-    }),
-    prisma.expense.findMany({
-      where: { projectId, status: { in: ['approved', 'reimbursed', 'batched_for_payment'] } },
-      select: { amount: true, gst: true, date: true },
-    }),
-    prisma.bill.findMany({
-      where: { projectId, status: { in: ['approved', 'scheduled_for_payment', 'paid'] } },
-      select: { amountTotal: true, gst: true, issueDate: true },
-    }),
-    prisma.timesheetEntry.findMany({
-      where: { projectId, status: { in: ['approved', 'billed'] } },
-      select: {
-        hours: true,
-        date: true,
-        person: { select: { rate: true } },
-      },
-    }),
-  ]);
+  // Serialized fan-out — Supabase's session-mode pgbouncer caps us at 15
+  // connections and the project page already calls several helpers each
+  // with their own internal Promise.all. Issuing these one-by-one keeps
+  // peak concurrency low. Per-query latency is small (<150ms) so the
+  // total stays well under the page's render budget.
+  const project = await prisma.project.findUniqueOrThrow({
+    where: { id: projectId },
+    select: { contractValue: true },
+  });
+  const invoices = await prisma.invoice.findMany({
+    where: { projectId },
+    select: {
+      amountExGst: true,
+      amountTotal: true,
+      paymentReceivedAmount: true,
+      status: true,
+      issueDate: true,
+    },
+  });
+  const expenses = await prisma.expense.findMany({
+    where: { projectId, status: { in: ['approved', 'reimbursed', 'batched_for_payment'] } },
+    select: { amount: true, gst: true, date: true },
+  });
+  const bills = await prisma.bill.findMany({
+    where: { projectId, status: { in: ['approved', 'scheduled_for_payment', 'paid'] } },
+    select: { amountTotal: true, gst: true, issueDate: true },
+  });
+  const tsEntries = await prisma.timesheetEntry.findMany({
+    where: { projectId, status: { in: ['approved', 'billed'] } },
+    select: {
+      hours: true,
+      date: true,
+      personId: true,
+      person: { select: { rate: true } },
+    },
+  });
+  // Per-project rate overrides — when a ProjectTeam row carries a
+  // customRateCents we use that for every hour the person logs on
+  // this project. Falls back to Person.rate when no override is set
+  // (or for ghost contributors without a roster row).
+  const teamRates = await prisma.projectTeam.findMany({
+    where: { projectId },
+    select: { personId: true, customRateCents: true },
+  });
+  const customRateByPerson = new Map<string, number>();
+  for (const t of teamRates) {
+    if (t.customRateCents !== null && t.customRateCents !== undefined) {
+      customRateByPerson.set(t.personId, t.customRateCents);
+    }
+  }
+  const costRateFor = (personId: string, fallback: number | null): number =>
+    customRateByPerson.get(personId) ?? fallback ?? 0;
 
   const revInvoiced = invoices
     .filter((i) => ['approved', 'sent', 'partial', 'paid'].includes(i.status))
@@ -77,7 +97,7 @@ export async function computeProjectPnL(projectId: string): Promise<ProjectPnL> 
   for (const e of tsEntries) {
     const h = Number(e.hours);
     hours += h;
-    timesheetCost += Math.round(h * (e.person.rate ?? 0));
+    timesheetCost += Math.round(h * costRateFor(e.personId, e.person.rate));
   }
 
   const monthlyMap = new Map<string, { revenue: number; cost: number }>();
@@ -96,7 +116,11 @@ export async function computeProjectPnL(projectId: string): Promise<ProjectPnL> 
   for (const e of expenses) bump(ym(e.date), { cost: e.amount - e.gst });
   for (const b of bills) bump(ym(b.issueDate), { cost: b.amountTotal - b.gst });
   for (const t of tsEntries) {
-    bump(ym(t.date), { cost: Math.round(Number(t.hours) * (t.person.rate ?? 0)) });
+    bump(ym(t.date), {
+      cost: Math.round(
+        Number(t.hours) * costRateFor(t.personId, t.person.rate),
+      ),
+    });
   }
   const monthly = Array.from(monthlyMap.entries())
     .sort(([a], [b]) => a.localeCompare(b))

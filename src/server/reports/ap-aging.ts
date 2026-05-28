@@ -16,7 +16,9 @@ export type AgedBill = {
   status: string;
   daysOverdue: number;
   bucket: AgingKey;
-  project: { code: string; name: string } | null;
+  rebillable: boolean;
+  rebilledOnInvoiceId: string | null;
+  project: { id: string; code: string; name: string } | null;
 };
 
 export type SupplierAging = {
@@ -34,6 +36,9 @@ export type FirmApAging = {
   billCount: number;
   oldestOverdueDays: number | null;
   bySupplier: SupplierAging[];
+  /** Bills marked rebillable but not yet forwarded to a client invoice. */
+  rebillablePendingCents: number;
+  rebillablePendingCount: number;
 };
 
 const OPEN_STATUSES: BillStatus[] = ['approved', 'scheduled_for_payment'];
@@ -59,7 +64,7 @@ export async function computeFirmApAging(): Promise<FirmApAging> {
     where: { status: { in: OPEN_STATUSES } },
     orderBy: { dueDate: 'asc' },
     include: {
-      project: { select: { code: true, name: true } },
+      project: { select: { id: true, code: true, name: true } },
     },
   });
 
@@ -80,7 +85,11 @@ export async function computeFirmApAging(): Promise<FirmApAging> {
       status: b.status,
       daysOverdue,
       bucket: bucketForDays(daysOverdue),
-      project: b.project ? { code: b.project.code, name: b.project.name } : null,
+      rebillable: b.rebillable,
+      rebilledOnInvoiceId: b.rebilledOnInvoiceId,
+      project: b.project
+        ? { id: b.project.id, code: b.project.code, name: b.project.name }
+        : null,
     };
   });
 
@@ -92,10 +101,16 @@ export async function computeFirmApAging(): Promise<FirmApAging> {
     '90+': 0,
   };
   let oldestOverdueDays: number | null = null;
+  let rebillablePendingCents = 0;
+  let rebillablePendingCount = 0;
   for (const b of aged) {
     bucketTotals[b.bucket] += b.amountTotalCents;
     if (b.daysOverdue > 0 && (oldestOverdueDays === null || b.daysOverdue > oldestOverdueDays)) {
       oldestOverdueDays = b.daysOverdue;
+    }
+    if (b.rebillable && !b.rebilledOnInvoiceId) {
+      rebillablePendingCents += b.amountTotalCents;
+      rebillablePendingCount += 1;
     }
   }
 
@@ -140,5 +155,7 @@ export async function computeFirmApAging(): Promise<FirmApAging> {
     billCount: aged.length,
     oldestOverdueDays,
     bySupplier,
+    rebillablePendingCents,
+    rebillablePendingCount,
   };
 }

@@ -42,44 +42,66 @@ export type Capability =
   | 'agent.run_manual'
   | 'auditlog.view'
   | 'approval.policy.edit'
-  | 'timesheet.submit';
+  | 'timesheet.submit'
+  // Partner scorecard (firm-wide partner-attribution view) is
+  // gated by capability so Associate Partners can be excluded
+  // without losing other partner-level rights. Per the AP tier
+  // definition (junior to partner): they DON'T see scorecard but
+  // DO get invoice approval, BD ownership, project leadership.
+  | 'partner.scorecard.view'
+  // Recruitment pipeline — kanban tracker for prospective hires.
+  // Super-admin only since the hiring decision is firm-leadership
+  // material and the surface contains pre-employment notes about
+  // candidates. Different to `person.create` (which is the act of
+  // adding the resulting hire) — this is the pre-hire funnel only.
+  | 'recruit.manage'
+  // DocuSign — initiate e-signature on a contract (CSA / Work Order
+  // / contractor agreement / etc). Partner-tier+ because the act of
+  // sending creates legal commitment; managers can prepare a doc
+  // but the partner needs to send it for signature.
+  | 'docusign.send';
 
 export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
-  // Invoices
+  // Invoices — AP gets the same approval + create rights as partner.
+  // Over-$20k still super_admin only.
   'invoice.approve.over_20k': ['super_admin'],
-  'invoice.approve.under_20k': ['super_admin', 'admin', 'partner'],
-  'invoice.create': ['super_admin', 'admin', 'partner', 'manager'],
-  'invoice.send': ['super_admin', 'admin', 'partner'],
+  'invoice.approve.under_20k': ['super_admin', 'admin', 'partner', 'associate_partner'],
+  'invoice.create': ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'],
+  'invoice.send': ['super_admin', 'admin', 'partner', 'associate_partner'],
   // Delete only allowed for pre-approval invoices (draft / pending_approval).
   // Once approved / pushed to Xero, use Xero's void flow instead.
-  'invoice.delete_draft': ['super_admin', 'admin', 'partner'],
+  'invoice.delete_draft': ['super_admin', 'admin', 'partner', 'associate_partner'],
 
-  // Expenses
+  // Expenses — AP can approve under-$2k (same tier as manager). Over-$2k
+  // stays super_admin only.
   'expense.approve.over_2k': ['super_admin'],
-  // manager: restricted to own project at the handler level
-  'expense.approve.under_2k': ['super_admin', 'admin', 'manager'],
-  'expense.submit': ['super_admin', 'admin', 'partner', 'manager', 'staff'],
+  // manager / AP: restricted to own project at the handler level
+  'expense.approve.under_2k': ['super_admin', 'admin', 'associate_partner', 'manager'],
+  'expense.submit': ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'],
 
-  // Bills (AP)
+  // Bills (AP) — bill approval still super_admin only; bill creation
+  // opened to AP since they manage projects that incur vendor bills.
   'bill.approve': ['super_admin'],
-  'bill.create': ['super_admin', 'admin'],
+  'bill.create': ['super_admin', 'admin', 'associate_partner'],
   // Only pre-approval bills can be deleted. Approved/scheduled/paid bills are
   // either in Xero or attached to a pay-run — void there, not here.
-  'bill.delete_draft': ['super_admin', 'admin'],
+  'bill.delete_draft': ['super_admin', 'admin', 'associate_partner'],
 
-  // Pay run
+  // Pay run — unchanged. AP isn't in the pay-run decision chain.
   'payrun.approve': ['super_admin'],
   'payrun.create': ['super_admin', 'admin'],
 
-  // Projects
-  'project.create': ['super_admin', 'admin', 'partner'],
-  // manager/partner: restricted to own projects at the handler level
-  'project.edit': ['super_admin', 'admin', 'partner', 'manager'],
+  // Projects — AP can create + edit projects (they lead them).
+  'project.create': ['super_admin', 'admin', 'partner', 'associate_partner'],
+  // manager / partner / AP: restricted to own projects at the handler level
+  'project.edit': ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'],
   // Hard delete only for super_admin — and handler refuses if the project has
   // any financial children (invoices / bills / expenses / timesheets / deals).
   'project.delete': ['super_admin'],
 
-  // Directory
+  // Directory — AP doesn't get directory-admin rights (person create /
+  // edit / delete stays admin+). They can still read the directory like
+  // anyone else.
   'person.create': ['super_admin', 'admin'],
   'person.edit': ['super_admin', 'admin'],
   // Hard-delete a Person only when they have no transactional footprint at all
@@ -88,27 +110,54 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   // end-of-tenure cases, archive is the right tool — this is strictly for
   // cleaning up mistyped / never-used Person rows.
   'person.delete': ['super_admin'],
-  'client.create': ['super_admin', 'admin', 'partner'],
-  'client.edit': ['super_admin', 'admin', 'partner'],
-  'deal.create': ['super_admin', 'admin', 'partner'],
-  'deal.edit': ['super_admin', 'admin', 'partner'],
+  'client.create': ['super_admin', 'admin', 'partner', 'associate_partner'],
+  'client.edit': ['super_admin', 'admin', 'partner', 'associate_partner'],
+  'deal.create': ['super_admin', 'admin', 'partner', 'associate_partner'],
+  'deal.edit': ['super_admin', 'admin', 'partner', 'associate_partner'],
   // Client hard-delete: super_admin only, and handler refuses if the client has
   // any projects / deals / invoices attached. No soft-archive yet — add it with
   // a migration when mid-engagement "close" becomes a need.
   'client.delete': ['super_admin'],
 
-  // Rate card
+  // Rate card — AP can read the rate card (they need it to price work)
+  // but only super_admin can edit it.
   'ratecard.edit': ['super_admin'],
-  'ratecard.view': ['super_admin', 'admin', 'partner'],
+  'ratecard.view': ['super_admin', 'admin', 'partner', 'associate_partner'],
 
-  // System
+  // System — AP isn't in the firm-admin tier.
   'integration.manage': ['super_admin'],
   'agent.run_manual': ['super_admin', 'admin'],
   'auditlog.view': ['super_admin'],
   'approval.policy.edit': ['super_admin'],
 
   // Self-service
-  'timesheet.submit': ['super_admin', 'admin', 'partner', 'manager', 'staff'],
+  'timesheet.submit': ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'],
+
+  // Partner scorecard — explicitly EXCLUDES AP per the AP tier
+  // definition. Junior to partner: no scorecard visibility even
+  // though they share most other partner-level rights.
+  'partner.scorecard.view': ['super_admin', 'admin', 'partner'],
+
+  // Talent pipeline — leadership tier. Originally super_admin only,
+  // opened to admin / partner / AP / manager so leaders on the
+  // ground (who do most of the sourcing through their networks) can
+  // input prospects + be assigned as owners. The pre-employment
+  // notes are still sensitive but the audit-event trail captures
+  // every view + edit per A9.
+  'recruit.manage': [
+    'super_admin',
+    'admin',
+    'partner',
+    'associate_partner',
+    'manager',
+  ],
+
+  // DocuSign send — partner-tier+ (legal commitment). Managers
+  // explicitly excluded since signing authority sits at the
+  // partner / AP tier. Integration configuration (Connect setup,
+  // JWT key rotation) stays gated on `integration.manage` which
+  // is super_admin only.
+  'docusign.send': ['super_admin', 'admin', 'partner', 'associate_partner'],
 };
 
 export function hasCapability(session: Session | null, capability: Capability): boolean {

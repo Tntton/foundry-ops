@@ -9,24 +9,72 @@ import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
 
 const DealCreate = z.object({
-  code: z
+  name: z.string().trim().max(200).optional().or(z.literal('').transform(() => null)),
+  stage: z.enum(['lead', 'qualifying', 'proposal', 'negotiation', 'won', 'lost']),
+  sector: z.string().trim().max(60).optional().or(z.literal('').transform(() => null)),
+  // Second-level classification under sector (e.g. provider →
+  // cardiology, telehealth-vertical). Only meaningful when `sector`
+  // is set; the schema doesn't enforce that link — the UI does.
+  sectorSubtype: z
     .string()
     .trim()
-    .regex(/^[A-Z][A-Z0-9-]{2,14}$/u, '3-15 uppercase letters/digits/hyphens, letter first'),
-  name: z.string().trim().min(3).max(200),
-  stage: z.enum(['lead', 'qualifying', 'proposal', 'negotiation', 'won', 'lost']),
-  expectedValueDollars: z.coerce.number().min(0).max(100_000_000),
-  probability: z.coerce.number().int().min(0).max(100),
-  targetCloseDate: z.string().trim().optional().nullable(),
+    .max(60)
+    .optional()
+    .or(z.literal('').transform(() => null)),
+  clientType: z.string().trim().max(60).optional().or(z.literal('').transform(() => null)),
+  engagementType: z
+    .string()
+    .trim()
+    .max(60)
+    .optional()
+    .or(z.literal('').transform(() => null)),
+  // Both fields are optional at deal-creation time — early-stage leads
+  // often don't have a sized scope yet. Empty / blank inputs coerce to 0
+  // so the UI shows "—" / 0% until the partner fills them in later via
+  // the deal detail page. The schema still rejects nonsense like negative
+  // numbers and absurd magnitudes.
+  expectedValueDollars: z
+    .union([z.literal(''), z.coerce.number().min(0).max(100_000_000)])
+    .optional()
+    .transform((v) => (v === '' || v === undefined ? 0 : v)),
+  probability: z
+    .union([z.literal(''), z.coerce.number().int().min(0).max(100)])
+    .optional()
+    .transform((v) => (v === '' || v === undefined ? 0 : v)),
   ownerId: z.string().min(1),
+  // Optional co-lead / secondary relationship holder. Empty string
+  // coerces to null so the form's "— None —" option flows through.
+  secondaryOwnerId: z
+    .string()
+    .trim()
+    .optional()
+    .or(z.literal('').transform(() => null))
+    .nullable(),
   clientId: z.string().optional().nullable(),
   prospectiveName: z.string().trim().max(200).optional().nullable(),
+  prospectiveProjectDetail: z.string().trim().max(4000).optional().nullable(),
+  firstConversationAt: z.string().trim().optional().nullable(),
+  lastConversationAt: z.string().trim().optional().nullable(),
   notes: z.string().trim().max(4000).optional().nullable(),
+  contactName: z.string().trim().max(200).optional().nullable(),
+  contactRole: z.string().trim().max(200).optional().nullable(),
+  contactEmail: z.string().trim().max(200).optional().nullable(),
+  contactPhone: z.string().trim().max(40).optional().nullable(),
 });
 
 export type NewDealState =
   | { status: 'idle' }
   | { status: 'error'; message: string; fieldErrors?: Record<string, string> };
+
+async function generateDealCode(): Promise<string> {
+  const today = new Date();
+  const y = today.getUTCFullYear();
+  const m = String(today.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(today.getUTCDate()).padStart(2, '0');
+  const prefix = `BD-${y}${m}${d}`;
+  const same = await prisma.deal.count({ where: { code: { startsWith: prefix } } });
+  return `${prefix}-${String(same + 1).padStart(2, '0')}`;
+}
 
 export async function createDeal(
   _prev: NewDealState,
@@ -40,16 +88,26 @@ export async function createDeal(
   }
 
   const raw = {
-    code: String(formData.get('code') ?? '').toUpperCase(),
-    name: formData.get('name'),
+    name: formData.get('name') || null,
     stage: formData.get('stage') ?? 'lead',
+    sector: formData.get('sector') || null,
+    sectorSubtype: formData.get('sectorSubtype') || null,
+    clientType: formData.get('clientType') || null,
+    engagementType: formData.get('engagementType') || null,
     expectedValueDollars: formData.get('expectedValueDollars'),
     probability: formData.get('probability'),
-    targetCloseDate: formData.get('targetCloseDate') || null,
     ownerId: formData.get('ownerId'),
+    secondaryOwnerId: formData.get('secondaryOwnerId') || null,
     clientId: formData.get('clientId') || null,
     prospectiveName: formData.get('prospectiveName') || null,
+    prospectiveProjectDetail: formData.get('prospectiveProjectDetail') || null,
+    firstConversationAt: formData.get('firstConversationAt') || null,
+    lastConversationAt: formData.get('lastConversationAt') || null,
     notes: formData.get('notes') || null,
+    contactName: formData.get('contactName') || null,
+    contactRole: formData.get('contactRole') || null,
+    contactEmail: formData.get('contactEmail') || null,
+    contactPhone: formData.get('contactPhone') || null,
   };
 
   const parsed = DealCreate.safeParse(raw);
@@ -66,46 +124,66 @@ export async function createDeal(
   if (!data.clientId && !data.prospectiveName) {
     return {
       status: 'error',
-      message: 'Either pick an existing client or type the prospective company name.',
+      message: 'Pick an existing client or type the prospective organisation name.',
       fieldErrors: { clientId: 'Required (or prospective name)' },
     };
   }
 
-  const existingCode = await prisma.deal.findUnique({ where: { code: data.code } });
-  if (existingCode) {
-    return {
-      status: 'error',
-      message: 'Code already in use.',
-      fieldErrors: { code: 'Already used' },
-    };
-  }
-
   const expectedValue = Math.round(data.expectedValueDollars * 100);
-  let targetCloseDate: Date | null = null;
-  if (data.targetCloseDate) {
-    const d = new Date(data.targetCloseDate);
-    if (!Number.isNaN(d.getTime())) targetCloseDate = d;
-  }
+  const firstConvAt = data.firstConversationAt
+    ? (() => {
+        const d = new Date(data.firstConversationAt!);
+        return Number.isNaN(d.getTime()) ? null : d;
+      })()
+    : null;
+  const lastConvAt = data.lastConversationAt
+    ? (() => {
+        const d = new Date(data.lastConversationAt!);
+        return Number.isNaN(d.getTime()) ? null : d;
+      })()
+    : null;
+
+  const code = await generateDealCode();
 
   let newId: string;
   try {
     newId = await prisma.$transaction(async (tx) => {
       const deal = await tx.deal.create({
         data: {
-          code: data.code,
-          name: data.name,
+          code,
+          name: data.name ?? null,
           stage: data.stage,
+          sector: data.sector ?? null,
+          sectorSubtype: data.sectorSubtype ?? null,
+          clientType: data.clientType ?? null,
+          engagementType: data.engagementType ?? null,
           expectedValue,
           probability: data.probability,
-          targetCloseDate,
           ownerId: data.ownerId,
+          secondaryOwnerId: data.secondaryOwnerId ?? null,
+          firstConversationAt: firstConvAt,
+          lastConversationAt: lastConvAt,
           ...(data.clientId ? { clientId: data.clientId } : {}),
           ...(data.prospectiveName && !data.clientId
             ? { prospectiveName: data.prospectiveName }
             : {}),
+          ...(data.prospectiveProjectDetail
+            ? { prospectiveProjectDetail: data.prospectiveProjectDetail }
+            : {}),
           ...(data.notes ? { notes: data.notes } : {}),
         },
       });
+      if (data.contactName) {
+        await tx.dealContact.create({
+          data: {
+            dealId: deal.id,
+            name: data.contactName,
+            role: data.contactRole ?? null,
+            email: data.contactEmail ?? null,
+            phone: data.contactPhone ?? null,
+          },
+        });
+      }
       await writeAudit(tx, {
         actor: { type: 'person', id: session.person.id },
         action: 'created',
@@ -116,6 +194,9 @@ export async function createDeal(
             code: deal.code,
             name: deal.name,
             stage: deal.stage,
+            sector: deal.sector,
+            clientType: deal.clientType,
+            engagementType: deal.engagementType,
             expectedValue: deal.expectedValue,
             probability: deal.probability,
             clientId: deal.clientId,
@@ -134,3 +215,9 @@ export async function createDeal(
   revalidatePath('/bd');
   redirect(`/bd/${newId}`);
 }
+
+// Note: `'use server'` files in Next 14 may only export async functions.
+// A previous version of this file re-exported a Zod schema for ostensible
+// "backwards compat", which raised an "invalid-use-server-value" build
+// error (digest 1952080106) the first time the bd/new POST hit. Schemas
+// live inline now and don't get re-exported.

@@ -16,7 +16,10 @@ const mkSession = (roles: Role[]): Session => ({
     lastName: 'Y',
     initials: 'XY',
     roles,
+    headshotUrl: null,
   },
+  isRealSuperAdmin: roles.includes('super_admin'),
+  viewAsRoles: null,
 });
 
 const ALL_CAPS: Capability[] = Object.keys(CAPABILITY_ROLES) as Capability[];

@@ -5,9 +5,10 @@ import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { getPerson } from '@/server/directory';
 import { prisma } from '@/server/db';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { HeadshotEditButton } from '@/components/headshot-edit-button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
@@ -19,10 +20,19 @@ import {
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatFte, formatRateCents } from '@/lib/format';
+import { countryName } from '@/lib/countries';
+import {
+  listPersonTimesheetEntries,
+  listContractorBillableEntries,
+} from '@/server/timesheet';
 import {
   ArchivePersonButton,
   ReactivatePersonButton,
 } from './archive/dialog';
+import { InactiveToggleButton } from './inactive/inactive-toggle';
+import { InlineField } from './inline-field';
+import { CvUploadPanel } from './cv/cv-upload-panel';
+import { EducationWorkPanel } from './cv/education-work-panel';
 
 function formatMoney(cents: number): string {
   if (cents === 0) return '—';
@@ -65,6 +75,12 @@ export default async function PersonDetailPage({
 
   const canSeePay = hasCapability(session, 'ratecard.view');
   const canEdit = hasCapability(session, 'person.edit');
+  // Inline-editable fields are looser — anyone can update their OWN
+  // contact info (phone / WhatsApp / LinkedIn / mailing / emergency
+  // contact). Admins / partners can edit anyone's. Privileged fields
+  // (band, level, employment, fte, region, roles) still route through
+  // the deliberate full-form edit page.
+  const canInlineEdit = canEdit || params.id === session.person.id;
   const canDelete = hasCapability(session, 'person.delete');
   const tempPassword = searchParams.tempPassword;
 
@@ -232,6 +248,46 @@ export default async function PersonDetailPage({
     ? prisma.bill.count({ where: { supplierPersonId: person.id } })
     : Promise.resolve(0));
 
+  // Time tab: recent entries (last 12 weeks) + contractor billable summary.
+  const timeFromDate = new Date();
+  timeFromDate.setUTCDate(timeFromDate.getUTCDate() - 12 * 7);
+  const recentTimesheetEntries = await listPersonTimesheetEntries(person.id, {
+    from: timeFromDate,
+  });
+  const contractorBillable =
+    person.employment === 'contractor'
+      ? await listContractorBillableEntries(person.id)
+      : null;
+
+  // CV-derived entries — sequential to keep the connection pool tame.
+  const cvEducation = await prisma.educationEntry.findMany({
+    where: { personId: person.id },
+    orderBy: { sortOrder: 'asc' },
+    select: {
+      id: true,
+      institution: true,
+      degree: true,
+      field: true,
+      startYear: true,
+      endYear: true,
+      notes: true,
+    },
+  });
+  const cvWork = await prisma.workHistoryEntry.findMany({
+    where: { personId: person.id },
+    orderBy: { sortOrder: 'asc' },
+    select: {
+      id: true,
+      company: true,
+      title: true,
+      location: true,
+      startYear: true,
+      endYear: true,
+      current: true,
+      description: true,
+    },
+  });
+
   return (
     <div className="space-y-6">
       <div className="text-sm">
@@ -242,9 +298,21 @@ export default async function PersonDetailPage({
 
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-4">
-          <Avatar className="h-14 w-14">
-            <AvatarFallback className="text-base">{person.initials}</AvatarFallback>
-          </Avatar>
+          {person.headshotUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={person.headshotUrl}
+              alt={`${person.firstName} ${person.lastName}`}
+              className="h-14 w-14 rounded-full border border-line object-cover"
+            />
+          ) : (
+            <PersonAvatar
+  className="h-14 w-14"
+  fallbackClassName="text-base"
+  initials={person.initials}
+  headshotUrl={person.headshotUrl}
+/>
+          )}
           <div>
             <h1 className="text-xl font-semibold text-ink">
               {person.firstName} {person.lastName}
@@ -258,7 +326,11 @@ export default async function PersonDetailPage({
             </div>
             <div className="mt-2 flex items-center gap-2">
               {person.active ? (
-                <Badge variant="green">Active</Badge>
+                person.inactive ? (
+                  <Badge variant="amber">Inactive</Badge>
+                ) : (
+                  <Badge variant="green">Active</Badge>
+                )
               ) : (
                 <Badge variant="outline">Ended</Badge>
               )}
@@ -270,29 +342,80 @@ export default async function PersonDetailPage({
                   {r.replace('_', ' ')}
                 </Badge>
               ))}
+              {person.poolStatusOverride && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full border border-line bg-card px-2 py-0.5 text-[10px] text-ink-2"
+                  title="Pool status manually set by a super admin"
+                >
+                  <span
+                    className={`inline-block h-1.5 w-1.5 rounded-full ${
+                      person.poolStatusOverride === 'on_project'
+                        ? 'bg-status-green'
+                        : person.poolStatusOverride === 'never_on_project'
+                          ? 'bg-status-red'
+                          : person.poolStatusOverride === 'on_sabbatical'
+                            ? 'bg-ink-4'
+                            : 'bg-ink-3'
+                    }`}
+                  />
+                  {person.poolStatusOverride
+                    .replace(/_/g, ' ')
+                    .replace(/^./, (c) => c.toUpperCase())}
+                </span>
+              )}
             </div>
           </div>
         </div>
-        {canEdit && (
-          <div className="flex items-center gap-2">
-            <Button asChild variant="outline">
-              <Link href={`/directory/people/${person.id}/edit`}>Edit</Link>
-            </Button>
-            {person.active ? (
-              <ArchivePersonButton
+        <div className="flex items-center gap-2">
+          {/* Inactive toggle is available even when canEdit=false, since
+               anyone can pause their own profile. */}
+          {person.active &&
+            (canEdit || person.id === session.person.id) && (
+              <InactiveToggleButton
                 personId={person.id}
-                personEmail={person.email}
-                personName={`${person.firstName} ${person.lastName}`}
+                isInactive={person.inactive}
                 isSelf={person.id === session.person.id}
-                canDelete={canDelete && person.id !== session.person.id}
-                deleteBlockers={deleteBlockers}
+                personFirstName={person.firstName}
               />
-            ) : (
-              <ReactivatePersonButton personId={person.id} />
             )}
-          </div>
-        )}
+          {canEdit && (
+            <>
+              {hasAnyRole(session, ['super_admin']) &&
+                person.id !== session.person.id && (
+                  <Button asChild variant="outline">
+                    <Link href={`/timesheet?personId=${person.id}`}>
+                      View timesheet
+                    </Link>
+                  </Button>
+                )}
+              <Button asChild variant="outline">
+                <Link href={`/directory/people/${person.id}/edit`}>Edit</Link>
+              </Button>
+              {person.active ? (
+                <ArchivePersonButton
+                  personId={person.id}
+                  personEmail={person.email}
+                  personName={`${person.firstName} ${person.lastName}`}
+                  isSelf={person.id === session.person.id}
+                  canDelete={canDelete && person.id !== session.person.id}
+                  deleteBlockers={deleteBlockers}
+                />
+              ) : (
+                <ReactivatePersonButton personId={person.id} />
+              )}
+            </>
+          )}
+        </div>
       </div>
+
+      {person.active && person.inactive && (
+        <div className="rounded-md border border-status-amber bg-status-amber-soft/40 px-4 py-3 text-sm text-status-amber">
+          <strong>Profile inactive</strong> · all input surfaces
+          (timesheet, availability, expenses) are disabled until the
+          profile is reactivated. Visible in the directory and the
+          resource-planning pool.
+        </div>
+      )}
 
       {tempPassword && (
         <div className="rounded-md border border-status-amber bg-status-amber-soft px-4 py-3 text-sm text-status-amber">
@@ -310,24 +433,90 @@ export default async function PersonDetailPage({
         <TabsList>
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="employment">Employment</TabsTrigger>
+          <TabsTrigger value="cv">CV</TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
+          <TabsTrigger value="time">Time</TabsTrigger>
           <TabsTrigger value="pay">Pay</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile">
+          {hasAnyRole(session, ['super_admin', 'admin']) && (
+            <Card className="mb-4">
+              <CardHeader>
+                <CardTitle>Headshot</CardTitle>
+                <CardDescription>
+                  Set / replace this person&apos;s headshot. Crop into a
+                  circular frame, drag to position, slide to zoom.
+                  Saves at 512×512 JPEG.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <HeadshotEditButton
+                  currentUrl={person.headshotUrl}
+                  targetPersonId={person.id}
+                  label="Replace headshot"
+                />
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle>Contact</CardTitle>
-              <CardDescription>Reachable at</CardDescription>
+              <CardDescription>
+                Click any value to edit inline. Country / band / level
+                still flow through the deliberate edit form.
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
               <Field label="Email">
                 <span className="font-mono">{person.email}</span>
               </Field>
-              <Field label="Phone">{person.phone ?? '—'}</Field>
-              <Field label="WhatsApp">{person.whatsappNumber ?? '—'}</Field>
-              <Field label="Region">{person.region}</Field>
+              <Field label="Phone">
+                <InlineField
+                  personId={person.id}
+                  field="phone"
+                  type="tel"
+                  initialValue={person.phone}
+                  canEdit={canInlineEdit}
+                  placeholder="+61 4xx xxx xxx"
+                />
+              </Field>
+              <Field label="WhatsApp">
+                <InlineField
+                  personId={person.id}
+                  field="whatsappNumber"
+                  type="tel"
+                  initialValue={person.whatsappNumber}
+                  canEdit={canInlineEdit}
+                  placeholder="+61 4xx xxx xxx"
+                />
+              </Field>
+              <Field label="LinkedIn">
+                <InlineField
+                  personId={person.id}
+                  field="linkedinUrl"
+                  type="url"
+                  initialValue={person.linkedinUrl}
+                  canEdit={canInlineEdit}
+                  placeholder="linkedin.com/in/username"
+                />
+              </Field>
+              <Field label="Country">
+                <span className="font-mono">{person.region}</span>
+                <span className="ml-2 text-ink-3">{countryName(person.region)}</span>
+              </Field>
+              <Field label="Mailing address">
+                <InlineField
+                  personId={person.id}
+                  field="mailingAddress"
+                  initialValue={person.mailingAddress}
+                  canEdit={canInlineEdit}
+                  multiline
+                  placeholder="Street, suburb, state postcode"
+                />
+              </Field>
             </CardContent>
           </Card>
         </TabsContent>
@@ -343,13 +532,28 @@ export default async function PersonDetailPage({
               <Field label="Employment type">
                 {person.employment === 'ft' ? 'Full-time' : 'Contractor'}
               </Field>
-              <Field label="FTE">{formatFte(person.fte)}</Field>
+              <Field label="FTE">
+                {person.fte !== null ? formatFte(person.fte) : '—'}
+              </Field>
               <Field label="Start date">{person.startDate.toLocaleDateString('en-AU')}</Field>
               <Field label="End date">
                 {person.endDate ? person.endDate.toLocaleDateString('en-AU') : '—'}
               </Field>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="cv">
+          <div className="space-y-4">
+            <CvUploadPanel
+              personId={person.id}
+              canEdit={canInlineEdit}
+            />
+            <EducationWorkPanel
+              education={cvEducation}
+              work={cvWork}
+            />
+          </div>
         </TabsContent>
 
         <TabsContent value="activity">
@@ -606,6 +810,16 @@ export default async function PersonDetailPage({
           </div>
         </TabsContent>
 
+        <TabsContent value="time">
+          <PersonTimePanel
+            personId={person.id}
+            employment={person.employment}
+            entries={recentTimesheetEntries}
+            contractorBillable={contractorBillable}
+            canSeePay={canSeePay}
+          />
+        </TabsContent>
+
         <TabsContent value="pay">
           {canSeePay ? (
             <div className="space-y-4">
@@ -717,4 +931,298 @@ function TotalCard({ label, value, sub }: { label: string; value: string; sub?: 
       </CardContent>
     </Card>
   );
+}
+
+const TIME_STATUS_VARIANT: Record<
+  'draft' | 'submitted' | 'approved' | 'billed',
+  'outline' | 'amber' | 'green' | 'blue'
+> = {
+  draft: 'outline',
+  submitted: 'amber',
+  approved: 'green',
+  billed: 'blue',
+};
+
+function PersonTimePanel({
+  personId,
+  employment,
+  entries,
+  contractorBillable,
+  canSeePay,
+}: {
+  personId: string;
+  employment: 'ft' | 'contractor';
+  entries: Awaited<ReturnType<typeof listPersonTimesheetEntries>>;
+  contractorBillable: Awaited<ReturnType<typeof listContractorBillableEntries>> | null;
+  canSeePay: boolean;
+}) {
+  const totals = { draft: 0, submitted: 0, approved: 0, billed: 0 };
+  for (const e of entries) totals[e.status] += e.hours;
+
+  // Bucket by week → project for the recent grid.
+  type WeekRoll = {
+    weekStart: Date;
+    byProject: Map<string, { code: string; name: string; hours: number }>;
+    total: number;
+  };
+  const byWeek = new Map<string, WeekRoll>();
+  for (const e of entries) {
+    const ws = startOfWeekUTC(e.date);
+    const key = ws.toISOString();
+    const cur =
+      byWeek.get(key) ??
+      ({ weekStart: ws, byProject: new Map(), total: 0 } satisfies WeekRoll);
+    const proj =
+      cur.byProject.get(e.project.id) ??
+      ({ code: e.project.code, name: e.project.name, hours: 0 } as {
+        code: string;
+        name: string;
+        hours: number;
+      });
+    proj.hours += e.hours;
+    cur.byProject.set(e.project.id, proj);
+    cur.total += e.hours;
+    byWeek.set(key, cur);
+  }
+  const sortedWeeks = Array.from(byWeek.values()).sort(
+    (a, b) => b.weekStart.getTime() - a.weekStart.getTime(),
+  );
+
+  const billableTotalHours =
+    contractorBillable?.groups.reduce((s, g) => s + g.hours, 0) ?? 0;
+  const billableTotalCents =
+    contractorBillable?.groups.reduce((s, g) => s + g.billCents, 0) ?? 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <TotalCard label="Draft" value={`${totals.draft.toFixed(1)}h`} sub="last 12 weeks" />
+        <TotalCard
+          label="Submitted"
+          value={`${totals.submitted.toFixed(1)}h`}
+          sub="awaiting approval"
+        />
+        <TotalCard
+          label="Approved"
+          value={`${totals.approved.toFixed(1)}h`}
+          sub="in P&L"
+        />
+        <TotalCard
+          label="Billed"
+          value={`${totals.billed.toFixed(1)}h`}
+          sub="linked to invoice/bill"
+        />
+      </div>
+
+      {employment === 'contractor' && contractorBillable && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Approved &amp; unbilled</CardTitle>
+            <CardDescription>
+              Approved contractor hours not yet attached to a bill. Generate a draft
+              bill below — the entries get marked &ldquo;billed&rdquo; once you save.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {contractorBillable.groups.length === 0 ? (
+              <p className="py-4 text-center text-sm text-ink-3">
+                Nothing approved + unbilled right now.
+              </p>
+            ) : (
+              <>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Project</TableHead>
+                      <TableHead className="text-right">Hours</TableHead>
+                      {canSeePay && (
+                        <>
+                          <TableHead className="text-right">Cost</TableHead>
+                          <TableHead className="text-right">
+                            Bill amount{' '}
+                            {contractorBillable.billRate ? '(at billRate)' : '(at cost rate)'}
+                          </TableHead>
+                        </>
+                      )}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {contractorBillable.groups.map((g) => (
+                      <TableRow key={g.projectId}>
+                        <TableCell>
+                          <Link
+                            href={`/projects/${g.projectCode}`}
+                            className="hover:underline"
+                          >
+                            <span className="font-mono text-xs text-ink-3">
+                              {g.projectCode}
+                            </span>{' '}
+                            <span className="text-ink-2">{g.projectName}</span>
+                          </Link>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {g.hours.toFixed(2)}
+                        </TableCell>
+                        {canSeePay && (
+                          <>
+                            <TableCell className="text-right tabular-nums text-ink-3">
+                              {formatMoney(g.costCents)}
+                            </TableCell>
+                            <TableCell className="text-right font-semibold tabular-nums">
+                              {formatMoney(g.billCents)}
+                            </TableCell>
+                          </>
+                        )}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
+                  <div className="text-sm text-ink-3">
+                    <span className="text-ink">{billableTotalHours.toFixed(1)}h</span>{' '}
+                    across {contractorBillable.groups.length}{' '}
+                    {contractorBillable.groups.length === 1 ? 'project' : 'projects'}
+                    {canSeePay && (
+                      <>
+                        {' '}·{' '}
+                        <span className="font-semibold text-ink">
+                          {formatMoney(billableTotalCents)}
+                        </span>{' '}
+                        ready to bill
+                      </>
+                    )}
+                  </div>
+                  <Link
+                    href={`/directory/people/${personId}/draft-bill`}
+                    className="inline-flex h-9 items-center rounded-md bg-brand px-3 text-sm font-medium text-brand-ink hover:opacity-90"
+                  >
+                    Draft bill from these hours →
+                  </Link>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <Card className="p-0">
+        <CardHeader>
+          <CardTitle>Last 12 weeks · by week + project</CardTitle>
+          <CardDescription>
+            Newest first. Project links jump to the project hours tab. Hover/CSV for
+            descriptions.
+          </CardDescription>
+        </CardHeader>
+        {sortedWeeks.length === 0 ? (
+          <CardContent>
+            <p className="py-4 text-center text-sm text-ink-3">
+              No timesheet entries in the last 12 weeks.
+            </p>
+          </CardContent>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Week of</TableHead>
+                <TableHead>Project</TableHead>
+                <TableHead className="text-right">Hours</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sortedWeeks.map((w) =>
+                Array.from(w.byProject.values()).map((p, idx) => (
+                  <TableRow key={`${w.weekStart.toISOString()}|${p.code}`}>
+                    <TableCell className="text-xs tabular-nums text-ink-3">
+                      {idx === 0
+                        ? w.weekStart.toLocaleDateString('en-AU', {
+                            day: 'numeric',
+                            month: 'short',
+                          })
+                        : ''}
+                    </TableCell>
+                    <TableCell>
+                      <Link
+                        href={`/projects/${p.code}`}
+                        className="font-mono text-xs hover:underline"
+                      >
+                        {p.code}
+                      </Link>
+                      <span className="ml-2 text-xs text-ink-3">{p.name}</span>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {p.hours.toFixed(2)}
+                    </TableCell>
+                  </TableRow>
+                )),
+              )}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent entries</CardTitle>
+          <CardDescription>Newest 50 — full data via CSV.</CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Project</TableHead>
+                <TableHead className="text-right">Hours</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {entries.slice(0, 50).map((e) => (
+                <TableRow key={e.id}>
+                  <TableCell className="text-xs tabular-nums text-ink-3">
+                    {e.date.toLocaleDateString('en-AU')}
+                  </TableCell>
+                  <TableCell>
+                    <Link
+                      href={`/projects/${e.project.code}`}
+                      className="font-mono text-xs hover:underline"
+                    >
+                      {e.project.code}
+                    </Link>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {e.hours.toFixed(2)}
+                  </TableCell>
+                  <TableCell className="text-xs text-ink-3">
+                    {e.description ?? <span className="text-ink-4">—</span>}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={TIME_STATUS_VARIANT[e.status]} className="text-[10px]">
+                      {e.status}
+                    </Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          <div className="border-t border-line p-3 text-right">
+            <Link
+              href={`/api/reports/timesheet?personId=${personId}`}
+              className="text-xs text-brand hover:underline"
+            >
+              Download CSV →
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function startOfWeekUTC(date: Date): Date {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dow = d.getUTCDay();
+  const offset = dow === 0 ? -6 : 1 - dow;
+  d.setUTCDate(d.getUTCDate() + offset);
+  return d;
 }

@@ -6,9 +6,12 @@ import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EXPENSE_CATEGORIES, expenseCategoryLabel } from '@/lib/expense-categories';
+import { isHiddenFromAllocationPicker } from '@/lib/project-kind';
 import { XeroPushBillButton } from './xero-push-button';
 import { DeleteDraftBillButton } from './delete-button';
 import { MarkBillPaidButton, ScheduleBillButton } from './lifecycle-buttons';
+import { BillClassificationForm } from './classification-form';
 
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
@@ -34,6 +37,7 @@ export default async function BillDetailPage({ params }: { params: { id: string 
     where: { id: params.id },
     include: {
       project: { select: { id: true, code: true, name: true } },
+      attributedTo: { select: { id: true, firstName: true, lastName: true } },
     },
   });
   if (!bill) notFound();
@@ -47,6 +51,48 @@ export default async function BillDetailPage({ params }: { params: { id: string 
   const canSchedule = canApprove && bill.status === 'approved';
   const canMarkPaid =
     canApprove && (bill.status === 'approved' || bill.status === 'scheduled_for_payment');
+  // Admin can re-classify (project / cost type / associated user / cost
+  // centre) inline on the bill detail. Same capability that gates
+  // approve / push-to-Xero — these are the same "AP owner" set.
+  const canEditClassification = canApprove;
+
+  // Fetch picker options for admin — projects (non-archived, sorted
+  // with FHB/FHO/FHX OPEX buckets at the top), active people, and the
+  // canonical category list. Skip both queries cleanly for non-admin
+  // viewers so a Manager seeing a bill detail doesn't pay the cost.
+  const [projectsRaw, personsRaw] = await Promise.all([
+    canEditClassification
+      ? prisma.project.findMany({
+          where: { stage: { not: 'archived' } },
+          orderBy: { code: 'asc' },
+          select: { id: true, code: true, name: true },
+        })
+      : Promise.resolve([]),
+    canEditClassification
+      ? prisma.person.findMany({
+          where: { inactiveAt: null },
+          orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
+          select: { id: true, firstName: true, lastName: true },
+        })
+      : Promise.resolve([]),
+  ]);
+  // FHB000 + FHO000 are filtered out — only FHX000 surfaces as a
+  // sort-to-top OPEX option. See `isHiddenFromAllocationPicker` for
+  // the rationale (TT decision 2026-05-11).
+  const visibleProjects = projectsRaw.filter(
+    (p) => !isHiddenFromAllocationPicker(p.code),
+  );
+  const bucketProjects = visibleProjects.filter((p) => p.code === 'FHX000');
+  const otherProjects = visibleProjects.filter((p) => p.code !== 'FHX000');
+  const projectOptions = [...bucketProjects, ...otherProjects];
+  const personOptions = personsRaw.map((p) => ({
+    id: p.id,
+    firstName: p.firstName,
+    lastName: p.lastName,
+  }));
+  const categoryOptions = [...EXPENSE_CATEGORIES]
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .map((c) => ({ value: c.value, label: c.label }));
 
   return (
     <div className="space-y-6">
@@ -141,34 +187,70 @@ export default async function BillDetailPage({ params }: { params: { id: string 
         <CardHeader>
           <CardTitle>Classification</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          <Row label="Category">{bill.category.replace(/_/g, ' ')}</Row>
-          <Row label="Project">
-            {bill.project ? (
-              <Link href={`/projects/${bill.project.code}`} className="hover:underline">
-                <span className="font-mono">{bill.project.code}</span>{' '}
-                <span>{bill.project.name}</span>
-              </Link>
-            ) : (
-              <span className="text-ink-3">OPEX</span>
-            )}
-          </Row>
-          <Row label="Cost centre">{bill.costCentre ?? '—'}</Row>
-          <Row label="Received via">{bill.receivedVia}</Row>
-          <Row label="Attachment">
-            {bill.attachmentSharepointUrl ? (
-              <a
-                href={bill.attachmentSharepointUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-brand hover:underline"
-              >
-                Open in SharePoint →
-              </a>
-            ) : (
-              <span className="text-ink-3">—</span>
-            )}
-          </Row>
+        <CardContent>
+          {canEditClassification ? (
+            <BillClassificationForm
+              billId={bill.id}
+              initial={{
+                projectId: bill.projectId,
+                projectCode: bill.project?.code ?? null,
+                projectName: bill.project?.name ?? null,
+                attributedToPersonId: bill.attributedToPersonId,
+                attributedToName: bill.attributedTo
+                  ? `${bill.attributedTo.firstName} ${bill.attributedTo.lastName}`
+                  : null,
+                costCentre: bill.costCentre,
+                category: bill.category,
+                receivedVia: bill.receivedVia,
+                attachmentSharepointUrl: bill.attachmentSharepointUrl,
+              }}
+              projectOptions={projectOptions}
+              personOptions={personOptions}
+              categoryOptions={categoryOptions}
+            />
+          ) : (
+            <div className="space-y-2 text-sm">
+              <Row label="Category">{expenseCategoryLabel(bill.category)}</Row>
+              <Row label="Project">
+                {bill.project ? (
+                  <Link
+                    href={`/projects/${bill.project.code}`}
+                    className="hover:underline"
+                  >
+                    <span className="font-mono">{bill.project.code}</span>{' '}
+                    <span>{bill.project.name}</span>
+                  </Link>
+                ) : (
+                  <span className="text-ink-3">OPEX</span>
+                )}
+              </Row>
+              <Row label="Associated user">
+                {bill.attributedTo ? (
+                  <span>
+                    {bill.attributedTo.firstName} {bill.attributedTo.lastName}
+                  </span>
+                ) : (
+                  <span className="text-ink-3">—</span>
+                )}
+              </Row>
+              <Row label="Cost centre">{bill.costCentre ?? '—'}</Row>
+              <Row label="Received via">{bill.receivedVia}</Row>
+              <Row label="Attachment">
+                {bill.attachmentSharepointUrl ? (
+                  <a
+                    href={bill.attachmentSharepointUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-brand hover:underline"
+                  >
+                    Open in SharePoint →
+                  </a>
+                ) : (
+                  <span className="text-ink-3">—</span>
+                )}
+              </Row>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

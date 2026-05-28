@@ -61,9 +61,10 @@ export default async function DraftMilestoneInvoicePage({
         </p>
       </header>
 
-      {preview.available.length === 0 ? (
+      {preview.available.length === 0 && preview.rebillableCosts.length === 0 ? (
         <Card className="p-12 text-center text-sm text-ink-3">
-          No un-invoiced milestones on this project.
+          No un-invoiced milestones on this project — and no pass-through
+          costs marked rebillable.
           {preview.alreadyInvoiced.length > 0 && (
             <p className="mt-2 text-xs">
               All {preview.alreadyInvoiced.length} milestones on this project have already
@@ -84,14 +85,16 @@ export default async function DraftMilestoneInvoicePage({
           <Card>
             <CardHeader>
               <CardTitle>
-                Milestones available · {preview.available.length} ·{' '}
-                {formatMoney(availableTotal)} total
+                {preview.available.length > 0
+                  ? `Milestones available · ${preview.available.length} · ${formatMoney(availableTotal)} total`
+                  : 'Pass-through costs only'}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <DraftMilestoneInvoiceForm
                 projectId={project.id}
                 milestones={preview.available}
+                rebillableCosts={preview.rebillableCosts}
               />
             </CardContent>
           </Card>

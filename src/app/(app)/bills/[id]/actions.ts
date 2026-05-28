@@ -2,12 +2,185 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
 import { getXeroIntegration } from '@/server/integrations/xero';
 import { pushBillToXero } from '@/server/integrations/xero-bills';
+import { EXPENSE_CATEGORY_VALUES } from '@/lib/expense-categories';
+
+export type BillClassificationState =
+  | { status: 'idle' }
+  | { status: 'error'; message: string }
+  | { status: 'success'; message: string };
+
+/**
+ * Patch the classification fields on a bill — project, cost type
+ * (category), associated user (attributedToPersonId), and cost
+ * centre. Admin-only; this is the bill-detail-page counterpart to
+ * the approval-gate override pickers.
+ *
+ * Empty string carries explicit "unset" semantics per field:
+ *   - projectId: '' → OPEX (no project)
+ *   - attributedToPersonId: '' → un-pin (no one attributed)
+ *   - costCentre: '' → null
+ *   - category: '' → keep current (no-op, fits "leave blank to skip")
+ *
+ * The action only patches fields where the form value differs from
+ * the current DB value — no-op-safe and audit-event captures only
+ * the dirty fields. Rejection of edits on non-admin / archived
+ * project / inactive person mirrors the approval-gate guards.
+ */
+const ClassificationSchema = z.object({
+  projectId: z.string().nullable().optional(),
+  attributedToPersonId: z.string().nullable().optional(),
+  costCentre: z.string().nullable().optional(),
+  category: z
+    .union([z.enum(EXPENSE_CATEGORY_VALUES), z.literal('')])
+    .nullable()
+    .optional(),
+});
+
+export async function patchBillClassification(
+  billId: string,
+  _prev: BillClassificationState,
+  formData: FormData,
+): Promise<BillClassificationState> {
+  const session = await getSession();
+  try {
+    requireCapability(session, 'bill.approve');
+  } catch {
+    return { status: 'error', message: 'Not authorized' };
+  }
+
+  const parsed = ClassificationSchema.safeParse({
+    projectId:
+      formData.get('projectId') === null
+        ? null
+        : String(formData.get('projectId')),
+    attributedToPersonId:
+      formData.get('attributedToPersonId') === null
+        ? null
+        : String(formData.get('attributedToPersonId')),
+    costCentre:
+      formData.get('costCentre') === null
+        ? null
+        : String(formData.get('costCentre')),
+    category:
+      formData.get('category') === null ? null : String(formData.get('category')),
+  });
+  if (!parsed.success) {
+    return { status: 'error', message: 'Invalid input.' };
+  }
+  const { projectId, attributedToPersonId, costCentre, category } = parsed.data;
+
+  const bill = await prisma.bill.findUnique({
+    where: { id: billId },
+    select: {
+      id: true,
+      projectId: true,
+      attributedToPersonId: true,
+      costCentre: true,
+      category: true,
+      status: true,
+    },
+  });
+  if (!bill) return { status: 'error', message: 'Bill not found.' };
+
+  // Build a diff: only patch fields where the form value differs
+  // from the DB value. Empty-string semantics per field documented
+  // on the schema above.
+  const patch: Record<string, unknown> = {};
+  const before: Record<string, unknown> = {};
+  const after: Record<string, unknown> = {};
+
+  if (projectId !== undefined && projectId !== null) {
+    const next = projectId === '' ? null : projectId;
+    if (next !== bill.projectId) {
+      if (next !== null) {
+        const proj = await prisma.project.findUnique({
+          where: { id: next },
+          select: { id: true, stage: true },
+        });
+        if (!proj) return { status: 'error', message: 'Project not found.' };
+        if (proj.stage === 'archived') {
+          return {
+            status: 'error',
+            message: 'Cannot route a bill to an archived project.',
+          };
+        }
+      }
+      patch.projectId = next;
+      before.projectId = bill.projectId;
+      after.projectId = next;
+    }
+  }
+
+  if (attributedToPersonId !== undefined && attributedToPersonId !== null) {
+    const next = attributedToPersonId === '' ? null : attributedToPersonId;
+    if (next !== bill.attributedToPersonId) {
+      if (next !== null) {
+        const person = await prisma.person.findUnique({
+          where: { id: next },
+          select: { id: true, inactiveAt: true },
+        });
+        if (!person) return { status: 'error', message: 'Person not found.' };
+        if (person.inactiveAt) {
+          return {
+            status: 'error',
+            message: 'Cannot attribute a cost to an inactive team member.',
+          };
+        }
+      }
+      patch.attributedToPersonId = next;
+      before.attributedToPersonId = bill.attributedToPersonId;
+      after.attributedToPersonId = next;
+    }
+  }
+
+  if (costCentre !== undefined && costCentre !== null) {
+    const next = costCentre.trim() === '' ? null : costCentre.trim();
+    if (next !== bill.costCentre) {
+      patch.costCentre = next;
+      before.costCentre = bill.costCentre;
+      after.costCentre = next;
+    }
+  }
+
+  if (category !== undefined && category !== null && category !== '') {
+    if (category !== bill.category) {
+      patch.category = category;
+      before.category = bill.category;
+      after.category = category;
+    }
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return { status: 'success', message: 'No changes.' };
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.bill.update({ where: { id: billId }, data: patch });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session!.person.id },
+        action: 'classification_updated',
+        entity: { type: 'bill', id: billId, before, after },
+        source: 'web',
+      });
+    });
+  } catch (err) {
+    console.error('[bill.classification] failed:', err);
+    return { status: 'error', message: 'Save failed — try again.' };
+  }
+
+  revalidatePath('/bills');
+  revalidatePath(`/bills/${billId}`);
+  revalidatePath('/approvals');
+  return { status: 'success', message: 'Classification updated.' };
+}
 
 export type BillXeroPushState =
   | { status: 'idle' }
@@ -192,7 +365,7 @@ export async function scheduleBillForPayment(
 
   revalidatePath('/bills');
   revalidatePath(`/bills/${billId}`);
-  revalidatePath('/ap');
+  revalidatePath('/payables');
   return { status: 'success', message: 'Scheduled for payment.' };
 }
 
@@ -249,6 +422,6 @@ export async function markBillPaid(
 
   revalidatePath('/bills');
   revalidatePath(`/bills/${billId}`);
-  revalidatePath('/ap');
+  revalidatePath('/payables');
   return { status: 'success', message: 'Bill marked paid.' };
 }

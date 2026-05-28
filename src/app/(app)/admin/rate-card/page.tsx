@@ -15,8 +15,33 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { EditableRateCardTable } from './editable-table';
 
-const ROLE_LABELS: Record<string, { label: string; band: string }> = {
+const ROLE_LABELS: Record<string, { label: string; band: string; subnote?: string }> = {
+  // Leadership tier — historically excluded from the rate card
+  // because partners were paid via LT share only. Per the 2026
+  // AP role definition, Associate Partners run two rem models
+  // side-by-side: time billing (rate × hours) + LT share fees
+  // when they lead a project. L3 (AP) and L4 (Partner) + MP
+  // entries are surfaced here so admin can set hourly rates for
+  // the time-billing path. Leave the rate at $0 when LT share
+  // is the only model (e.g. a full Partner who doesn't bill
+  // time on client engagements).
+  MP: {
+    label: 'Managing Partner',
+    band: 'Leadership',
+    subnote: 'Usually LT share only — rate optional',
+  },
+  L4: {
+    label: 'Partner',
+    band: 'Leadership',
+    subnote: 'Usually LT share only — rate optional',
+  },
+  L3: {
+    label: 'Associate Partner / Director',
+    band: 'Leadership',
+    subnote: 'Dual rem — time billing + LT share',
+  },
   L2: { label: 'Project Director / Sr Manager', band: 'Leadership' },
   L1: { label: 'Project Manager / Manager', band: 'Leadership' },
   E2: { label: 'Senior Expert', band: 'Expert' },
@@ -59,18 +84,29 @@ export default async function RateCardPage({
   const asOf = parseAsOf(searchParams.as_of);
   const rows = await listRateCardAsOf(asOf);
 
+  // Browsing the historical view (?as_of=...) drops to the read-only
+  // table — back-dated edits are rejected at the server anyway, and
+  // the editable form pins to "today or later" via its date min.
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const isHistoricalBrowse = asOf.getTime() < today.getTime();
+
   return (
     <div className="space-y-6">
       <header className="flex items-start justify-between">
         <div>
           <h1 className="text-xl font-semibold text-ink">Rate card</h1>
           <p className="text-sm text-ink-3">
-            AUD cost rates per role. Edits version each row — history is never mutated.
+            AUD cost rates per role. Edits insert versioned rows —
+            history is never mutated, so completed projects stay
+            costed against the rates they were quoted at. New rows
+            take effect for projects created on or after the chosen
+            effective date.
           </p>
         </div>
         {canEdit && (
-          <Button asChild>
-            <Link href="/admin/rate-card/new">+ New version</Link>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/rate-card/new">+ Add new role</Link>
           </Button>
         )}
       </header>
@@ -81,7 +117,7 @@ export default async function RateCardPage({
         className="flex items-center gap-3 rounded-lg border border-line bg-card p-3"
       >
         <label className="flex items-center gap-2 text-sm text-ink-2">
-          <span className="text-ink-3">Active as of</span>
+          <span className="text-ink-3">Browse as of</span>
           <Input
             type="date"
             name="as_of"
@@ -101,22 +137,26 @@ export default async function RateCardPage({
         </span>
       </form>
 
-      <Card className="p-0">
-        {rows.length === 0 ? (
-          <div className="space-y-3 p-12 text-center">
-            <h2 className="text-sm font-medium text-ink">No rate card rows yet</h2>
-            <p className="text-sm text-ink-3">
-              Nothing effective on or before{' '}
-              <span className="font-mono text-ink-2">{asOf.toISOString().slice(0, 10)}</span>.
-              Pick a later date, or add a rate card version if this is a new environment.
-            </p>
-            {canEdit && (
-              <Button asChild size="sm">
-                <Link href="/admin/rate-card/new">+ New version</Link>
-              </Button>
-            )}
-          </div>
-        ) : (
+      {rows.length === 0 ? (
+        <Card className="p-12 text-center">
+          <h2 className="text-sm font-medium text-ink">No rate card rows yet</h2>
+          <p className="mt-2 text-sm text-ink-3">
+            Nothing effective on or before{' '}
+            <span className="font-mono text-ink-2">
+              {asOf.toISOString().slice(0, 10)}
+            </span>
+            . Pick a later date, or add the first rate card version.
+          </p>
+          {canEdit && (
+            <Button asChild size="sm" className="mt-3">
+              <Link href="/admin/rate-card/new">+ Add new role</Link>
+            </Button>
+          )}
+        </Card>
+      ) : isHistoricalBrowse ? (
+        // Read-only historical snapshot. Editable view is "today or
+        // later" only.
+        <Card className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
@@ -125,8 +165,8 @@ export default async function RateCardPage({
                 <TableHead>Band</TableHead>
                 <TableHead>Effective from</TableHead>
                 <TableHead className="text-right">Cost / hr</TableHead>
-                <TableHead className="text-right">Bill rate (low)</TableHead>
-                <TableHead className="text-right">Bill rate (high)</TableHead>
+                <TableHead className="text-right">Bill (low)</TableHead>
+                <TableHead className="text-right">Bill (high)</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -141,6 +181,11 @@ export default async function RateCardPage({
                     </TableCell>
                     <TableCell className="font-medium text-ink">
                       {meta?.label ?? r.roleCode}
+                      {meta?.subnote && (
+                        <div className="text-[10px] font-normal text-ink-3">
+                          {meta.subnote}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell className="text-ink-2">{meta?.band ?? '—'}</TableCell>
                     <TableCell className="text-ink-2 tabular-nums">
@@ -160,12 +205,35 @@ export default async function RateCardPage({
               })}
             </TableBody>
           </Table>
-        )}
-      </Card>
+        </Card>
+      ) : (
+        <EditableRateCardTable
+          rows={rows.map((r) => {
+            const meta = ROLE_LABELS[r.roleCode];
+            return {
+              id: r.id,
+              roleCode: r.roleCode,
+              roleLabel: meta?.label ?? r.roleCode,
+              ...(meta?.subnote ? { roleSubnote: meta.subnote } : {}),
+              band: meta?.band ?? '—',
+              effectiveFromIso: r.effectiveFrom.toISOString().slice(0, 10),
+              costRateCents: r.costRate,
+              billRateLowCents: r.billRateLow,
+              billRateHighCents: r.billRateHigh,
+            };
+          })}
+          defaultEffectiveFromIso={today.toISOString().slice(0, 10)}
+          canEdit={canEdit}
+        />
+      )}
 
       <p className="text-xs text-ink-3">
-        Bill rate low/high are MVP heuristics (cost × 2 / × 3). Replace with real bill
-        bands once Foundry&apos;s pricing matrix is ingested.
+        Edits create new versioned rows on the chosen effective date —
+        existing Person.rate snapshots aren&apos;t auto-updated, so
+        re-edit individual people on /directory/people if you want
+        their cost rate to flip immediately. Bill rate low/high are
+        MVP heuristics (cost × 2 / × 3) until Foundry&apos;s pricing
+        matrix is ingested.
       </p>
     </div>
   );

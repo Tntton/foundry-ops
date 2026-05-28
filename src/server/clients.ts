@@ -13,7 +13,20 @@ export type ClientListRow = {
   code: string;
   legalName: string;
   tradingName: string | null;
-  primaryPartner: { id: string; initials: string; firstName: string; lastName: string } | null;
+  /** Stored web domain (e.g. "ifm.com.au") used to fetch the company
+   *  logo via Clearbit. Null = inferred at render time. */
+  domain: string | null;
+  /** Billing contact email; doubles as a domain hint when `domain` is
+   *  unset. */
+  billingEmail: string | null;
+  primaryPartner: {
+    id: string;
+    initials: string;
+    firstName: string;
+    lastName: string;
+    headshotUrl: string | null;
+  } | null;
+  archivedAt: Date | null;
   activeProjects: number;
   totalProjects: number;
   contractValueCents: number; // sum across all projects (including archived)
@@ -23,8 +36,11 @@ export type ClientListRow = {
   projects: ClientProjectSummary[];
 };
 
-export async function listClients(search?: string): Promise<ClientListRow[]> {
-  const where = search?.trim()
+export async function listClients(
+  search?: string,
+  opts: { includeArchived?: boolean } = {},
+): Promise<ClientListRow[]> {
+  const searchFilter = search?.trim()
     ? {
         OR: [
           { code: { contains: search.trim(), mode: 'insensitive' as const } },
@@ -32,13 +48,21 @@ export async function listClients(search?: string): Promise<ClientListRow[]> {
           { tradingName: { contains: search.trim(), mode: 'insensitive' as const } },
         ],
       }
-    : {};
+    : null;
+  // The FH internal client is now surfaced on its own /directory/company
+  // tab — exclude it from the standard /directory/clients list so it
+  // doesn't sit alongside paying clients.
+  const where = {
+    ...(opts.includeArchived ? {} : { archivedAt: null }),
+    ...(searchFilter ?? {}),
+    code: { not: 'FH' },
+  };
   const rows = await prisma.client.findMany({
     where,
     orderBy: { code: 'asc' },
     include: {
       primaryPartner: {
-        select: { id: true, initials: true, firstName: true, lastName: true },
+        select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
       },
       projects: {
         orderBy: { code: 'asc' },
@@ -80,12 +104,16 @@ export async function listClients(search?: string): Promise<ClientListRow[]> {
       code: c.code,
       legalName: c.legalName,
       tradingName: c.tradingName,
+      domain: c.domain,
+      billingEmail: c.billingEmail,
+      archivedAt: c.archivedAt,
       primaryPartner: c.primaryPartner
         ? {
             id: c.primaryPartner.id,
             initials: c.primaryPartner.initials,
             firstName: c.primaryPartner.firstName,
             lastName: c.primaryPartner.lastName,
+            headshotUrl: c.primaryPartner.headshotUrl,
           }
         : null,
       activeProjects,
@@ -109,6 +137,6 @@ export async function listPartnerOptions() {
   return prisma.person.findMany({
     where: { roles: { has: 'partner' } },
     orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
-    select: { id: true, initials: true, firstName: true, lastName: true },
+    select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
   });
 }

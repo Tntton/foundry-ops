@@ -1,0 +1,498 @@
+'use client';
+
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useOptimistic, useState, useTransition, useCallback } from 'react';
+import type { ProjectStage } from '@prisma/client';
+import { PersonAvatar } from '@/components/person-avatar';
+import { moveProject, type MoveProjectState } from './actions';
+import { CardAddMember, type CardPersonOption } from './card-add-member';
+
+type KanbanProject = {
+  id: string;
+  code: string;
+  name: string;
+  clientLegalName: string;
+  stage: ProjectStage;
+  contractValueCents: number;
+  startDateIso: string | null;
+  endDateIso: string | null;
+  actualEndDateIso: string | null;
+  team: Array<{
+    id: string;
+    initials: string;
+    firstName: string;
+    lastName: string;
+    headshotUrl: string | null;
+  }>;
+  weekIndex: number; // weeks elapsed (capped)
+  weekTotal: number; // 0 when dates missing
+  progressPct: number;
+  qcStatus: 'green' | 'amber' | 'red';
+  paid: boolean;
+};
+
+const STAGE_LABEL: Record<ProjectStage, string> = {
+  kickoff: 'Setup',
+  delivery: 'Active',
+  closing: 'Wrapping',
+  archived: 'Closed',
+  standing: 'Standing',
+  benched: 'Benched',
+};
+const STAGE_HINT: Record<ProjectStage, string> = {
+  kickoff: 'contract · team · code',
+  delivery: 'in delivery',
+  closing: 'final weeks · invoicing',
+  archived: 'paid · reconciled',
+  standing: 'ongoing · always on',
+  benched: 'paused · may return',
+};
+// Client engagements move through the original four stages.
+const CLIENT_PIPELINE: ProjectStage[] = ['kickoff', 'delivery', 'closing', 'archived'];
+// Internal FHP projects use a different set: Set up → Active →
+// Standing (ongoing, always-on) → Benched (paused but may come back).
+// They never hit closing/archived because they don't reconcile a
+// contract; benched is the equivalent of "shelved for now".
+const INTERNAL_PIPELINE: ProjectStage[] = ['kickoff', 'delivery', 'standing', 'benched'];
+const INTERNAL_LABEL_OVERRIDE: Partial<Record<ProjectStage, string>> = {
+  kickoff: 'Set up',
+};
+
+/**
+ * Internal FH projects use the FHP-prefixed code series — FHP001
+ * (Homefield Partners), FHP002 (primer development), FHP003 (social
+ * media) and so on. They render as a separate band on the kanban so
+ * the team can see firm-internal initiatives at a glance without
+ * mixing them in with client engagements. The three pure-overhead
+ * expense buckets (FHB / FHO / FHX) are already filtered out of the
+ * project list at the server, so this check only sees real projects.
+ */
+function isInternalProject(code: string): boolean {
+  return code.startsWith('FHP');
+}
+
+export function ProjectsKanban({
+  projects,
+  canCreate,
+  canMove,
+  canAddTeam,
+  allPeople,
+}: {
+  projects: KanbanProject[];
+  canCreate: boolean;
+  canMove: boolean;
+  /** Whether the viewer can add team members to a project from the
+   *  card (matches the server-side `project.edit` capability — admin /
+   *  partner / project lead). */
+  canAddTeam: boolean;
+  /** Active people pool. Each card filters out the project's existing
+   *  team members so the dropdown only shows valid candidates. */
+  allPeople: CardPersonOption[];
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  // Optimistic state — we move the card immediately, then revert on server error.
+  const [optimisticProjects, dispatch] = useOptimistic<
+    KanbanProject[],
+    { id: string; toStage: ProjectStage }
+  >(projects, (current, action) =>
+    current.map((p) =>
+      p.id === action.id ? { ...p, stage: action.toStage } : p,
+    ),
+  );
+
+  const handleDrop = useCallback(
+    (projectId: string, toStage: ProjectStage) => {
+      const project = projects.find((p) => p.id === projectId);
+      if (!project || project.stage === toStage) return;
+      setError(null);
+      const fd = new FormData();
+      fd.set('projectId', projectId);
+      fd.set('toStage', toStage);
+      startTransition(async () => {
+        dispatch({ id: projectId, toStage });
+        const result = (await moveProject({ status: 'idle' }, fd)) as MoveProjectState;
+        if (result.status === 'error') {
+          setError(result.message);
+          // useOptimistic auto-reverts when the transition completes without
+          // a router.refresh() pulling fresh data — but we explicitly refresh
+          // to make sure the DB truth wins regardless of outcome.
+          router.refresh();
+        } else {
+          router.refresh();
+        }
+      });
+    },
+    [projects, dispatch, router],
+  );
+
+  // Two bands: client engagements on top, internal FH initiatives
+  // (FHP series — primers, social, brand work, etc) on the bottom.
+  // Each band renders the same four-stage pipeline so a project moves
+  // through Setup → Active → Wrapping → Closed regardless of band.
+  const clientProjects = optimisticProjects.filter(
+    (p) => !isInternalProject(p.code),
+  );
+  const internalProjects = optimisticProjects.filter((p) =>
+    isInternalProject(p.code),
+  );
+
+  const groupByStage = (cards: KanbanProject[]) => {
+    const g: Record<ProjectStage, KanbanProject[]> = {
+      kickoff: [],
+      delivery: [],
+      closing: [],
+      archived: [],
+      standing: [],
+      benched: [],
+    };
+    for (const p of cards) g[p.stage].push(p);
+    return g;
+  };
+
+  const clientGrouped = groupByStage(clientProjects);
+  const internalGrouped = groupByStage(internalProjects);
+
+  return (
+    <div className="space-y-6">
+      {error && (
+        <div className="rounded-md border border-status-red bg-status-red-soft px-3 py-2 text-sm text-status-red">
+          {error}
+        </div>
+      )}
+      {pending && <div className="text-xs text-ink-3">Saving move…</div>}
+
+      <KanbanBand
+        title="Client projects"
+        subtitle="Engagements with paying clients — Foundry's revenue surface."
+        count={clientProjects.length}
+        grouped={clientGrouped}
+        pipeline={CLIENT_PIPELINE}
+        labelOverride={null}
+        canCreate={canCreate}
+        canMove={canMove}
+        canAddTeam={canAddTeam}
+        allPeople={allPeople}
+        onDrop={handleDrop}
+        newProjectHref="/projects/new"
+      />
+
+      <KanbanBand
+        title="Internal projects · FHP series"
+        subtitle={
+          'Standing + episodic FH initiatives. Primer development, social ' +
+          'media, brand work — projects that may pause and come back.'
+        }
+        count={internalProjects.length}
+        grouped={internalGrouped}
+        pipeline={INTERNAL_PIPELINE}
+        labelOverride={INTERNAL_LABEL_OVERRIDE}
+        canCreate={canCreate}
+        canMove={canMove}
+        canAddTeam={canAddTeam}
+        allPeople={allPeople}
+        onDrop={handleDrop}
+        newProjectHref="/projects/new?kind=internal"
+        emptyHint={
+          canCreate
+            ? 'No internal projects yet — create one with a code starting in FHP (e.g. FHP002 Primer development).'
+            : 'No internal projects yet.'
+        }
+      />
+    </div>
+  );
+}
+
+/**
+ * One horizontal band of the kanban — header + four stage columns.
+ * Both the client-projects band and the internal-projects band reuse
+ * this so they render identically apart from the title and the empty
+ * state copy.
+ */
+function KanbanBand({
+  title,
+  subtitle,
+  count,
+  grouped,
+  pipeline,
+  labelOverride,
+  canCreate,
+  canMove,
+  canAddTeam,
+  allPeople,
+  onDrop,
+  emptyHint,
+  newProjectHref,
+}: {
+  title: string;
+  subtitle: string;
+  count: number;
+  grouped: Record<ProjectStage, KanbanProject[]>;
+  /** Stage columns this band renders, in order. Client engagements
+   *  use kickoff/delivery/closing/archived; internal projects use
+   *  kickoff/delivery/standing/benched. */
+  pipeline: ProjectStage[];
+  /** Per-band label overrides — e.g. internal band shows "Set up"
+   *  instead of "Setup" for the kickoff column to match the rest of
+   *  the internal-band copy. Pass null when no override is needed. */
+  labelOverride: Partial<Record<ProjectStage, string>> | null;
+  canCreate: boolean;
+  canMove: boolean;
+  canAddTeam: boolean;
+  allPeople: CardPersonOption[];
+  onDrop: (projectId: string, toStage: ProjectStage) => void;
+  /** Where the "+ New project code" affordance points. Internal band
+   *  pre-selects the internal kind via `?kind=internal`. */
+  newProjectHref: string;
+  emptyHint?: string;
+}) {
+  return (
+    <section>
+      <header className="mb-2 flex items-baseline justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-ink">
+            {title}
+            <span className="ml-2 text-xs tabular-nums text-ink-3">
+              {count}
+            </span>
+          </h2>
+          <p className="text-[11px] text-ink-3">{subtitle}</p>
+        </div>
+      </header>
+      {count === 0 && emptyHint ? (
+        <div className="rounded-xl border border-dashed border-line bg-surface-subtle/30 p-6 text-center text-xs text-ink-3">
+          {emptyHint}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
+          {pipeline.map((stage) => (
+            <KanbanColumn
+              key={stage}
+              stage={stage}
+              label={labelOverride?.[stage] ?? STAGE_LABEL[stage]}
+              hint={STAGE_HINT[stage]}
+              count={grouped[stage].length}
+              cards={grouped[stage]}
+              canCreate={canCreate && stage === 'kickoff'}
+              canMove={canMove}
+              canAddTeam={canAddTeam}
+              allPeople={allPeople}
+              onDrop={onDrop}
+              newProjectHref={newProjectHref}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function KanbanColumn({
+  stage,
+  label,
+  hint,
+  count,
+  cards,
+  canCreate,
+  canMove,
+  canAddTeam,
+  allPeople,
+  onDrop,
+  newProjectHref,
+}: {
+  stage: ProjectStage;
+  label: string;
+  hint: string;
+  count: number;
+  cards: KanbanProject[];
+  canCreate: boolean;
+  canMove: boolean;
+  canAddTeam: boolean;
+  allPeople: CardPersonOption[];
+  onDrop: (projectId: string, toStage: ProjectStage) => void;
+  newProjectHref: string;
+}) {
+  const [hovering, setHovering] = useState(false);
+  const dotColor =
+    stage === 'kickoff'
+      ? 'bg-status-green'
+      : stage === 'delivery'
+        ? 'bg-status-green'
+        : stage === 'closing'
+          ? 'bg-status-amber'
+          : 'bg-status-green';
+  return (
+    <div
+      onDragOver={(e) => {
+        if (!canMove) return;
+        e.preventDefault();
+        setHovering(true);
+      }}
+      onDragLeave={() => setHovering(false)}
+      onDrop={(e) => {
+        if (!canMove) return;
+        e.preventDefault();
+        const projectId = e.dataTransfer.getData('text/project-id');
+        setHovering(false);
+        if (projectId) onDrop(projectId, stage);
+      }}
+      className={`rounded-xl border bg-surface-subtle/40 p-3 transition-colors ${
+        hovering
+          ? 'border-brand bg-surface-hover/40'
+          : 'border-line'
+      }`}
+    >
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className={`inline-block h-1.5 w-1.5 rounded-full ${dotColor}`} />
+          <span className="text-sm font-semibold text-ink">{label}</span>
+          <span className="text-xs tabular-nums text-ink-3">{count}</span>
+        </div>
+        <span className="text-[11px] text-ink-3">{hint}</span>
+      </div>
+      <div className="space-y-3">
+        {cards.length === 0 && !canCreate && (
+          <div className="rounded-lg border border-dashed border-line p-6 text-center text-xs text-ink-4">
+            Empty
+          </div>
+        )}
+        {cards.map((card) => (
+          <KanbanCard
+            key={card.id}
+            card={card}
+            canMove={canMove}
+            canAddTeam={canAddTeam}
+            allPeople={allPeople}
+          />
+        ))}
+        {canCreate && (
+          <Link
+            href={newProjectHref}
+            className="block rounded-lg border border-dashed border-line p-6 text-center text-xs text-ink-3 hover:border-brand hover:text-brand"
+          >
+            + New project code
+          </Link>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function KanbanCard({
+  card,
+  canMove,
+  canAddTeam,
+  allPeople,
+}: {
+  card: KanbanProject;
+  canMove: boolean;
+  canAddTeam: boolean;
+  allPeople: CardPersonOption[];
+}) {
+  const dotColor =
+    card.qcStatus === 'red'
+      ? 'bg-status-red'
+      : card.qcStatus === 'amber'
+        ? 'bg-status-amber'
+        : 'bg-status-green';
+  const totalWeeks = card.weekTotal || 0;
+  const closedPaid = card.stage === 'archived' && card.paid;
+  const closedSummary = card.stage === 'archived'
+    ? `— · closed${card.paid ? ' · paid' : ''}`
+    : null;
+  // "10w · kickoff 22 Apr" / "12w · wk 7/12" / "— · closed · paid"
+  let footerLabel = '—';
+  if (closedSummary) {
+    footerLabel = closedSummary;
+  } else if (card.stage === 'kickoff') {
+    if (card.startDateIso) {
+      const d = new Date(card.startDateIso);
+      footerLabel = `${totalWeeks ? `${totalWeeks}w · ` : ''}kickoff ${d.toLocaleDateString(
+        'en-AU',
+        { day: 'numeric', month: 'short' },
+      )}`;
+    } else {
+      footerLabel = totalWeeks ? `${totalWeeks}w · awaiting kickoff` : 'awaiting kickoff';
+    }
+  } else if (totalWeeks > 0) {
+    footerLabel = `${totalWeeks}w · wk ${card.weekIndex}/${totalWeeks}`;
+  }
+
+  // Filter the candidate pool down to people not already on this team.
+  const teamIds = new Set(card.team.map((p) => p.id));
+  const addOptions = allPeople.filter((p) => !teamIds.has(p.id));
+
+  return (
+    <div
+      draggable={canMove}
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/project-id', card.id);
+        e.dataTransfer.effectAllowed = 'move';
+      }}
+      className={`group rounded-lg border border-line bg-card p-4 shadow-sm transition-shadow ${
+        canMove ? 'cursor-grab active:cursor-grabbing hover:shadow-md' : ''
+      }`}
+      title={canMove ? 'Drag to another column to change stage' : undefined}
+    >
+      {/* Reflowed header (per TT, 2026-05-10):
+           Row 1 — client legal name (regular weight, small)
+           Row 2 — project code (bold) + project name (bold) inline
+           QC dot stays top-right as the at-a-glance health pip. */}
+      <div className="flex items-start justify-between gap-2">
+        <Link
+          href={`/projects/${card.code}`}
+          className="block min-w-0 flex-1 hover:underline"
+        >
+          <div className="truncate text-xs text-ink-3">{card.clientLegalName}</div>
+          <div className="mt-0.5 flex flex-wrap items-baseline gap-2">
+            <span className="font-mono text-sm font-semibold text-ink">
+              {card.code}
+            </span>
+            <span className="text-sm font-semibold text-ink">{card.name}</span>
+          </div>
+        </Link>
+        <span
+          className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${dotColor}`}
+          title={`QC ${card.qcStatus}`}
+        />
+      </div>
+
+      {!closedPaid && (
+        <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-surface-subtle">
+          <div
+            className="h-full bg-status-green"
+            style={{ width: `${Math.min(100, card.progressPct)}%` }}
+          />
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center">
+          <div className="flex -space-x-2">
+            {card.team.slice(0, 5).map((p) => (
+              <PersonAvatar
+                key={p.id}
+                className="h-6 w-6 border-2 border-card bg-surface-elev"
+                fallbackClassName="text-[9px]"
+                initials={p.initials}
+                headshotUrl={p.headshotUrl}
+                title={`${p.firstName} ${p.lastName}`}
+              />
+            ))}
+            {card.team.length > 5 && (
+              <span className="ml-2 self-center text-[10px] text-ink-3">
+                +{card.team.length - 5}
+              </span>
+            )}
+          </div>
+          {canAddTeam && (
+            <CardAddMember projectId={card.id} options={addOptions} />
+          )}
+        </div>
+        <span className="text-[11px] tabular-nums text-ink-3">{footerLabel}</span>
+      </div>
+    </div>
+  );
+}

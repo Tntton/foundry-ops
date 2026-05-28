@@ -172,7 +172,7 @@ export async function markPayRunPaid(
 
   revalidatePath('/payroll');
   revalidatePath(`/payroll/${payRunId}`);
-  revalidatePath('/ap');
+  revalidatePath('/payables');
   revalidatePath('/bills');
   return { status: 'success', message: 'Pay-run + bills marked paid.' };
 }
@@ -233,6 +233,6 @@ export async function deleteDraftPayRun(
 
   revalidatePath('/payroll');
   revalidatePath('/bills');
-  revalidatePath('/ap');
+  revalidatePath('/payables');
   redirect('/payroll');
 }

@@ -4,15 +4,29 @@ import { prisma } from '@/server/db';
 export type DealListRow = {
   id: string;
   code: string;
-  name: string;
+  name: string | null;
   stage: DealStage;
+  sector: string | null;
+  clientType: string | null;
+  engagementType: string | null;
   expectedValueCents: number;
   probabilityPct: number;
   weightedValueCents: number; // expected × probability
   targetCloseDate: Date | null;
-  owner: { id: string; initials: string; firstName: string; lastName: string };
+  firstConversationAt: Date | null;
+  lastConversationAt: Date | null;
+  daysSinceLastConversation: number | null;
+  archivedAt: Date | null;
+  owner: {
+    id: string;
+    initials: string;
+    firstName: string;
+    lastName: string;
+    headshotUrl: string | null;
+  };
   client: { id: string; code: string; legalName: string } | null;
   prospectiveName: string | null;
+  primaryContact: { name: string; role: string | null } | null;
   convertedProjectId: string | null;
   convertedProject: { code: string; name: string } | null;
   createdAt: Date;
@@ -22,7 +36,22 @@ export type DealFilter = {
   stage?: DealStage;
   ownerId?: string;
   search?: string;
+  includeArchived?: boolean;
 };
+
+function displayName(row: {
+  name: string | null;
+  clientCode?: string | null;
+  clientLegalName?: string | null;
+  prospectiveName?: string | null;
+  engagementType?: string | null;
+}): string {
+  if (row.name && row.name.trim().length > 0) return row.name;
+  const counterparty =
+    row.clientLegalName ?? row.clientCode ?? row.prospectiveName ?? 'Deal';
+  const eng = row.engagementType ? ` · ${row.engagementType}` : '';
+  return `${counterparty}${eng}`;
+}
 
 export async function listDeals(filter: DealFilter = {}): Promise<DealListRow[]> {
   const q = filter.search?.trim();
@@ -40,14 +69,20 @@ export async function listDeals(filter: DealFilter = {}): Promise<DealListRow[]>
 
   const deals = await prisma.deal.findMany({
     where: {
+      ...(filter.includeArchived ? {} : { archivedAt: null }),
       ...(filter.stage ? { stage: filter.stage } : {}),
       ...(filter.ownerId ? { ownerId: filter.ownerId } : {}),
       ...(searchFilter ?? {}),
     },
     orderBy: [{ stage: 'asc' }, { expectedValue: 'desc' }],
     include: {
-      owner: { select: { id: true, initials: true, firstName: true, lastName: true } },
+      owner: { select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true } },
       client: { select: { id: true, code: true, legalName: true } },
+      contacts: {
+        orderBy: { createdAt: 'asc' },
+        take: 1,
+        select: { name: true, role: true },
+      },
     },
   });
 
@@ -63,24 +98,47 @@ export async function listDeals(filter: DealFilter = {}): Promise<DealListRow[]>
       : [];
   const projectById = new Map(convertedProjects.map((p) => [p.id, p]));
 
-  return deals.map<DealListRow>((d) => ({
-    id: d.id,
-    code: d.code,
-    name: d.name,
-    stage: d.stage,
-    expectedValueCents: d.expectedValue,
-    probabilityPct: d.probability,
-    weightedValueCents: Math.round(d.expectedValue * (d.probability / 100)),
-    targetCloseDate: d.targetCloseDate,
-    owner: d.owner,
-    client: d.client,
-    prospectiveName: d.prospectiveName,
-    convertedProjectId: d.convertedProjectId,
-    convertedProject: d.convertedProjectId
-      ? projectById.get(d.convertedProjectId) ?? null
-      : null,
-    createdAt: d.createdAt,
-  }));
+  const now = Date.now();
+  return deals.map<DealListRow>((d) => {
+    const resolvedName = displayName({
+      name: d.name,
+      clientCode: d.client?.code,
+      clientLegalName: d.client?.legalName,
+      prospectiveName: d.prospectiveName,
+      engagementType: d.engagementType,
+    });
+    const daysSince = d.lastConversationAt
+      ? Math.max(0, Math.floor((now - d.lastConversationAt.getTime()) / 86_400_000))
+      : null;
+    return {
+      id: d.id,
+      code: d.code,
+      name: resolvedName,
+      stage: d.stage,
+      sector: d.sector,
+      clientType: d.clientType,
+      engagementType: d.engagementType,
+      expectedValueCents: d.expectedValue,
+      probabilityPct: d.probability,
+      weightedValueCents: Math.round(d.expectedValue * (d.probability / 100)),
+      targetCloseDate: d.targetCloseDate,
+      firstConversationAt: d.firstConversationAt,
+      lastConversationAt: d.lastConversationAt,
+      daysSinceLastConversation: daysSince,
+      archivedAt: d.archivedAt,
+      owner: d.owner,
+      client: d.client,
+      prospectiveName: d.prospectiveName,
+      primaryContact: d.contacts[0]
+        ? { name: d.contacts[0].name, role: d.contacts[0].role }
+        : null,
+      convertedProjectId: d.convertedProjectId,
+      convertedProject: d.convertedProjectId
+        ? projectById.get(d.convertedProjectId) ?? null
+        : null,
+      createdAt: d.createdAt,
+    };
+  });
 }
 
 export type PipelineSummary = {
@@ -91,6 +149,7 @@ export type PipelineSummary = {
   wonCountYtd: number;
   wonValueYtdCents: number;
   lostCountYtd: number;
+  archivedCount: number;
   byStage: Array<{
     stage: DealStage;
     count: number;
@@ -106,6 +165,7 @@ export async function pipelineSummary(): Promise<PipelineSummary> {
       expectedValue: true,
       probability: true,
       createdAt: true,
+      archivedAt: true,
     },
   });
 
@@ -122,8 +182,16 @@ export async function pipelineSummary(): Promise<PipelineSummary> {
   let wonCount = 0;
   let wonValue = 0;
   let lostCount = 0;
+  let archivedCount = 0;
+  let activeTotal = 0;
 
   for (const d of allDeals) {
+    if (d.archivedAt) {
+      archivedCount += 1;
+      continue;
+    }
+    activeTotal += 1;
+
     const entry =
       byStageMap.get(d.stage) ??
       { count: 0, expectedCents: 0, weightedCents: 0 };
@@ -162,13 +230,14 @@ export async function pipelineSummary(): Promise<PipelineSummary> {
   }));
 
   return {
-    totalCount: allDeals.length,
+    totalCount: activeTotal,
     openCount,
     weightedValueCents: weightedOpen,
     expectedValueCents: expectedOpen,
     wonCountYtd: wonCount,
     wonValueYtdCents: wonValue,
     lostCountYtd: lostCount,
+    archivedCount,
     byStage,
   };
 }

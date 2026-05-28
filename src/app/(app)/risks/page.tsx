@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { listFirmRisks } from '@/server/risks';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -225,11 +225,12 @@ export default async function FirmRisksPage({
                         href={`/directory/people/${r.owner.id}`}
                         className="flex items-center gap-1.5 text-sm hover:underline"
                       >
-                        <Avatar className="h-5 w-5">
-                          <AvatarFallback className="text-[9px]">
-                            {r.owner.initials}
-                          </AvatarFallback>
-                        </Avatar>
+                        <PersonAvatar
+  className="h-5 w-5"
+  fallbackClassName="text-[9px]"
+  initials={r.owner.initials}
+  headshotUrl={r.owner.headshotUrl}
+/>
                         <span className="text-ink-2">
                           {r.owner.firstName} {r.owner.lastName}
                         </span>

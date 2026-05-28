@@ -34,3 +34,19 @@ export function parseIsoDate(s: string | undefined): Date {
 export function formatDayLabel(date: Date): string {
   return date.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
 }
+
+/**
+ * Returns the Monday that starts the block of four Mon–Sun weeks whose last
+ * week contains the given date. This gives a rolling 28-day grid anchored to
+ * the reference date (typically "today"), with the current week as the rightmost
+ * column group — so earlier rows are historical context, the right-hand column
+ * is what you're actively logging.
+ */
+export function startOfFourWeekBlock(reference: Date): Date {
+  const currentWeekStart = startOfWeek(reference);
+  return addDays(currentWeekStart, -21);
+}
+
+export function fourWeekDates(blockStart: Date): Date[] {
+  return Array.from({ length: 28 }, (_, i) => addDays(blockStart, i));
+}

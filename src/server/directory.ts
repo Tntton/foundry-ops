@@ -1,4 +1,4 @@
-import type { Band, Employment, Region, Role } from '@prisma/client';
+import type { Band, Employment, PoolStatus, Role } from '@prisma/client';
 import { prisma } from '@/server/db';
 
 export type PersonListRow = {
@@ -11,17 +11,41 @@ export type PersonListRow = {
   level: string;
   rate: number; // cents
   rateUnit: 'hour' | 'day';
-  fte: number;
-  region: Region;
+  fte: number | null;
+  region: string; // ISO 3166-1 alpha-2
   employment: Employment;
   active: boolean;
+  /** Soft-pause — set when the person has marked themselves (or been
+   *  marked) inactive. They still appear in directory + a separate
+   *  "Inactive" pool bucket on resource planning, but are excluded from
+   *  FTE / utilisation roll-ups and all input surfaces are disabled. */
+  inactive: boolean;
+  /** "Staff" = the FT/PT employee subset whose hours we track for
+   *  utilisation. Drives filters on bandwidth heatmap, resource
+   *  planning, and /utilisation. Partners / fellows / contractors get
+   *  isStaff=false even if they have an FTE value. */
+  isStaff: boolean;
+  /** Super-admin manual status override (or null when computed). Drives
+   *  the colour pip on directory + profile. */
+  poolStatusOverride: PoolStatus | null;
   roles: Role[];
+  /** Optional avatar — drives PersonAvatar across the app. Falls back
+   *  to initials when null/missing. */
+  headshotUrl: string | null;
+  /** WhatsApp number in E.164 (when set) — surfaced in staff
+   *  directory so anyone can reach a colleague directly without
+   *  clicking through to a profile they may not have access to. */
+  whatsappNumber: string | null;
+  /** Last successful sign-in timestamp (Entra OR magic-link), stamped
+   *  by the NextAuth signIn event. Null = "Not yet logged in" — useful
+   *  for spotting accounts that were provisioned but never opened. */
+  lastLoginAt: Date | null;
 };
 
 export type PersonListFilter = {
   search?: string;
   band?: Band;
-  region?: Region;
+  region?: string;
   employment?: Employment;
   active?: 'active' | 'archived' | 'all';
 };
@@ -62,7 +86,13 @@ export async function listPeople(filter: PersonListFilter = {}): Promise<PersonL
       region: true,
       employment: true,
       endDate: true,
+      inactiveAt: true,
+      isStaff: true,
+      poolStatusOverride: true,
       roles: true,
+      headshotUrl: true,
+      whatsappNumber: true,
+      lastLoginAt: true,
     },
   });
 
@@ -76,23 +106,40 @@ export async function listPeople(filter: PersonListFilter = {}): Promise<PersonL
     level: r.level,
     rate: r.rate,
     rateUnit: r.rateUnit,
-    fte: Number(r.fte),
+    fte: r.fte !== null ? Number(r.fte) : null,
     region: r.region,
     employment: r.employment,
     active: r.endDate === null,
+    inactive: r.inactiveAt !== null,
+    isStaff: r.isStaff,
+    poolStatusOverride: r.poolStatusOverride,
     roles: r.roles,
+    headshotUrl: r.headshotUrl,
+    whatsappNumber: r.whatsappNumber,
+    lastLoginAt: r.lastLoginAt,
   }));
 }
 
 export type PersonDetail = PersonListRow & {
   phone: string | null;
   whatsappNumber: string | null;
+  linkedinUrl: string | null;
+  website: string | null;
+  domain: string | null;
+  logoUrl: string | null;
+  mailingAddress: string | null;
+  emergencyContactName: string | null;
+  emergencyContactRelationship: string | null;
+  emergencyContactPhone: string | null;
+  emergencyContactEmail: string | null;
   entraUserId: string | null;
   xeroContactId: string | null;
   startDate: Date;
   endDate: Date | null;
+  inactiveAt: Date | null;
   bankBsb: string | null; // encrypted blob — never render; test for presence only
   bankAcc: string | null;
+  headshotUrl: string | null;
 };
 
 export async function getPerson(id: string): Promise<PersonDetail | null> {
@@ -112,14 +159,28 @@ export async function getPerson(id: string): Promise<PersonDetail | null> {
       rateUnit: true,
       fte: true,
       region: true,
+      mailingAddress: true,
+      linkedinUrl: true,
+      website: true,
+      domain: true,
+      logoUrl: true,
+      emergencyContactName: true,
+      emergencyContactRelationship: true,
+      emergencyContactPhone: true,
+      emergencyContactEmail: true,
       employment: true,
       endDate: true,
+      inactiveAt: true,
+      isStaff: true,
+      poolStatusOverride: true,
       roles: true,
       entraUserId: true,
       xeroContactId: true,
       startDate: true,
       bankBsb: true,
       bankAcc: true,
+      headshotUrl: true,
+      lastLoginAt: true,
     },
   });
   if (!p) return null;
@@ -131,20 +192,35 @@ export async function getPerson(id: string): Promise<PersonDetail | null> {
     email: p.email,
     phone: p.phone,
     whatsappNumber: p.whatsappNumber,
+    linkedinUrl: p.linkedinUrl,
+    website: p.website,
+    domain: p.domain,
+    logoUrl: p.logoUrl,
+    mailingAddress: p.mailingAddress,
+    emergencyContactName: p.emergencyContactName,
+    emergencyContactRelationship: p.emergencyContactRelationship,
+    emergencyContactPhone: p.emergencyContactPhone,
+    emergencyContactEmail: p.emergencyContactEmail,
     band: p.band,
     level: p.level,
     rate: p.rate,
     rateUnit: p.rateUnit,
-    fte: Number(p.fte),
+    fte: p.fte !== null ? Number(p.fte) : null,
     region: p.region,
     employment: p.employment,
     entraUserId: p.entraUserId,
     xeroContactId: p.xeroContactId,
     startDate: p.startDate,
     endDate: p.endDate,
+    inactiveAt: p.inactiveAt,
     active: p.endDate === null,
+    inactive: p.inactiveAt !== null,
+    isStaff: p.isStaff,
+    poolStatusOverride: p.poolStatusOverride,
     roles: p.roles,
     bankBsb: p.bankBsb,
     bankAcc: p.bankAcc,
+    headshotUrl: p.headshotUrl,
+    lastLoginAt: p.lastLoginAt,
   };
 }

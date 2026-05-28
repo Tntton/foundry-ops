@@ -26,6 +26,30 @@ export type DraftPreview = {
   totalAmountCents: number;
   unbillableHours: number; // hours from people with no billRate on file
   unbillableEntryIds: string[];
+  rebillableCosts: RebillableCost[];
+  rebillableTotalExGstCents: number;
+};
+
+/**
+ * A cost (vendor bill or personal expense) marked rebillable on the
+ * project but not yet forwarded to a client invoice. Surfaced in the
+ * draft-invoice flow as candidate pass-through line items.
+ *
+ * `kind` distinguishes the source so the drafter can stamp
+ * `rebilledOnInvoiceId` on the right model and so the UI can label the
+ * line clearly. Net (ex-GST) amount is what flows onto the invoice — GST
+ * is recalculated at the invoice level.
+ */
+export type RebillableCost = {
+  kind: 'bill' | 'expense';
+  id: string;
+  date: Date;
+  /** Supplier (bill) or vendor/description (expense). */
+  label: string;
+  category: string;
+  amountTotalCents: number;
+  gstCents: number;
+  amountExGstCents: number;
 };
 
 /**
@@ -63,6 +87,7 @@ export async function previewInvoiceFromTimesheets(
         select: {
           id: true,
           initials: true,
+          headshotUrl: true,
           firstName: true,
           lastName: true,
           billRate: true,
@@ -109,6 +134,12 @@ export async function previewInvoiceFromTimesheets(
   const totalHours = perPerson.reduce((s, p) => s + p.hours, 0);
   const totalAmountCents = perPerson.reduce((s, p) => s + p.lineAmountCents, 0);
 
+  const rebillableCosts = await listRebillableCostsForProject(project.id);
+  const rebillableTotalExGstCents = rebillableCosts.reduce(
+    (s, c) => s + c.amountExGstCents,
+    0,
+  );
+
   return {
     projectId: project.id,
     projectCode: project.code,
@@ -121,23 +152,110 @@ export async function previewInvoiceFromTimesheets(
     totalAmountCents,
     unbillableHours,
     unbillableEntryIds,
+    rebillableCosts,
+    rebillableTotalExGstCents,
   };
 }
 
 /**
+ * List Bills + Expenses on a project that are marked `rebillable=true`
+ * and haven't been forwarded yet (`rebilledOnInvoiceId IS NULL`). Bills
+ * are filtered to status approved-or-later (no point billing the client
+ * for a cost that hasn't even cleared internal review). Expenses are
+ * filtered the same way (approved / batched_for_payment / reimbursed).
+ *
+ * Result is sorted oldest-first so longer-outstanding pass-throughs land
+ * on the next invoice ahead of fresher ones.
+ */
+export async function listRebillableCostsForProject(
+  projectId: string,
+): Promise<RebillableCost[]> {
+  const bills = await prisma.bill.findMany({
+    where: {
+      projectId,
+      rebillable: true,
+      rebilledOnInvoiceId: null,
+      status: { in: ['approved', 'scheduled_for_payment', 'paid'] },
+    },
+    select: {
+      id: true,
+      issueDate: true,
+      supplierName: true,
+      supplierInvoiceNumber: true,
+      category: true,
+      amountTotal: true,
+      gst: true,
+    },
+  });
+  const expenses = await prisma.expense.findMany({
+    where: {
+      projectId,
+      rebillable: true,
+      rebilledOnInvoiceId: null,
+      status: { in: ['approved', 'batched_for_payment', 'reimbursed'] },
+    },
+    select: {
+      id: true,
+      date: true,
+      vendor: true,
+      description: true,
+      category: true,
+      amount: true,
+      gst: true,
+      person: { select: { firstName: true, lastName: true } },
+    },
+  });
+  const billRows: RebillableCost[] = bills.map((b) => ({
+    kind: 'bill',
+    id: b.id,
+    date: b.issueDate,
+    label: `${b.supplierName ?? 'Vendor bill'}${
+      b.supplierInvoiceNumber ? ` · ${b.supplierInvoiceNumber}` : ''
+    }`,
+    category: b.category,
+    amountTotalCents: b.amountTotal,
+    gstCents: b.gst,
+    amountExGstCents: b.amountTotal - b.gst,
+  }));
+  const expenseRows: RebillableCost[] = expenses.map((e) => ({
+    kind: 'expense',
+    id: e.id,
+    date: e.date,
+    label: `${e.vendor ?? e.description ?? 'Expense'} · ${e.person.firstName} ${e.person.lastName}`,
+    category: e.category,
+    amountTotalCents: e.amount,
+    gstCents: e.gst,
+    amountExGstCents: e.amount - e.gst,
+  }));
+  return [...billRows, ...expenseRows].sort(
+    (a, b) => a.date.getTime() - b.date.getTime(),
+  );
+}
+
+/**
  * Create a draft invoice from approved timesheets. Links every billed
- * timesheet entry via billedInvoiceId so they won't get re-drafted. Returns
- * the new invoice id + code.
+ * timesheet entry via billedInvoiceId so they won't get re-drafted.
+ *
+ * `rebillableBillIds` / `rebillableExpenseIds` (optional) — IDs from the
+ * project's pending pass-through costs to forward onto this invoice as
+ * line items. Each gets stamped with `rebilledOnInvoiceId` so it can't be
+ * billed twice. Net (ex-GST) goes onto the line; the invoice's GST is
+ * recalculated as 10% of the new total ex-GST.
  */
 export async function draftInvoiceFromTimesheets(
   session: Session,
   projectId: string,
   periodStart: Date,
   periodEnd: Date,
+  rebillableBillIds: string[] = [],
+  rebillableExpenseIds: string[] = [],
 ): Promise<{ invoiceId: string; invoiceNumber: string }> {
   const preview = await previewInvoiceFromTimesheets(projectId, periodStart, periodEnd);
-  if (preview.perPerson.length === 0) {
-    throw new Error('No billable timesheet entries in that period.');
+  const wantsTime = preview.perPerson.length > 0;
+  const wantsCosts =
+    rebillableBillIds.length > 0 || rebillableExpenseIds.length > 0;
+  if (!wantsTime && !wantsCosts) {
+    throw new Error('No billable hours or rebillable costs to draft from.');
   }
 
   const project = await prisma.project.findUniqueOrThrow({
@@ -145,10 +263,67 @@ export async function draftInvoiceFromTimesheets(
     select: { code: true, clientId: true },
   });
 
+  // Resolve & validate the picked rebillable costs — they have to belong
+  // to this project, be flagged rebillable, and not already forwarded.
+  const billsToBill =
+    rebillableBillIds.length > 0
+      ? await prisma.bill.findMany({
+          where: {
+            id: { in: rebillableBillIds },
+            projectId,
+            rebillable: true,
+            rebilledOnInvoiceId: null,
+          },
+          select: {
+            id: true,
+            supplierName: true,
+            supplierInvoiceNumber: true,
+            issueDate: true,
+            category: true,
+            amountTotal: true,
+            gst: true,
+          },
+        })
+      : [];
+  const expensesToBill =
+    rebillableExpenseIds.length > 0
+      ? await prisma.expense.findMany({
+          where: {
+            id: { in: rebillableExpenseIds },
+            projectId,
+            rebillable: true,
+            rebilledOnInvoiceId: null,
+          },
+          select: {
+            id: true,
+            date: true,
+            vendor: true,
+            description: true,
+            category: true,
+            amount: true,
+            gst: true,
+            person: { select: { firstName: true, lastName: true } },
+          },
+        })
+      : [];
+  if (billsToBill.length !== rebillableBillIds.length) {
+    throw new Error(
+      'Some rebillable bills are no longer eligible — refresh and try again.',
+    );
+  }
+  if (expensesToBill.length !== rebillableExpenseIds.length) {
+    throw new Error(
+      'Some rebillable expenses are no longer eligible — refresh and try again.',
+    );
+  }
+  const rebillableExGst =
+    billsToBill.reduce((s, b) => s + (b.amountTotal - b.gst), 0) +
+    expensesToBill.reduce((s, e) => s + (e.amount - e.gst), 0);
+
   const invoiceNumber = await nextInvoiceNumber(project.code);
   const today = new Date();
   const dueDate = new Date(Date.now() + 30 * 24 * 3600 * 1000);
-  const amountExGst = preview.totalAmountCents;
+  const amountExGst = preview.totalAmountCents + rebillableExGst;
   const gst = Math.round(amountExGst * 0.1);
   const amountTotal = amountExGst + gst;
 
@@ -187,6 +362,36 @@ export async function draftInvoiceFromTimesheets(
         data: { billedInvoiceId: invoice.id },
       });
     }
+    // Pass-through bill lines.
+    for (const b of billsToBill) {
+      await tx.invoiceLine.create({
+        data: {
+          invoiceId: invoice.id,
+          label: `Pass-through · ${b.supplierName ?? 'Vendor'} ${
+            b.supplierInvoiceNumber ? `(${b.supplierInvoiceNumber}) ` : ''
+          }· ${b.category}`,
+          amount: b.amountTotal - b.gst,
+        },
+      });
+      await tx.bill.update({
+        where: { id: b.id },
+        data: { rebilledOnInvoiceId: invoice.id },
+      });
+    }
+    // Pass-through expense lines.
+    for (const e of expensesToBill) {
+      await tx.invoiceLine.create({
+        data: {
+          invoiceId: invoice.id,
+          label: `Pass-through · ${e.vendor ?? e.description ?? 'Expense'} · ${e.person.firstName} ${e.person.lastName} · ${e.category}`,
+          amount: e.amount - e.gst,
+        },
+      });
+      await tx.expense.update({
+        where: { id: e.id },
+        data: { rebilledOnInvoiceId: invoice.id },
+      });
+    }
     await writeAudit(tx, {
       actor: { type: 'person', id: session.person.id },
       action: 'drafted_from_timesheets',
@@ -201,6 +406,9 @@ export async function draftInvoiceFromTimesheets(
           amountExGst,
           periodStart: preview.periodStart.toISOString(),
           periodEnd: preview.periodEnd.toISOString(),
+          rebillableBillIds,
+          rebillableExpenseIds,
+          rebillableExGstCents: rebillableExGst,
         },
       },
       source: 'web',
@@ -225,6 +433,7 @@ export type MilestonePreview = {
   clientId: string;
   available: DraftableMilestone[];
   alreadyInvoiced: DraftableMilestone[];
+  rebillableCosts: RebillableCost[];
 };
 
 /**
@@ -263,6 +472,7 @@ export async function previewMilestonesForInvoice(
     if (m.invoiceId) alreadyInvoiced.push(row);
     else available.push(row);
   }
+  const rebillableCosts = await listRebillableCostsForProject(project.id);
   return {
     projectId: project.id,
     projectCode: project.code,
@@ -270,6 +480,7 @@ export async function previewMilestonesForInvoice(
     clientId: project.clientId,
     available,
     alreadyInvoiced,
+    rebillableCosts,
   };
 }
 
@@ -277,14 +488,24 @@ export async function previewMilestonesForInvoice(
  * Draft an invoice from a set of milestone ids. Each milestone becomes one
  * invoice line and gets its invoiceId stamped + status flipped to 'invoiced'.
  * Invoice number / dates / GST same logic as the timesheet drafter.
+ *
+ * Optional `rebillableBillIds` / `rebillableExpenseIds` get appended as
+ * pass-through lines (same shape as the timesheet drafter) and stamped
+ * `rebilledOnInvoiceId` so they leave the rebillable float.
  */
 export async function draftInvoiceFromMilestones(
   session: Session,
   projectId: string,
   milestoneIds: string[],
+  rebillableBillIds: string[] = [],
+  rebillableExpenseIds: string[] = [],
 ): Promise<{ invoiceId: string; invoiceNumber: string }> {
-  if (milestoneIds.length === 0) {
-    throw new Error('Pick at least one milestone.');
+  if (
+    milestoneIds.length === 0 &&
+    rebillableBillIds.length === 0 &&
+    rebillableExpenseIds.length === 0
+  ) {
+    throw new Error('Pick at least one milestone or pass-through cost.');
   }
 
   const project = await prisma.project.findUniqueOrThrow({
@@ -292,9 +513,12 @@ export async function draftInvoiceFromMilestones(
     select: { code: true, clientId: true },
   });
 
-  const milestones = await prisma.milestone.findMany({
-    where: { id: { in: milestoneIds }, projectId },
-  });
+  const milestones =
+    milestoneIds.length > 0
+      ? await prisma.milestone.findMany({
+          where: { id: { in: milestoneIds }, projectId },
+        })
+      : [];
   if (milestones.length !== milestoneIds.length) {
     throw new Error('Some milestones are not on this project.');
   }
@@ -305,10 +529,65 @@ export async function draftInvoiceFromMilestones(
     );
   }
 
+  const billsToBill =
+    rebillableBillIds.length > 0
+      ? await prisma.bill.findMany({
+          where: {
+            id: { in: rebillableBillIds },
+            projectId,
+            rebillable: true,
+            rebilledOnInvoiceId: null,
+          },
+          select: {
+            id: true,
+            supplierName: true,
+            supplierInvoiceNumber: true,
+            category: true,
+            amountTotal: true,
+            gst: true,
+          },
+        })
+      : [];
+  const expensesToBill =
+    rebillableExpenseIds.length > 0
+      ? await prisma.expense.findMany({
+          where: {
+            id: { in: rebillableExpenseIds },
+            projectId,
+            rebillable: true,
+            rebilledOnInvoiceId: null,
+          },
+          select: {
+            id: true,
+            vendor: true,
+            description: true,
+            category: true,
+            amount: true,
+            gst: true,
+            person: { select: { firstName: true, lastName: true } },
+          },
+        })
+      : [];
+  if (billsToBill.length !== rebillableBillIds.length) {
+    throw new Error(
+      'Some rebillable bills are no longer eligible — refresh and try again.',
+    );
+  }
+  if (expensesToBill.length !== rebillableExpenseIds.length) {
+    throw new Error(
+      'Some rebillable expenses are no longer eligible — refresh and try again.',
+    );
+  }
+
+  const milestoneExGst = milestones.reduce((s, m) => s + m.amount, 0);
+  const rebillableExGst =
+    billsToBill.reduce((s, b) => s + (b.amountTotal - b.gst), 0) +
+    expensesToBill.reduce((s, e) => s + (e.amount - e.gst), 0);
+
   const invoiceNumber = await nextInvoiceNumber(project.code);
   const today = new Date();
   const dueDate = new Date(Date.now() + 30 * 24 * 3600 * 1000);
-  const amountExGst = milestones.reduce((s, m) => s + m.amount, 0);
+  const amountExGst = milestoneExGst + rebillableExGst;
   const gst = Math.round(amountExGst * 0.1);
   const amountTotal = amountExGst + gst;
 
@@ -339,6 +618,34 @@ export async function draftInvoiceFromMilestones(
         data: { invoiceId: invoice.id, status: 'invoiced' },
       });
     }
+    for (const b of billsToBill) {
+      await tx.invoiceLine.create({
+        data: {
+          invoiceId: invoice.id,
+          label: `Pass-through · ${b.supplierName ?? 'Vendor'} ${
+            b.supplierInvoiceNumber ? `(${b.supplierInvoiceNumber}) ` : ''
+          }· ${b.category}`,
+          amount: b.amountTotal - b.gst,
+        },
+      });
+      await tx.bill.update({
+        where: { id: b.id },
+        data: { rebilledOnInvoiceId: invoice.id },
+      });
+    }
+    for (const e of expensesToBill) {
+      await tx.invoiceLine.create({
+        data: {
+          invoiceId: invoice.id,
+          label: `Pass-through · ${e.vendor ?? e.description ?? 'Expense'} · ${e.person.firstName} ${e.person.lastName} · ${e.category}`,
+          amount: e.amount - e.gst,
+        },
+      });
+      await tx.expense.update({
+        where: { id: e.id },
+        data: { rebilledOnInvoiceId: invoice.id },
+      });
+    }
     await writeAudit(tx, {
       actor: { type: 'person', id: session.person.id },
       action: 'drafted_from_milestones',
@@ -350,6 +657,9 @@ export async function draftInvoiceFromMilestones(
           projectId,
           milestoneIds,
           amountExGst,
+          rebillableBillIds,
+          rebillableExpenseIds,
+          rebillableExGstCents: rebillableExGst,
         },
       },
       source: 'web',

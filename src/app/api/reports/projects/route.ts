@@ -53,8 +53,8 @@ export async function GET(req: Request) {
       `${p.primaryPartner.firstName} ${p.primaryPartner.lastName}`,
       `${p.manager.firstName} ${p.manager.lastName}`,
       centsToDecimal(p.contractValueCents),
-      ymd(p.startDate),
-      ymd(p.endDate),
+      p.startDate ? ymd(p.startDate) : '',
+      p.endDate ? ymd(p.endDate) : '',
     ]),
   );
 

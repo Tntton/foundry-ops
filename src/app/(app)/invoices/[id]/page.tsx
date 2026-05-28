@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { XeroPushInvoiceButton } from './xero-push-button';
 import { DeleteDraftInvoiceButton } from './delete-button';
 import { MarkSentButton, RecordPaymentForm } from './status-forms';
+import { SubmitForApprovalButton, RecallFromApprovalButton } from './approval-forms';
 import {
   Table,
   TableBody,
@@ -56,6 +57,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
     hasCapability(session, 'invoice.delete_draft') &&
     (invoice.status === 'draft' || invoice.status === 'pending_approval');
   const canSend = hasCapability(session, 'invoice.send');
+  const canCreate = hasCapability(session, 'invoice.create');
   const paidCents = invoice.paymentReceivedAmount ?? 0;
   const outstandingCents = invoice.amountTotal - paidCents;
   const canMarkSent = canSend && invoice.status === 'approved';
@@ -63,6 +65,94 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
     canSend &&
     ['approved', 'sent', 'partial', 'overdue'].includes(invoice.status) &&
     outstandingCents > 0;
+
+  // Pending approval row + any contractor bills auto-generated from this invoice.
+  // Also pull every Bill / Expense that was forwarded onto this invoice as a
+  // pass-through line — drives the "Pass-through receipts" section + the
+  // bundled-PDF download button.
+  const [
+    pendingApproval,
+    autoBills,
+    contractorTimesheetEntries,
+    rebilledBills,
+    rebilledExpenses,
+  ] = await Promise.all([
+    invoice.status === 'pending_approval'
+      ? prisma.approval.findFirst({
+          where: { subjectType: 'invoice', subjectId: invoice.id, status: 'pending' },
+          select: { id: true, requiredRole: true, createdAt: true },
+        })
+      : Promise.resolve(null),
+    prisma.bill.findMany({
+      where: {
+        receivedVia: 'auto_from_approved_invoice',
+        // Cheap join via supplierPersonId set + projectId match wouldn't be precise;
+        // use audit events instead (sourceInvoiceId is stamped there).
+      },
+      select: {
+        id: true,
+        supplierName: true,
+        amountTotal: true,
+        gst: true,
+        status: true,
+        projectId: true,
+        issueDate: true,
+        dueDate: true,
+        abaBatchId: true,
+        supplierPersonId: true,
+      },
+    }),
+    prisma.timesheetEntry.findMany({
+      where: {
+        billedInvoiceId: invoice.id,
+        person: { employment: 'contractor' },
+      },
+      select: {
+        personId: true,
+        person: { select: { firstName: true, lastName: true } },
+        projectId: true,
+      },
+    }),
+    prisma.bill.findMany({
+      where: { rebilledOnInvoiceId: invoice.id },
+      select: {
+        id: true,
+        supplierName: true,
+        supplierInvoiceNumber: true,
+        issueDate: true,
+        amountTotal: true,
+        attachmentSharepointUrl: true,
+      },
+      orderBy: { issueDate: 'asc' },
+    }),
+    prisma.expense.findMany({
+      where: { rebilledOnInvoiceId: invoice.id },
+      select: {
+        id: true,
+        vendor: true,
+        description: true,
+        date: true,
+        amount: true,
+        receiptSharepointUrl: true,
+        person: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { date: 'asc' },
+    }),
+  ]);
+  const rebilledCount = rebilledBills.length + rebilledExpenses.length;
+
+  // Filter the auto-bill list to ones that belong to this invoice. We don't
+  // store sourceInvoiceId on Bill (audit-only), so we cross-check via timesheet
+  // links: any contractor on this invoice gets matched to bills with the same
+  // (personId, projectId).
+  const expectedKeys = new Set(
+    contractorTimesheetEntries.map((e) => `${e.personId}:${e.projectId}`),
+  );
+  const linkedAutoBills = autoBills.filter(
+    (b) =>
+      b.supplierPersonId !== null &&
+      expectedKeys.has(`${b.supplierPersonId}:${b.projectId}`),
+  );
 
   return (
     <div className="space-y-6">
@@ -100,11 +190,52 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
               {formatMoney(invoice.amountTotal)}
             </div>
           </div>
+          <Link
+            href={`/invoices/${invoice.id}/preview`}
+            className={`rounded-md px-3 py-1.5 text-xs ${
+              invoice.status === 'approved' && !invoice.taxInvoiceFinalisedAt
+                ? 'bg-status-amber text-white hover:bg-status-amber/90'
+                : 'border border-line bg-card text-ink hover:bg-surface-hover'
+            }`}
+          >
+            {invoice.status === 'approved' && !invoice.taxInvoiceFinalisedAt
+              ? 'Finalise & download PDF →'
+              : 'Preview & PDF →'}
+          </Link>
+          {rebilledCount > 0 && (
+            <a
+              href={`/api/invoices/${invoice.id}/pdf-with-receipts`}
+              className="rounded-md border border-brand bg-brand/10 px-3 py-1.5 text-xs text-brand hover:bg-brand/20"
+            >
+              Download with {rebilledCount} receipt
+              {rebilledCount === 1 ? '' : 's'} →
+            </a>
+          )}
+          {canCreate && invoice.status === 'draft' && (
+            <SubmitForApprovalButton invoiceId={invoice.id} />
+          )}
+          {canCreate && invoice.status === 'pending_approval' && (
+            <RecallFromApprovalButton invoiceId={invoice.id} />
+          )}
           {canDeleteDraft && (
             <DeleteDraftInvoiceButton invoiceId={invoice.id} invoiceNumber={invoice.number} />
           )}
         </div>
       </header>
+
+      {invoice.status === 'pending_approval' && pendingApproval && (
+        <div className="rounded-md border border-status-amber bg-status-amber-soft px-3 py-2 text-sm text-status-amber">
+          Awaiting{' '}
+          <span className="font-medium capitalize">
+            {pendingApproval.requiredRole.replace('_', ' ')}
+          </span>{' '}
+          approval — submitted{' '}
+          {pendingApproval.createdAt.toLocaleDateString('en-AU')}.{' '}
+          <Link href="/approvals" className="underline">
+            Approval queue →
+          </Link>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Card>
@@ -216,6 +347,168 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
           {formatMoney(invoice.amountTotal)}
         </span>
       </div>
+
+      {rebilledCount > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              Pass-through receipts ·{' '}
+              <span className="text-sm font-normal text-ink-3">
+                attached to the bundled PDF
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p className="mb-1 text-xs text-ink-3">
+              Vendor invoices + staff receipts forwarded onto this
+              invoice as pass-through lines. Each appears as an
+              appendix page in the &quot;Download with receipts&quot;
+              PDF — clients see the source documentation alongside
+              the headline charge.
+            </p>
+            <ul className="space-y-1">
+              {rebilledBills.map((b) => (
+                <li
+                  key={b.id}
+                  className="flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-subtle/40 px-2 py-1.5 text-xs"
+                >
+                  <Badge variant="amber">bill</Badge>
+                  <Link
+                    href={`/bills/${b.id}`}
+                    className="font-medium text-ink hover:underline"
+                  >
+                    {b.supplierName ?? 'Vendor'}
+                  </Link>
+                  {b.supplierInvoiceNumber && (
+                    <span className="font-mono text-[10px] text-ink-3">
+                      {b.supplierInvoiceNumber}
+                    </span>
+                  )}
+                  <span className="text-ink-3">
+                    {b.issueDate.toLocaleDateString('en-AU')}
+                  </span>
+                  <span className="ml-auto tabular-nums text-ink">
+                    {formatMoney(b.amountTotal)}
+                  </span>
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${
+                      b.attachmentSharepointUrl
+                        ? 'bg-status-green-soft text-status-green'
+                        : 'bg-status-amber-soft text-status-amber'
+                    }`}
+                  >
+                    {b.attachmentSharepointUrl ? '✓ receipt' : '⚠ no file'}
+                  </span>
+                </li>
+              ))}
+              {rebilledExpenses.map((e) => (
+                <li
+                  key={e.id}
+                  className="flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-subtle/40 px-2 py-1.5 text-xs"
+                >
+                  <Badge variant="blue">expense</Badge>
+                  <Link
+                    href={`/expenses/${e.id}`}
+                    className="font-medium text-ink hover:underline"
+                  >
+                    {e.vendor ?? e.description ?? 'Expense'}
+                  </Link>
+                  <span className="text-ink-3">
+                    {e.person.firstName} {e.person.lastName} ·{' '}
+                    {e.date.toLocaleDateString('en-AU')}
+                  </span>
+                  <span className="ml-auto tabular-nums text-ink">
+                    {formatMoney(e.amount)}
+                  </span>
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${
+                      e.receiptSharepointUrl
+                        ? 'bg-status-green-soft text-status-green'
+                        : 'bg-status-amber-soft text-status-amber'
+                    }`}
+                  >
+                    {e.receiptSharepointUrl ? '✓ receipt' : '⚠ no file'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
+      {linkedAutoBills.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Contractor bills generated from this invoice</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="mb-3 text-xs text-ink-3">
+              Auto-created on invoice approval at each contractor&apos;s cost rate.
+              Once each bill is approved in the AP queue and added to a pay run,
+              contractors get paid for their hours on this invoice.
+            </p>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Contractor</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Pay run</TableHead>
+                  <TableHead className="text-right">Total inc GST</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {linkedAutoBills.map((b) => (
+                  <TableRow key={b.id}>
+                    <TableCell>
+                      <Link href={`/bills/${b.id}`} className="hover:underline">
+                        {b.supplierName}
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          b.status === 'approved'
+                            ? 'green'
+                            : b.status === 'paid'
+                              ? 'blue'
+                              : b.status === 'rejected'
+                                ? 'red'
+                                : 'amber'
+                        }
+                        className="capitalize"
+                      >
+                        {b.status.replace(/_/g, ' ')}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {b.abaBatchId ? (
+                        <Link
+                          href={`/payroll/${b.abaBatchId}`}
+                          className="text-brand hover:underline"
+                        >
+                          On pay run →
+                        </Link>
+                      ) : b.status === 'approved' ? (
+                        <Link
+                          href="/payroll/new"
+                          className="text-brand hover:underline"
+                        >
+                          Add to next pay run →
+                        </Link>
+                      ) : (
+                        <span className="text-ink-4">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-ink">
+                      {formatMoney(b.amountTotal)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

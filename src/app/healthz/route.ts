@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { prisma } from '@/server/db';
+import { getSystemHealth } from '@/server/system-health';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -7,23 +7,38 @@ export const dynamic = 'force-dynamic';
 const VERSION = process.env['npm_package_version'] ?? '0.0.0';
 const COMMIT = process.env['VERCEL_GIT_COMMIT_SHA'] ?? process.env['GIT_COMMIT_SHA'] ?? null;
 
+/**
+ * Machine-readable health endpoint. Used by Vercel uptime checks +
+ * any external pingers. Returns:
+ *   - 200 with `ok: true` when DB is reachable (degraded
+ *     integrations don't fail the check — staff workflows still
+ *     work via fallbacks)
+ *   - 503 when DB is unreachable (true outage)
+ *
+ * The full component breakdown sits in the JSON body so a curl /
+ * uptime monitor can alert on specific signals (e.g. "Xero down >
+ * 1h") without polling each integration separately.
+ *
+ * Public route — no auth — by design. Healthz endpoints need to be
+ * reachable without a session. We're careful not to leak anything
+ * sensitive: only state + last-sync timestamps + component names.
+ * No credentials, no token info, no PII.
+ */
 export async function GET() {
-  let db: 'up' | 'down' = 'down';
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    db = 'up';
-  } catch (err) {
-    console.error('[healthz] DB check failed:', err);
-  }
-
-  const ok = db === 'up';
+  const health = await getSystemHealth();
+  const ok = health.overall !== 'down';
   return NextResponse.json(
     {
       ok,
-      db,
+      overall: health.overall,
       version: VERSION,
       commit: COMMIT,
-      at: new Date().toISOString(),
+      at: health.generatedAt.toISOString(),
+      components: health.components.map((c) => ({
+        name: c.name,
+        state: c.state,
+        detail: c.detail,
+      })),
     },
     { status: ok ? 200 : 503 },
   );

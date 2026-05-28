@@ -9,13 +9,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { FOUNDRY_LEVELS, type LevelCode } from '@/lib/levels';
+import { COUNTRY_OPTIONS } from '@/lib/countries';
 
 const BANDS = ['MP', 'Partner', 'Expert', 'Consultant', 'Analyst'] as const;
 const EMPLOYMENTS: Array<{ value: 'ft' | 'contractor'; label: string }> = [
   { value: 'ft', label: 'Full-time' },
   { value: 'contractor', label: 'Contractor' },
 ];
-const REGIONS = ['AU', 'NZ'] as const;
 const RATE_UNITS: Array<{ value: 'hour' | 'day'; label: string }> = [
   { value: 'hour', label: 'Hourly' },
   { value: 'day', label: 'Daily' },
@@ -38,10 +38,17 @@ export function PersonEditForm({
   const initialLevel = (person.level as LevelCode) ?? 'T1';
   const [level, setLevel] = useState<LevelCode>(initialLevel);
   const [band, setBand] = useState<string>(person.band);
+  const [employment, setEmployment] = useState<'ft' | 'contractor'>(person.employment);
   const [rateUnit, setRateUnit] = useState<'hour' | 'day'>(person.rateUnit);
   const [rateDollars, setRateDollars] = useState<string>(
     person.rate > 0 ? (person.rate / 100).toFixed(0) : '0',
   );
+  // Leadership tier — partner / MP / AP. Layout hides the FTE
+  // field for them since their capacity isn't tracked against a
+  // pyramid baseline.
+  const isLeadershipBandLocal =
+    band === 'Partner' || band === 'MP' || band === 'Associate_Partner';
+  const showFte = employment === 'ft' && !isLeadershipBandLocal;
 
   const levelMeta = useMemo(
     () => FOUNDRY_LEVELS.find((l) => l.code === level) ?? FOUNDRY_LEVELS[0]!,
@@ -141,7 +148,12 @@ export function PersonEditForm({
         </FieldRow>
         <FieldRow>
           <Field label="Employment" required error={errs['employment']}>
-            <Select name="employment" defaultValue={person.employment} required>
+            <Select
+              name="employment"
+              value={employment}
+              onChange={(e) => setEmployment(e.target.value as 'ft' | 'contractor')}
+              required
+            >
               {EMPLOYMENTS.map((e) => (
                 <option key={e.value} value={e.value}>
                   {e.label}
@@ -149,28 +161,46 @@ export function PersonEditForm({
               ))}
             </Select>
           </Field>
-          <Field label="FTE (0.10 – 1.00)" required error={errs['fte']}>
+          <Field
+            label="FTE (0.10 – 1.00)"
+            error={errs['fte']}
+            hint={
+              !showFte
+                ? employment === 'contractor'
+                  ? 'Contractors are casual — leave blank'
+                  : 'Partners — n/a'
+                : undefined
+            }
+          >
             <Input
               name="fte"
               type="number"
               step="0.05"
               min="0.10"
               max="1.00"
-              defaultValue={person.fte.toFixed(2)}
-              required
+              defaultValue={person.fte !== null ? person.fte.toFixed(2) : ''}
+              disabled={!showFte}
               className="max-w-[140px]"
             />
           </Field>
-          <Field label="Region" required error={errs['region']}>
-            <Select name="region" defaultValue={person.region} required>
-              {REGIONS.map((r) => (
-                <option key={r} value={r}>
-                  {r}
+          <Field label="Country" required error={errs['region']}>
+            <Select name="region" defaultValue={person.region || 'AU'} required>
+              {COUNTRY_OPTIONS.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.code} — {c.name}
                 </option>
               ))}
             </Select>
           </Field>
         </FieldRow>
+        <Field label="Mailing address" error={errs['mailingAddress']} hint="Optional — for contracts + payroll">
+          <textarea
+            name="mailingAddress"
+            rows={2}
+            defaultValue={person.mailingAddress ?? ''}
+            className="w-full rounded-md border border-line bg-surface-elev px-3 py-2 text-sm text-ink shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+        </Field>
         <p className="text-xs text-ink-3">
           Selected level: <span className="font-mono">{levelMeta.code}</span> ·{' '}
           <span className="text-ink-2">{levelMeta.label}</span>
@@ -216,6 +246,23 @@ export function PersonEditForm({
               required
               className="max-w-[160px]"
             />
+          </Field>
+        </FieldRow>
+      </Section>
+
+      <Section title="Company">
+        <p className="-mt-1 text-xs text-ink-3">
+          For contractors — the consulting business they bill from.
+          Optional for staff/partners. The logo is auto-resolved from
+          the website (Clearbit).
+        </p>
+        <FieldRow>
+          <Field
+            label="Website"
+            error={errs['website']}
+            hint="https://… or example.com.au"
+          >
+            <CompanyWebsiteInput defaultValue={person.website ?? ''} email={person.email} />
           </Field>
         </FieldRow>
       </Section>
@@ -324,5 +371,79 @@ function Select({
     >
       {children}
     </select>
+  );
+}
+
+/**
+ * Controlled website input + Clearbit logo preview. The preview falls
+ * back to the email-derived domain when the website is blank — so a
+ * contractor with `john@johnconsulting.com.au` automatically gets a
+ * preview without typing the website explicitly.
+ */
+function CompanyWebsiteInput({
+  defaultValue,
+  email,
+}: {
+  defaultValue: string;
+  email: string;
+}) {
+  const [val, setVal] = useState(defaultValue);
+  const logo = previewLogoUrl(val) ?? previewLogoUrl(email);
+  return (
+    <div className="flex items-center gap-3">
+      <Input
+        name="website"
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        placeholder="https://www.consulting.com.au"
+        className="flex-1"
+      />
+      <CompanyLogoPreview src={logo} alt="company logo" />
+    </div>
+  );
+}
+
+function previewLogoUrl(input: string | null | undefined): string | null {
+  if (!input) return null;
+  const trimmed = input.trim().toLowerCase();
+  if (!trimmed) return null;
+  let host: string | null = null;
+  if (trimmed.includes('@')) {
+    const at = trimmed.lastIndexOf('@');
+    if (at > 0 && at < trimmed.length - 1) host = trimmed.slice(at + 1);
+  } else {
+    const withProto = /^https?:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
+    try {
+      host = new URL(withProto).host;
+    } catch {
+      host = null;
+    }
+  }
+  if (!host) return null;
+  if (host.startsWith('www.')) host = host.slice(4);
+  const colon = host.indexOf(':');
+  if (colon >= 0) host = host.slice(0, colon);
+  if (!host.includes('.')) return null;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return null;
+  return `https://logo.clearbit.com/${host}`;
+}
+
+function CompanyLogoPreview({ src, alt }: { src: string | null; alt: string }) {
+  const [broken, setBroken] = useState(false);
+  if (!src || broken) {
+    return (
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-dashed border-line bg-surface-subtle text-[9px] uppercase tracking-wide text-ink-4">
+        No logo
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={alt}
+      onError={() => setBroken(true)}
+      className="h-10 w-10 shrink-0 rounded-md border border-line bg-white object-contain p-1"
+    />
   );
 }

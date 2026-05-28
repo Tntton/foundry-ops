@@ -7,6 +7,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
+import { notifyApproversOfNewApproval } from '@/server/user-updates';
 import { resolveRequiredRole } from '@/server/approval-policies';
 import { nextInvoiceNumber } from '@/server/invoices';
 
@@ -106,7 +107,7 @@ export async function createInvoice(
 
       if (data.intent === 'submit') {
         const requiredRole = await resolveRequiredRole('invoice', amountTotalCents);
-        await tx.approval.create({
+        const approval = await tx.approval.create({
           data: {
             subjectType: 'invoice',
             subjectId: invoice.id,
@@ -118,6 +119,15 @@ export async function createInvoice(
             },
             channel: 'web',
           },
+          select: { id: true },
+        });
+        await notifyApproversOfNewApproval(tx, {
+          approvalId: approval.id,
+          subjectType: 'invoice',
+          subjectId: invoice.id,
+          requiredRole,
+          requestedById: session.person.id,
+          summary: `${invoice.number} · $${(amountTotalCents / 100).toFixed(0)}`,
         });
       }
 

@@ -5,11 +5,16 @@ import { hasCapability } from '@/server/capabilities';
 import { listPartnerOptions } from '@/server/clients';
 import { NewClientForm } from './form';
 
-export default async function NewClientPage() {
+export default async function NewClientPage({
+  searchParams,
+}: {
+  searchParams: { createProjectAfter?: string };
+}) {
   const session = await getSession();
   if (!hasCapability(session, 'client.create')) notFound();
 
   const partners = await listPartnerOptions();
+  const createProjectAfterDefault = searchParams.createProjectAfter === '1';
 
   return (
     <div className="space-y-6">
@@ -24,7 +29,10 @@ export default async function NewClientPage() {
           Creates the Client record. If Xero is connected, a Xero contact is created too (best-effort — re-sync any time from the detail page).
         </p>
       </header>
-      <NewClientForm partners={partners} />
+      <NewClientForm
+        partners={partners}
+        createProjectAfterDefault={createProjectAfterDefault}
+      />
     </div>
   );
 }

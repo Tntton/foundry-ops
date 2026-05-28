@@ -9,12 +9,22 @@ export type ProjectTeamUtilisationRow = {
   allocationPct: number | null; // 0-100 from ProjectTeam; null when not on roster
   onTeam: boolean;
   billableRateCents: number | null;
+  /** Effective cost rate used in the cost roll-up — equal to
+   *  `customRateCents` when the ProjectTeam row has an override,
+   *  otherwise the person's default `rate`. */
   costRateCents: number;
+  /** Per-project pay-rate override in cents (mirrors
+   *  ProjectTeam.customRateCents). Null when no override set OR for
+   *  ghost contributors without a roster row. The team-edit form
+   *  surfaces this as a "Custom rate" column so admins can set or
+   *  clear an override per-row. */
+  customRateCents: number | null;
   hoursApproved: number;
   hoursBilled: number;
   billableValueCents: number; // hours × billRate
   costValueCents: number; // hours × costRate
   marginCents: number;
+  headshotUrl: string | null;
 };
 
 export type ProjectTeamUtilisation = {
@@ -41,34 +51,37 @@ export type ProjectTeamUtilisation = {
 export async function computeProjectTeamUtilisation(
   projectId: string,
 ): Promise<ProjectTeamUtilisation> {
-  const [teamRows, timeEntries] = await Promise.all([
-    prisma.projectTeam.findMany({
-      where: { projectId },
-      include: {
-        person: {
-          select: {
-            id: true,
-            initials: true,
-            firstName: true,
-            lastName: true,
-            rate: true,
-            billRate: true,
-          },
+  // Sequential — Supabase pgbouncer caps session-mode at 15 connections
+  // and the project page already runs many helpers each with their own
+  // fan-out. Per-call latency is small (<150ms) so total render time is
+  // unaffected.
+  const teamRows = await prisma.projectTeam.findMany({
+    where: { projectId },
+    include: {
+      person: {
+        select: {
+          id: true,
+          initials: true,
+          headshotUrl: true,
+          firstName: true,
+          lastName: true,
+          rate: true,
+          billRate: true,
         },
       },
-    }),
-    prisma.timesheetEntry.findMany({
-      where: {
-        projectId,
-        status: { in: ['approved', 'billed'] },
-      },
-      select: {
-        hours: true,
-        personId: true,
-        billedInvoiceId: true,
-      },
-    }),
-  ]);
+    },
+  });
+  const timeEntries = await prisma.timesheetEntry.findMany({
+    where: {
+      projectId,
+      status: { in: ['approved', 'billed'] },
+    },
+    select: {
+      hours: true,
+      personId: true,
+      billedInvoiceId: true,
+    },
+  });
 
   // Aggregate hours per person.
   const hoursByPerson = new Map<string, { approved: number; billed: number }>();
@@ -80,12 +93,15 @@ export async function computeProjectTeamUtilisation(
     hoursByPerson.set(e.personId, cur);
   }
 
-  // Seed rows for everyone on the team roster first.
+  // Seed rows for everyone on the team roster first. customRateCents
+  // on ProjectTeam (when set) overrides the firm-wide Person.rate for
+  // this project — used when a contractor charges a non-default rate
+  // on a specific engagement.
   const byPerson = new Map<string, ProjectTeamUtilisationRow>();
   for (const t of teamRows) {
     const h = hoursByPerson.get(t.personId) ?? { approved: 0, billed: 0 };
     const billRate = t.person.billRate ?? null;
-    const costRate = t.person.rate;
+    const costRate = t.customRateCents ?? t.person.rate;
     byPerson.set(t.personId, {
       personId: t.personId,
       initials: t.person.initials,
@@ -96,11 +112,13 @@ export async function computeProjectTeamUtilisation(
       onTeam: true,
       billableRateCents: billRate,
       costRateCents: costRate,
+      customRateCents: t.customRateCents,
       hoursApproved: h.approved,
       hoursBilled: h.billed,
       billableValueCents: Math.round(h.approved * (billRate ?? 0)),
       costValueCents: Math.round(h.approved * costRate),
       marginCents: Math.round(h.approved * ((billRate ?? 0) - costRate)),
+      headshotUrl: t.person.headshotUrl,
     });
   }
 
@@ -112,6 +130,7 @@ export async function computeProjectTeamUtilisation(
       select: {
         id: true,
         initials: true,
+        headshotUrl: true,
         firstName: true,
         lastName: true,
         rate: true,
@@ -132,11 +151,13 @@ export async function computeProjectTeamUtilisation(
         onTeam: false,
         billableRateCents: billRate,
         costRateCents: costRate,
+        customRateCents: null,
         hoursApproved: h.approved,
         hoursBilled: h.billed,
         billableValueCents: Math.round(h.approved * (billRate ?? 0)),
         costValueCents: Math.round(h.approved * costRate),
         marginCents: Math.round(h.approved * ((billRate ?? 0) - costRate)),
+        headshotUrl: p.headshotUrl,
       });
     }
   }

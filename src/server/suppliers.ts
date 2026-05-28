@@ -1,5 +1,19 @@
 import { prisma } from '@/server/db';
 
+export type SupplierProfile = {
+  id: string;
+  name: string;
+  legalName: string | null;
+  abn: string | null;
+  acn: string | null;
+  website: string | null;
+  domain: string | null;
+  logoUrl: string | null;
+  supplierType: string;
+  contactEmail: string | null;
+  contactPhone: string | null;
+};
+
 export type SupplierListRow = {
   name: string;
   billCount: number;
@@ -7,6 +21,11 @@ export type SupplierListRow = {
   lastBillDate: Date | null;
   categories: string[]; // distinct categories they've billed under
   unpaidCents: number; // approved or scheduled but not yet paid
+  /** Resolved company-logo URL (Clearbit). Null when no Supplier row
+   *  exists for this name yet, or when the operator hasn't set a
+   *  website. Frontend should still render a fallback. */
+  logoUrl: string | null;
+  website: string | null;
 };
 
 /**
@@ -15,23 +34,34 @@ export type SupplierListRow = {
  * grouped summary: one row per distinct supplierName, with totals + categories
  * + last-bill date. Contractor-person suppliers are handled on /directory/
  * contractors instead.
+ *
+ * Where a Supplier row exists for the name (i.e. the operator has filled
+ * in website / ABN), we splat in `logoUrl` + `website` so the list page
+ * can render the company logo.
  */
 export async function listSuppliers(): Promise<SupplierListRow[]> {
-  const bills = await prisma.bill.findMany({
-    where: {
-      supplierPersonId: null,
-      supplierName: { not: null },
-      // Only count bills that are actually live (exclude rejected).
-      status: { in: ['pending_review', 'approved', 'scheduled_for_payment', 'paid'] },
-    },
-    select: {
-      supplierName: true,
-      amountTotal: true,
-      category: true,
-      status: true,
-      issueDate: true,
-    },
-  });
+  const [bills, profiles] = await Promise.all([
+    prisma.bill.findMany({
+      where: {
+        supplierPersonId: null,
+        supplierName: { not: null },
+        // Only count bills that are actually live (exclude rejected).
+        status: { in: ['pending_review', 'approved', 'scheduled_for_payment', 'paid'] },
+      },
+      select: {
+        supplierName: true,
+        amountTotal: true,
+        category: true,
+        status: true,
+        issueDate: true,
+      },
+    }),
+    prisma.supplier.findMany({
+      select: { name: true, website: true, logoUrl: true },
+    }),
+  ]);
+
+  const profileByName = new Map(profiles.map((p) => [p.name, p]));
 
   const grouped = new Map<string, SupplierListRow>();
   for (const b of bills) {
@@ -45,6 +75,8 @@ export async function listSuppliers(): Promise<SupplierListRow[]> {
         lastBillDate: null,
         categories: [],
         unpaidCents: 0,
+        logoUrl: profileByName.get(name)?.logoUrl ?? null,
+        website: profileByName.get(name)?.website ?? null,
       } satisfies SupplierListRow);
 
     cur.billCount += 1;
@@ -56,6 +88,24 @@ export async function listSuppliers(): Promise<SupplierListRow[]> {
     if (!cur.categories.includes(b.category)) cur.categories.push(b.category);
 
     grouped.set(name, cur);
+  }
+
+  // Include profile-only suppliers (operator added an ABN / website
+  // before any bills landed). Surface them with zero totals so admin
+  // can see the company exists in the directory.
+  for (const p of profiles) {
+    if (!grouped.has(p.name)) {
+      grouped.set(p.name, {
+        name: p.name,
+        billCount: 0,
+        totalPaidCents: 0,
+        lastBillDate: null,
+        categories: [],
+        unpaidCents: 0,
+        logoUrl: p.logoUrl,
+        website: p.website,
+      });
+    }
   }
 
   return [...grouped.values()].sort((a, b) => b.totalPaidCents - a.totalPaidCents);
@@ -76,6 +126,7 @@ export type SupplierBillRow = {
 
 export type SupplierDetail = {
   name: string;
+  profile: SupplierProfile | null;
   totals: {
     billCount: number;
     paidCents: number;
@@ -88,33 +139,53 @@ export type SupplierDetail = {
 };
 
 /**
- * Full bill history for a single external supplier. Supplier is identified
- * by name (there's no Supplier table — these are free-text on Bill rows).
- * Returns null when no bills exist under that name.
+ * Full bill history + structured profile for a single external supplier.
+ * Supplier is identified by name. Returns null when neither a Bill row
+ * nor a Supplier profile exists under that name.
  */
 export async function getSupplierByName(name: string): Promise<SupplierDetail | null> {
-  const bills = await prisma.bill.findMany({
-    where: {
-      supplierPersonId: null,
-      supplierName: name,
-      status: { in: ['pending_review', 'approved', 'scheduled_for_payment', 'paid', 'rejected'] },
-    },
-    orderBy: { issueDate: 'desc' },
-    select: {
-      id: true,
-      supplierInvoiceNumber: true,
-      issueDate: true,
-      dueDate: true,
-      amountTotal: true,
-      gst: true,
-      category: true,
-      status: true,
-      xeroBillId: true,
-      project: { select: { code: true, name: true } },
-    },
-  });
+  const [profile, bills] = await Promise.all([
+    prisma.supplier.findUnique({
+      where: { name },
+      select: {
+        id: true,
+        name: true,
+        legalName: true,
+        abn: true,
+        acn: true,
+        website: true,
+        domain: true,
+        logoUrl: true,
+        supplierType: true,
+        contactEmail: true,
+        contactPhone: true,
+      },
+    }),
+    prisma.bill.findMany({
+      where: {
+        supplierPersonId: null,
+        supplierName: name,
+        status: { in: ['pending_review', 'approved', 'scheduled_for_payment', 'paid', 'rejected'] },
+      },
+      orderBy: { issueDate: 'desc' },
+      select: {
+        id: true,
+        supplierInvoiceNumber: true,
+        issueDate: true,
+        dueDate: true,
+        amountTotal: true,
+        gst: true,
+        category: true,
+        status: true,
+        xeroBillId: true,
+        project: { select: { code: true, name: true } },
+      },
+    }),
+  ]);
 
-  if (bills.length === 0) return null;
+  // Pre-supplier-table bills can exist without a profile; profile-only
+  // entries (operator added website before any bills) are also valid.
+  if (!profile && bills.length === 0) return null;
 
   const totals = bills.reduce(
     (acc, b) => {
@@ -140,6 +211,7 @@ export async function getSupplierByName(name: string): Promise<SupplierDetail | 
 
   return {
     name,
+    profile,
     totals,
     categoryBreakdown: [...categoryMap.entries()]
       .map(([category, v]) => ({ category, ...v }))

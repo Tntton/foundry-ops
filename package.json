@@ -26,6 +26,7 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.94.0",
     "@prisma/client": "5.20.0",
     "@radix-ui/react-avatar": "1.1.1",
     "@radix-ui/react-dialog": "1.1.2",
@@ -36,12 +37,15 @@
     "class-variance-authority": "0.7.0",
     "clsx": "2.1.1",
     "deep-diff": "1.0.2",
+    "jszip": "^3.10.1",
     "lucide-react": "0.454.0",
     "next": "14.2.15",
     "next-auth": "5.0.0-beta.25",
+    "pdf-lib": "^1.17.1",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "resend": "4.0.0",
+    "ssh2-sftp-client": "^12.1.1",
     "tailwind-merge": "2.5.4",
     "zod": "3.23.8"
   },
@@ -50,6 +54,7 @@
     "@types/node": "22.7.5",
     "@types/react": "18.3.11",
     "@types/react-dom": "18.3.0",
+    "@types/ssh2-sftp-client": "^9.0.6",
     "@typescript-eslint/eslint-plugin": "7.18.0",
     "@typescript-eslint/parser": "7.18.0",
     "autoprefixer": "10.4.20",

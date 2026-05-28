@@ -24,6 +24,12 @@ export type ContractorListRow = {
   billsPaidCents: number; // sum of Bill.amountTotal for approved+ bills where supplierPersonId = them
   billCount: number;
   projects: ContractorProjectSummary[];
+  headshotUrl: string | null;
+  /** Contractor's consulting business — set on the person edit form
+   *  and used to render a small company-logo chip alongside their
+   *  card. Null when not yet recorded. */
+  website: string | null;
+  logoUrl: string | null;
 };
 
 /**
@@ -38,6 +44,7 @@ export async function listContractors(): Promise<ContractorListRow[]> {
     select: {
       id: true,
       initials: true,
+      headshotUrl: true,
       firstName: true,
       lastName: true,
       email: true,
@@ -47,6 +54,8 @@ export async function listContractors(): Promise<ContractorListRow[]> {
       endDate: true,
       rate: true,
       xeroContactId: true,
+      website: true,
+      logoUrl: true,
     },
   });
   if (contractors.length === 0) return [];
@@ -142,6 +151,9 @@ export async function listContractors(): Promise<ContractorListRow[]> {
       billsPaidCents: billsPaid,
       billCount,
       projects,
+      headshotUrl: c.headshotUrl,
+      website: c.website,
+      logoUrl: c.logoUrl,
     };
   });
 }

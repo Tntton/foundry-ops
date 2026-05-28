@@ -77,6 +77,7 @@ export async function globalSearch(
             lastName: true,
             email: true,
             initials: true,
+            headshotUrl: true,
             endDate: true,
           },
         })

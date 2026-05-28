@@ -124,9 +124,11 @@ export default async function DraftInvoiceFromTimePage({
         <Card className="p-12 text-center text-sm text-status-red">
           Invalid date range. Period end must be after period start.
         </Card>
-      ) : !preview ? null : preview.perPerson.length === 0 ? (
+      ) : !preview ? null : preview.perPerson.length === 0 &&
+          preview.rebillableCosts.length === 0 ? (
         <Card className="p-12 text-center text-sm text-ink-3">
-          No approved, unbilled timesheets in this period.
+          No approved, unbilled timesheets in this period — and no
+          pass-through costs marked rebillable on this project.
           {preview.unbillableHours > 0 && (
             <p className="mt-2 text-xs text-status-amber">
               {preview.unbillableHours.toFixed(1)}h logged but no bill rate on file for those
@@ -136,6 +138,7 @@ export default async function DraftInvoiceFromTimePage({
         </Card>
       ) : (
         <>
+          {preview.perPerson.length > 0 && (
           <Card>
             <CardHeader>
               <CardTitle>Preview</CardTitle>
@@ -196,6 +199,7 @@ export default async function DraftInvoiceFromTimePage({
               )}
             </CardContent>
           </Card>
+          )}
 
           <Card>
             <CardHeader>
@@ -207,6 +211,7 @@ export default async function DraftInvoiceFromTimePage({
                 defaultStart={start}
                 defaultEnd={end}
                 disabled={preview.perPerson.length === 0}
+                rebillableCosts={preview.rebillableCosts}
               />
             </CardContent>
           </Card>

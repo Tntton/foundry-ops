@@ -94,6 +94,9 @@ export default async function BillsPage({
           <p className="text-sm text-ink-3">Supplier invoices + contractor payments.</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/bills/intake">Receipt Upload →</Link>
+          </Button>
           <a
             href={`/api/reports/bills${buildQs({ q, status, category })}`}
             className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"

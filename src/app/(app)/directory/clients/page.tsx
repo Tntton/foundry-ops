@@ -4,7 +4,9 @@ import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { listClients } from '@/server/clients';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { listClientRoster } from '@/server/client-roster';
+import { ClientRosterSection } from '@/components/client-roster-section';
+import { ClientLogo } from '@/components/client-logo';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -38,7 +40,7 @@ const STAGE_VARIANT: Record<string, 'amber' | 'green' | 'blue' | 'outline'> = {
 export default async function ClientsPage({
   searchParams,
 }: {
-  searchParams: { q?: string; deleted?: string };
+  searchParams: { q?: string; deleted?: string; archived?: string };
 }) {
   const session = await getSession();
   if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
@@ -46,7 +48,14 @@ export default async function ClientsPage({
   const canCreate = hasCapability(session, 'client.create');
   const q = searchParams.q ?? '';
   const deletedFlag = searchParams.deleted === '1';
-  const rows = await listClients(q);
+  const showArchived = searchParams.archived === '1';
+  const rows = await listClients(q, { includeArchived: showArchived });
+  // Active client roster — moved here from /directory (people tab).
+  // Source includes BD + project signals over the last 365 days; we
+  // filter dormant rows out for this view (operator can flip
+  // ?archived=1 in the URL to see archived/dormant).
+  const rosterAll = await listClientRoster();
+  const activeRoster = rosterAll.filter((r) => !r.notWorkedInLtm);
 
   const firmTotals = rows.reduce(
     (acc, c) => ({
@@ -102,8 +111,13 @@ export default async function ClientsPage({
           <TabsTrigger value="suppliers" asChild>
             <Link href="/directory/suppliers">Suppliers</Link>
           </TabsTrigger>
+          <TabsTrigger value="company" asChild>
+            <Link href="/directory/company">Company</Link>
+          </TabsTrigger>
         </TabsList>
       </Tabs>
+
+      <ClientRosterSection rows={activeRoster} />
 
       {rows.length > 0 && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -139,12 +153,21 @@ export default async function ClientsPage({
         </Button>
         {q && (
           <Button type="button" asChild variant="ghost" size="sm">
-            <Link href="/directory/clients">Clear</Link>
+            <Link href={`/directory/clients${showArchived ? '?archived=1' : ''}`}>Clear</Link>
           </Button>
         )}
-        <span className="ml-auto text-xs text-ink-3">
-          {rows.length} {rows.length === 1 ? 'client' : 'clients'}
-        </span>
+        <div className="ml-auto flex items-center gap-2 text-xs text-ink-3">
+          <span>
+            {rows.length} {rows.length === 1 ? 'client' : 'clients'}
+          </span>
+          <span className="text-ink-4">·</span>
+          <Link
+            href={`/directory/clients${showArchived ? (q ? `?q=${encodeURIComponent(q)}` : '') : `?archived=1${q ? `&q=${encodeURIComponent(q)}` : ''}`}`}
+            className="rounded-md border border-line px-2 py-1 hover:bg-surface-hover"
+          >
+            {showArchived ? 'Hide archived' : 'Show archived'}
+          </Link>
+        </div>
       </form>
 
       {rows.length === 0 ? (
@@ -164,6 +187,12 @@ export default async function ClientsPage({
             <Card key={c.id}>
               <CardHeader className="flex flex-row items-start justify-between gap-3">
                 <div className="flex items-center gap-3">
+                  <ClientLogo
+                    legalName={c.legalName}
+                    domain={c.domain ?? null}
+                    billingEmail={c.billingEmail ?? null}
+                    size={36}
+                  />
                   <Badge variant="outline" className="font-mono">
                     {c.code}
                   </Badge>
@@ -176,18 +205,6 @@ export default async function ClientsPage({
                     </Link>
                     {c.tradingName && (
                       <div className="text-[11px] text-ink-3">t/a {c.tradingName}</div>
-                    )}
-                    {c.primaryPartner && (
-                      <div className="mt-1 flex items-center gap-1.5 text-xs text-ink-3">
-                        <Avatar className="h-5 w-5">
-                          <AvatarFallback className="text-[9px]">
-                            {c.primaryPartner.initials}
-                          </AvatarFallback>
-                        </Avatar>
-                        <span>
-                          Partner · {c.primaryPartner.firstName} {c.primaryPartner.lastName}
-                        </span>
-                      </div>
                     )}
                   </div>
                 </div>

@@ -7,8 +7,10 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
+import { notifyApproversOfNewApproval } from '@/server/user-updates';
 import { getXeroIntegration } from '@/server/integrations/xero';
 import { pushInvoiceToXero } from '@/server/integrations/xero-invoices';
+import { resolveRequiredRole } from '@/server/approval-policies';
 
 export type InvoiceXeroPushState =
   | { status: 'idle' }
@@ -147,6 +149,171 @@ export type InvoiceTransitionState =
   | { status: 'idle' }
   | { status: 'error'; message: string }
   | { status: 'success'; message: string };
+
+/**
+ * Move a draft invoice into the approval queue. Creates an Approval row
+ * with the right `requiredRole` (>$20k → super_admin, ≤$20k → owning partner)
+ * and flips Invoice.status to 'pending_approval'.
+ */
+export async function submitInvoiceForApproval(
+  invoiceId: string,
+  _prev: InvoiceTransitionState,
+  _formData: FormData,
+): Promise<InvoiceTransitionState> {
+  const session = await getSession();
+  try {
+    requireCapability(session, 'invoice.create');
+  } catch {
+    return { status: 'error', message: 'Not authorized' };
+  }
+
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: {
+      id: true,
+      number: true,
+      status: true,
+      amountTotal: true,
+      project: { select: { primaryPartnerId: true, managerId: true } },
+    },
+  });
+  if (!invoice) return { status: 'error', message: 'Invoice not found' };
+  if (invoice.status !== 'draft') {
+    return {
+      status: 'error',
+      message: `Can't submit — invoice is ${invoice.status}.`,
+    };
+  }
+
+  // Refuse double-submit: if there's an active pending approval already, bail.
+  const existing = await prisma.approval.findFirst({
+    where: { subjectType: 'invoice', subjectId: invoiceId, status: 'pending' },
+  });
+  if (existing) {
+    return {
+      status: 'error',
+      message: 'Already in the approval queue.',
+    };
+  }
+
+  const requiredRole = await resolveRequiredRole('invoice', invoice.amountTotal);
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.invoice.update({
+        where: { id: invoiceId },
+        data: { status: 'pending_approval' },
+      });
+      const approval = await tx.approval.create({
+        data: {
+          subjectType: 'invoice',
+          subjectId: invoiceId,
+          requestedById: session!.person.id,
+          requiredRole,
+          thresholdContext: {
+            invoice_amount_cents: invoice.amountTotal,
+          },
+          channel: 'web',
+        },
+        select: { id: true },
+      });
+      await notifyApproversOfNewApproval(tx, {
+        approvalId: approval.id,
+        subjectType: 'invoice',
+        subjectId: invoiceId,
+        requiredRole,
+        requestedById: session!.person.id,
+        summary: `${invoice.number} · $${(invoice.amountTotal / 100).toFixed(0)}`,
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session!.person.id },
+        action: 'submitted_for_approval',
+        entity: {
+          type: 'invoice',
+          id: invoiceId,
+          before: { status: 'draft' },
+          after: {
+            status: 'pending_approval',
+            requiredRole,
+            amountTotal: invoice.amountTotal,
+          },
+        },
+        source: 'web',
+      });
+    });
+  } catch (err) {
+    console.error('[invoice.submitForApproval] failed:', err);
+    return { status: 'error', message: 'Submit failed — try again.' };
+  }
+
+  revalidatePath('/invoices');
+  revalidatePath(`/invoices/${invoiceId}`);
+  revalidatePath('/approvals');
+  return {
+    status: 'success',
+    message: `${invoice.number} submitted to ${requiredRole.replace('_', ' ')}.`,
+  };
+}
+
+/**
+ * Bring a pending-approval invoice back to draft (e.g. spotted a typo).
+ * Cancels the active Approval row.
+ */
+export async function recallInvoiceFromApproval(
+  invoiceId: string,
+  _prev: InvoiceTransitionState,
+  _formData: FormData,
+): Promise<InvoiceTransitionState> {
+  const session = await getSession();
+  try {
+    requireCapability(session, 'invoice.create');
+  } catch {
+    return { status: 'error', message: 'Not authorized' };
+  }
+
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: { id: true, number: true, status: true },
+  });
+  if (!invoice) return { status: 'error', message: 'Invoice not found' };
+  if (invoice.status !== 'pending_approval') {
+    return {
+      status: 'error',
+      message: `Can't recall — invoice is ${invoice.status}.`,
+    };
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.invoice.update({
+        where: { id: invoiceId },
+        data: { status: 'draft' },
+      });
+      await tx.approval.deleteMany({
+        where: { subjectType: 'invoice', subjectId: invoiceId, status: 'pending' },
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session!.person.id },
+        action: 'recalled_from_approval',
+        entity: {
+          type: 'invoice',
+          id: invoiceId,
+          before: { status: 'pending_approval' },
+          after: { status: 'draft' },
+        },
+        source: 'web',
+      });
+    });
+  } catch (err) {
+    console.error('[invoice.recallFromApproval] failed:', err);
+    return { status: 'error', message: 'Recall failed — try again.' };
+  }
+
+  revalidatePath('/invoices');
+  revalidatePath(`/invoices/${invoiceId}`);
+  revalidatePath('/approvals');
+  return { status: 'success', message: `${invoice.number} returned to draft.` };
+}
 
 /**
  * Mark an approved invoice as sent. No email is sent from Foundry Ops —
@@ -306,7 +473,7 @@ export async function recordInvoicePayment(
 
   revalidatePath('/invoices');
   revalidatePath(`/invoices/${invoiceId}`);
-  revalidatePath('/ar');
+  revalidatePath('/receivables');
   return {
     status: 'success',
     message: fullyPaid

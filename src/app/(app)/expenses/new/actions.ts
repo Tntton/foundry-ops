@@ -7,16 +7,15 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
+import { notifyApproversOfNewApproval } from '@/server/user-updates';
 import { resolveRequiredRole } from '@/server/approval-policies';
+import { EXPENSE_CATEGORY_VALUES } from '@/lib/expense-categories';
 
-const EXPENSE_CATEGORIES = [
-  'travel',
-  'meals',
-  'office',
-  'tools',
-  'subscriptions',
-  'other',
-] as const;
+// Bills + expenses both post into Xero as expense lines, so they share
+// one canonical category list (see src/lib/expense-categories.ts) that
+// matches the AU starter chart of accounts + ATO Income Tax Assessment
+// Act 1997 deductibility splits.
+const EXPENSE_CATEGORIES = EXPENSE_CATEGORY_VALUES;
 
 const ExpenseCreate = z
   .object({
@@ -72,13 +71,28 @@ export async function submitExpense(
   const amountCents = Math.round(data.amountDollars * 100);
   const gstCents = Math.round(data.gstDollars * 100);
   const requiredRole = await resolveRequiredRole('expense', amountCents);
+  const projectId =
+    data.projectId && data.projectId !== '' ? data.projectId : null;
+
+  // If the expense is tagged to a project that defaults to pass-through
+  // billing (T&M / cost-plus contracts), seed `rebillable=true` so the
+  // line surfaces in the Payables / Reimbursables "rebillable" float
+  // automatically. Reviewer can still untoggle per row.
+  let rebillableDefault = false;
+  if (projectId) {
+    const proj = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { defaultExpensesRebillable: true },
+    });
+    rebillableDefault = proj?.defaultExpensesRebillable ?? false;
+  }
 
   try {
     await prisma.$transaction(async (tx) => {
       const expense = await tx.expense.create({
         data: {
           personId: session.person.id,
-          projectId: data.projectId && data.projectId !== '' ? data.projectId : null,
+          projectId,
           date: data.date,
           amount: amountCents,
           gst: gstCents,
@@ -86,9 +100,10 @@ export async function submitExpense(
           vendor: data.vendor,
           description: data.description,
           status: 'submitted',
+          rebillable: rebillableDefault,
         },
       });
-      await tx.approval.create({
+      const approval = await tx.approval.create({
         data: {
           subjectType: 'expense',
           subjectId: expense.id,
@@ -100,6 +115,17 @@ export async function submitExpense(
           },
           channel: 'web',
         },
+        select: { id: true },
+      });
+      // Notify the approver pool so they don't have to refresh
+      // /approvals to see new work landing.
+      await notifyApproversOfNewApproval(tx, {
+        approvalId: approval.id,
+        subjectType: 'expense',
+        subjectId: expense.id,
+        requiredRole,
+        requestedById: session.person.id,
+        summary: `${data.vendor ?? 'Expense'} · $${(amountCents / 100).toFixed(0)}`,
       });
       await writeAudit(tx, {
         actor: { type: 'person', id: session.person.id },

@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import {
@@ -50,7 +50,7 @@ export default async function RisksPage({ params }: { params: { code: string } }
   const people = await prisma.person.findMany({
     where: { endDate: null },
     orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
-    select: { id: true, initials: true, firstName: true, lastName: true },
+    select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
   });
   const peopleById = new Map(people.map((p) => [p.id, p]));
 
@@ -93,11 +93,12 @@ export default async function RisksPage({ params }: { params: { code: string } }
                     <TableCell>
                       {owner ? (
                         <div className="flex items-center gap-2">
-                          <Avatar className="h-6 w-6">
-                            <AvatarFallback className="text-[10px]">
-                              {owner.initials}
-                            </AvatarFallback>
-                          </Avatar>
+                          <PersonAvatar
+  className="h-6 w-6"
+  fallbackClassName="text-[10px]"
+  initials={owner.initials}
+  headshotUrl={owner.headshotUrl}
+/>
                           <span className="text-sm text-ink-2">
                             {owner.firstName} {owner.lastName}
                           </span>

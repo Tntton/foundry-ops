@@ -4,7 +4,7 @@ import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/table';
 import { XeroSyncClientButton } from './xero-sync-button';
 import { DeleteClientButton } from './delete-dialog';
+import { ClientArchiveControls } from './archive-controls';
 
 function formatMoney(cents: number): string {
   if (cents === 0) return '—';
@@ -55,7 +56,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
     where: { id: params.id },
     include: {
       primaryPartner: {
-        select: { id: true, initials: true, firstName: true, lastName: true },
+        select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
       },
       projects: {
         orderBy: { code: 'asc' },
@@ -90,6 +91,8 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   if (!client) notFound();
 
   const canDelete = hasCapability(session, 'client.delete');
+  const canEdit = hasCapability(session, 'client.edit');
+  const canCreateProject = hasCapability(session, 'project.create');
 
   // Analytics matching the list-view card.
   const activeProjects = client.projects.filter(
@@ -124,6 +127,45 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
 
   const recentInvoices = client.invoices.slice(0, 10);
 
+  // BD pipeline tied to this client. We pull every deal (open + closed)
+  // so the partner can see the full history, but separate into open vs
+  // closed for layout. Sequential to stay within the Supabase pool —
+  // this page already runs several queries up top.
+  const clientDeals = await prisma.deal.findMany({
+    where: { clientId: client.id },
+    orderBy: [{ archivedAt: 'asc' }, { stage: 'asc' }, { updatedAt: 'desc' }],
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      stage: true,
+      expectedValue: true,
+      probability: true,
+      lastConversationAt: true,
+      targetCloseDate: true,
+      archivedAt: true,
+      convertedProjectId: true,
+      engagementType: true,
+      owner: {
+        select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
+      },
+    },
+  });
+  const openDeals = clientDeals.filter(
+    (d) => !d.archivedAt && d.stage !== 'won' && d.stage !== 'lost',
+  );
+  const closedDeals = clientDeals.filter(
+    (d) => d.archivedAt || d.stage === 'won' || d.stage === 'lost',
+  );
+  const pipelineExpectedCents = openDeals.reduce(
+    (s, d) => s + d.expectedValue,
+    0,
+  );
+  const pipelineWeightedCents = openDeals.reduce(
+    (s, d) => s + Math.round(d.expectedValue * (d.probability / 100)),
+    0,
+  );
+
   return (
     <div className="space-y-6">
       <div className="text-sm">
@@ -132,6 +174,12 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         </Link>
       </div>
 
+      {client.archivedAt && (
+        <div className="rounded-md border border-status-amber bg-status-amber-soft px-3 py-2 text-sm text-status-amber">
+          Archived on {client.archivedAt.toLocaleDateString('en-AU')}. Hidden from active client lists.
+        </div>
+      )}
+
       <header className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -139,26 +187,58 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
               {client.code}
             </Badge>
             <h1 className="text-xl font-semibold text-ink">{client.legalName}</h1>
+            {client.archivedAt && (
+              <Badge variant="outline" className="text-[10px]">
+                Archived
+              </Badge>
+            )}
           </div>
           {client.tradingName && (
             <p className="mt-1 text-sm text-ink-3">trading as {client.tradingName}</p>
           )}
         </div>
-        {canDelete && (
-          <DeleteClientButton
-            clientId={client.id}
-            clientCode={client.code}
-            clientName={client.legalName}
-            deleteBlockers={deleteBlockers}
-          />
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {canEdit && (
+            <Link
+              href={`/directory/clients/${client.id}/edit`}
+              className="inline-flex h-9 items-center rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+            >
+              Edit profile
+            </Link>
+          )}
+          {canCreateProject && !client.archivedAt && (
+            <Link
+              href={`/projects/new?clientId=${client.id}`}
+              className="inline-flex h-9 items-center rounded-md bg-brand px-3 text-sm font-medium text-brand-ink hover:opacity-90"
+            >
+              + New project
+            </Link>
+          )}
+          {canDelete && (
+            <DeleteClientButton
+              clientId={client.id}
+              clientCode={client.code}
+              clientName={client.legalName}
+              deleteBlockers={deleteBlockers}
+            />
+          )}
+        </div>
       </header>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <TotalCard
           label="Projects"
           value={String(activeProjects)}
           sub={`${client.projects.length} total`}
+        />
+        <TotalCard
+          label="Pipeline"
+          value={String(openDeals.length)}
+          sub={
+            openDeals.length > 0
+              ? `${formatMoney(pipelineExpectedCents)} · ${formatMoney(pipelineWeightedCents)} wtd.`
+              : `${closedDeals.length} closed`
+          }
         />
         <TotalCard
           label="Contract value"
@@ -181,10 +261,51 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Billing</CardTitle>
+            <CardTitle>Identity &amp; billing</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <Row label="ABN">{client.abn ?? '—'}</Row>
+            <Row label="Entity type">
+              <Badge variant="outline" className="capitalize">
+                {(client.clientType ?? 'private_company').replace(/_/g, ' ')}
+              </Badge>
+            </Row>
+            <Row label="ABN">
+              {client.abn ? (
+                <span className="font-mono">
+                  {client.abn.replace(/^(\d{2})(\d{3})(\d{3})(\d{3})$/, '$1 $2 $3 $4')}
+                </span>
+              ) : (
+                '—'
+              )}
+            </Row>
+            <Row label="ACN">
+              {client.acn ? (
+                <span className="font-mono">
+                  {client.acn.replace(/^(\d{3})(\d{3})(\d{3})$/, '$1 $2 $3')}
+                </span>
+              ) : (
+                '—'
+              )}
+            </Row>
+            <Row label="Address">
+              {client.streetAddress || client.suburb || client.state || client.postcode ? (
+                <span>
+                  {[
+                    client.streetAddress,
+                    [client.suburb, client.state, client.postcode]
+                      .filter(Boolean)
+                      .join(' '),
+                    client.country !== 'AU' ? client.country : null,
+                  ]
+                    .filter(Boolean)
+                    .join(', ')}
+                </span>
+              ) : client.billingAddress ? (
+                <span>{client.billingAddress}</span>
+              ) : (
+                '—'
+              )}
+            </Row>
             <Row label="Billing email">
               {client.billingEmail ? (
                 <span className="font-mono">{client.billingEmail}</span>
@@ -192,8 +313,19 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
                 '—'
               )}
             </Row>
-            <Row label="Billing address">{client.billingAddress ?? '—'}</Row>
-            <Row label="Payment terms">{client.paymentTerms}</Row>
+            <Row label="Payment terms">
+              <span className="capitalize">{client.paymentTerms.replace('-', ' ')}</span>
+              {client.purchaseOrderRequired && (
+                <Badge variant="amber" className="ml-2 text-[10px]">
+                  PO required
+                </Badge>
+              )}
+            </Row>
+            {client.paymentInstructions && (
+              <Row label="Payment notes">
+                <span className="whitespace-pre-wrap">{client.paymentInstructions}</span>
+              </Row>
+            )}
             <Row label="Xero contact">
               {client.xeroContactId ? (
                 <div className="flex flex-col gap-1">
@@ -212,29 +344,212 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
 
         <Card>
           <CardHeader>
-            <CardTitle>Primary partner</CardTitle>
+            <CardTitle>Day-to-day contact</CardTitle>
           </CardHeader>
-          <CardContent>
-            {client.primaryPartner ? (
-              <Link
-                href={`/directory/people/${client.primaryPartner.id}`}
-                className="flex items-center gap-2 hover:text-ink"
-              >
-                <Avatar>
-                  <AvatarFallback>{client.primaryPartner.initials}</AvatarFallback>
-                </Avatar>
-                <div>
-                  <div className="font-medium text-ink">
-                    {client.primaryPartner.firstName} {client.primaryPartner.lastName}
+          <CardContent className="space-y-2 text-sm">
+            {client.contactName ? (
+              <>
+                <div className="font-medium text-ink">{client.contactName}</div>
+                {client.contactTitle && (
+                  <div className="text-xs text-ink-3">{client.contactTitle}</div>
+                )}
+                {client.contactEmail && (
+                  <a
+                    href={`mailto:${client.contactEmail}`}
+                    className="block font-mono text-xs text-brand hover:underline"
+                  >
+                    {client.contactEmail}
+                  </a>
+                )}
+                {client.contactPhone && (
+                  <div className="font-mono text-xs text-ink-2">
+                    {client.contactPhone}
                   </div>
-                </div>
-              </Link>
+                )}
+              </>
             ) : (
-              <p className="text-sm text-ink-3">Not assigned.</p>
+              <p className="text-ink-3">No contact set.</p>
             )}
+            <div className="border-t border-line pt-2 text-xs text-ink-3">
+              <span className="block uppercase tracking-wide">Internal owner</span>
+              {client.primaryPartner ? (
+                <Link
+                  href={`/directory/people/${client.primaryPartner.id}`}
+                  className="mt-1 flex items-center gap-2 hover:text-ink"
+                >
+                  <PersonAvatar
+  className="h-6 w-6"
+  fallbackClassName="text-[10px]"
+  initials={client.primaryPartner.initials}
+  headshotUrl={client.primaryPartner.headshotUrl}
+/>
+                  <span className="text-sm font-medium text-ink">
+                    {client.primaryPartner.firstName}{' '}
+                    {client.primaryPartner.lastName}
+                  </span>
+                </Link>
+              ) : (
+                <p className="mt-1 text-ink-3">Not assigned.</p>
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>
+
+      {/* BD pipeline tied to this client. Surfaced before Projects so
+          partners reading the file in chronological order (deal → won
+          → project) get the natural flow. Won deals show their linked
+          project so the connection between pipeline and delivery is
+          legible at a glance. */}
+      <Card className="p-0">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>
+            Pipeline ({openDeals.length}
+            {closedDeals.length > 0 ? ` · ${closedDeals.length} closed` : ''})
+          </CardTitle>
+          {hasCapability(session, 'deal.create') && !client.archivedAt && (
+            <Link
+              href={`/bd/new?clientId=${client.id}`}
+              className="text-sm text-brand hover:underline"
+            >
+              + New deal
+            </Link>
+          )}
+        </CardHeader>
+        {clientDeals.length === 0 ? (
+          <CardContent>
+            <p className="text-sm text-ink-3">
+              No deals tracked for this client yet.{' '}
+              {hasCapability(session, 'deal.create') && !client.archivedAt && (
+                <Link href="/bd/new" className="text-brand hover:underline">
+                  Add the first one →
+                </Link>
+              )}
+            </p>
+          </CardContent>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Code</TableHead>
+                <TableHead>Name / Engagement</TableHead>
+                <TableHead>Owner</TableHead>
+                <TableHead>Stage</TableHead>
+                <TableHead className="text-right">Expected</TableHead>
+                <TableHead className="text-right">Prob</TableHead>
+                <TableHead>Last convo</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {[...openDeals, ...closedDeals].map((d) => {
+                const days =
+                  d.lastConversationAt === null
+                    ? null
+                    : Math.floor(
+                        (Date.now() - d.lastConversationAt.getTime()) /
+                          (24 * 3600 * 1000),
+                      );
+                return (
+                  <TableRow
+                    key={d.id}
+                    className={
+                      d.archivedAt || d.stage === 'lost'
+                        ? 'opacity-60'
+                        : undefined
+                    }
+                  >
+                    <TableCell>
+                      <Link
+                        href={`/bd/${d.id}`}
+                        className="font-mono text-xs text-ink hover:underline"
+                      >
+                        {d.code}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="text-ink">
+                      {d.name ?? <span className="text-ink-4">(unnamed)</span>}
+                      {d.engagementType && (
+                        <span className="ml-1 text-xs text-ink-3">
+                          · {d.engagementType.replace(/[-_]/g, ' ')}
+                        </span>
+                      )}
+                      {d.convertedProjectId && (
+                        <Link
+                          href={`/projects`}
+                          className="ml-2 text-[11px] text-status-green hover:underline"
+                          title="Converted to a project"
+                        >
+                          → project ↗
+                        </Link>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1.5">
+                        <PersonAvatar
+  className="h-5 w-5"
+  fallbackClassName="text-[9px]"
+  initials={d.owner.initials}
+  headshotUrl={d.owner.headshotUrl}
+/>
+                        <span className="text-xs text-ink-2">
+                          {d.owner.firstName} {d.owner.lastName}
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          d.stage === 'won'
+                            ? 'green'
+                            : d.stage === 'lost'
+                              ? 'red'
+                              : d.stage === 'negotiation' || d.stage === 'proposal'
+                                ? 'blue'
+                                : d.stage === 'qualifying'
+                                  ? 'amber'
+                                  : 'outline'
+                        }
+                        className="capitalize"
+                      >
+                        {d.stage}
+                      </Badge>
+                      {d.archivedAt && (
+                        <Badge
+                          variant="outline"
+                          className="ml-1 text-[10px]"
+                        >
+                          Archived
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatMoney(d.expectedValue)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-xs text-ink-3">
+                      {d.probability}%
+                    </TableCell>
+                    <TableCell className="text-xs tabular-nums">
+                      {days === null ? (
+                        <span className="text-ink-4">—</span>
+                      ) : (
+                        <span
+                          className={
+                            days > 30 && !d.archivedAt && d.stage !== 'won' && d.stage !== 'lost'
+                              ? 'text-status-amber'
+                              : 'text-ink-3'
+                          }
+                        >
+                          {days === 0 ? 'Today' : `${days}d ago`}
+                        </span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
 
       <Card className="p-0">
         <CardHeader>
@@ -280,8 +595,11 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
                       </Badge>
                     </TableCell>
                     <TableCell className="text-xs text-ink-3 tabular-nums">
-                      {p.startDate.toLocaleDateString('en-AU')} →{' '}
-                      {end.toLocaleDateString('en-AU')}
+                      {p.startDate
+                        ? p.startDate.toLocaleDateString('en-AU')
+                        : '—'}{' '}
+                      →{' '}
+                      {end ? end.toLocaleDateString('en-AU') : '—'}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatMoney(p.contractValue)}
@@ -360,6 +678,24 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
               ))}
             </TableBody>
           </Table>
+        </Card>
+      )}
+
+      {canEdit && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Danger zone</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm text-ink-3">
+            <p>
+              Archiving hides the client from active lists but keeps all history. Use
+              archive once an engagement ends.
+            </p>
+            <ClientArchiveControls
+              clientId={client.id}
+              isArchived={Boolean(client.archivedAt)}
+            />
+          </CardContent>
         </Card>
       )}
     </div>

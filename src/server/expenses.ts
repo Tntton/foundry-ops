@@ -12,7 +12,13 @@ export type ExpenseListRow = {
   description: string | null;
   status: string;
   project: { id: string; code: string; name: string } | null;
-  person: { id: string; initials: string; firstName: string; lastName: string };
+  person: {
+    id: string;
+    initials: string;
+    firstName: string;
+    lastName: string;
+    headshotUrl: string | null;
+  };
 };
 
 export type ExpenseListFilter = {
@@ -78,7 +84,7 @@ export async function listExpenses(
     take: 200,
     include: {
       project: { select: { id: true, code: true, name: true } },
-      person: { select: { id: true, initials: true, firstName: true, lastName: true } },
+      person: { select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true } },
     },
   });
 

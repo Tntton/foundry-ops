@@ -7,17 +7,14 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
+import { notifyApproversOfNewApproval } from '@/server/user-updates';
 import { resolveRequiredRole } from '@/server/approval-policies';
 
-const BILL_CATEGORIES = [
-  'subscriptions',
-  'hosting',
-  'office',
-  'professional_services',
-  'contractor_payment',
-  'travel',
-  'other',
-] as const;
+// Bills + expenses share the canonical category list — both post into
+// Xero as expense lines, both follow the same ATO deductibility splits.
+// See src/lib/expense-categories.ts for the full set.
+import { EXPENSE_CATEGORY_VALUES } from '@/lib/expense-categories';
+const BILL_CATEGORIES = EXPENSE_CATEGORY_VALUES;
 
 const BillCreateSchema = z
   .object({
@@ -113,7 +110,7 @@ export async function createBill(
 
       if (data.intent === 'submit') {
         const requiredRole = await resolveRequiredRole('bill', amountCents);
-        await tx.approval.create({
+        const approval = await tx.approval.create({
           data: {
             subjectType: 'bill',
             subjectId: bill.id,
@@ -122,6 +119,15 @@ export async function createBill(
             thresholdContext: { bill_amount_cents: amountCents },
             channel: 'web',
           },
+          select: { id: true },
+        });
+        await notifyApproversOfNewApproval(tx, {
+          approvalId: approval.id,
+          subjectType: 'bill',
+          subjectId: bill.id,
+          requiredRole,
+          requestedById: session.person.id,
+          summary: `${bill.supplierName ?? 'Vendor'} · $${(amountCents / 100).toFixed(0)}`,
         });
       }
 

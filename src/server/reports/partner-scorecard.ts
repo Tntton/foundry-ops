@@ -1,5 +1,22 @@
 import { prisma } from '@/server/db';
 
+export type PartnerContributionTotals = {
+  /** Project value (contractValue) × contributionPct, summed across all
+   *  projects where this person holds the given role. Active projects
+   *  only (stage != archived) — archived projects feed the lifetime
+   *  invoiced/margin metrics instead. */
+  bdWonValueCents: number;
+  ledValueCents: number;
+  directlySupportedValueCents: number;
+  partiallySupportedValueCents: number;
+  /** Project counts for each bucket — useful colour for partners with
+   *  one big project vs many small ones. */
+  bdWonCount: number;
+  ledCount: number;
+  directlySupportedCount: number;
+  partiallySupportedCount: number;
+};
+
 export type PartnerScoreRow = {
   personId: string;
   initials: string;
@@ -7,6 +24,10 @@ export type PartnerScoreRow = {
   lastName: string;
   band: string;
   active: boolean;
+  /** True for the three full partners (TT / Michael Bonning / Chris
+   *  Parker). Drives the Partners vs Associate Partners split on the
+   *  scorecard page. */
+  isFullPartner: boolean;
   clientsLed: number;
   activeProjects: number;
   totalProjects: number;
@@ -20,16 +41,21 @@ export type PartnerScoreRow = {
   wonDealsYtdCents: number;
   hoursApproved: number;
   decisionsMadeLast30: number;
+  headshotUrl: string | null;
+  contributions: PartnerContributionTotals;
 };
 
 export type PartnerScoreboard = {
-  rows: PartnerScoreRow[]; // sorted by invoicedCents desc
+  fullPartners: PartnerScoreRow[]; // 3-way split: TT / MB / CP
+  associatePartners: PartnerScoreRow[]; // everyone else with role=partner
   totals: {
     activePartners: number;
     invoicedCents: number;
     marginCents: number;
     weightedPipelineCents: number;
     wonDealsYtdCents: number;
+    /** Cross-partner sum of contribution-weighted project value. */
+    contributionValueCents: number;
   };
 };
 
@@ -52,21 +78,25 @@ export async function computePartnerScoreboard(): Promise<PartnerScoreboard> {
     select: {
       id: true,
       initials: true,
+      headshotUrl: true,
       firstName: true,
       lastName: true,
       band: true,
       endDate: true,
+      isFullPartner: true,
     },
   });
   if (partners.length === 0) {
     return {
-      rows: [],
+      fullPartners: [],
+      associatePartners: [],
       totals: {
         activePartners: 0,
         invoicedCents: 0,
         marginCents: 0,
         weightedPipelineCents: 0,
         wonDealsYtdCents: 0,
+        contributionValueCents: 0,
       },
     };
   }
@@ -124,7 +154,8 @@ export async function computePartnerScoreboard(): Promise<PartnerScoreboard> {
     }),
   ]);
 
-  // Partner → accumulator
+  // Partner → accumulator. headshotUrl + isFullPartner are excluded (we
+  // read them directly from `partners` when building the final row).
   type Bucket = Omit<
     PartnerScoreRow,
     | 'personId'
@@ -133,7 +164,9 @@ export async function computePartnerScoreboard(): Promise<PartnerScoreboard> {
     | 'lastName'
     | 'band'
     | 'active'
+    | 'isFullPartner'
     | 'marginPct'
+    | 'headshotUrl'
   > & { projectIds: Set<string> };
   const buckets = new Map<string, Bucket>();
   for (const p of partners) {
@@ -151,7 +184,54 @@ export async function computePartnerScoreboard(): Promise<PartnerScoreboard> {
       hoursApproved: 0,
       decisionsMadeLast30: 0,
       projectIds: new Set<string>(),
+      contributions: {
+        bdWonValueCents: 0,
+        ledValueCents: 0,
+        directlySupportedValueCents: 0,
+        partiallySupportedValueCents: 0,
+        bdWonCount: 0,
+        ledCount: 0,
+        directlySupportedCount: 0,
+        partiallySupportedCount: 0,
+      },
     });
+  }
+
+  // Pull explicit contribution rows + their project values. Sum each
+  // partner's project value × contributionPct into the right bucket.
+  // Active-only (archived projects don't show "value" in the
+  // forward-looking scorecard view).
+  const contributions = await prisma.projectPartnerContribution.findMany({
+    where: {
+      personId: { in: partnerIds },
+      project: { stage: { not: 'archived' } },
+    },
+    select: {
+      personId: true,
+      role: true,
+      contributionPct: true,
+      project: { select: { contractValue: true } },
+    },
+  });
+  for (const c of contributions) {
+    const b = buckets.get(c.personId);
+    if (!b) continue;
+    const valueCents = Math.round(
+      (c.project.contractValue * c.contributionPct) / 100,
+    );
+    if (c.role === 'bd_won') {
+      b.contributions.bdWonValueCents += valueCents;
+      b.contributions.bdWonCount += 1;
+    } else if (c.role === 'led') {
+      b.contributions.ledValueCents += valueCents;
+      b.contributions.ledCount += 1;
+    } else if (c.role === 'directly_supported') {
+      b.contributions.directlySupportedValueCents += valueCents;
+      b.contributions.directlySupportedCount += 1;
+    } else if (c.role === 'partially_supported') {
+      b.contributions.partiallySupportedValueCents += valueCents;
+      b.contributions.partiallySupportedCount += 1;
+    }
   }
 
   for (const c of clients) {
@@ -277,6 +357,7 @@ export async function computePartnerScoreboard(): Promise<PartnerScoreboard> {
       lastName: p.lastName,
       band: p.band,
       active: p.endDate === null,
+      isFullPartner: p.isFullPartner,
       clientsLed: b.clientsLed,
       activeProjects: b.activeProjects,
       totalProjects: b.totalProjects,
@@ -290,10 +371,15 @@ export async function computePartnerScoreboard(): Promise<PartnerScoreboard> {
       wonDealsYtdCents: b.wonDealsYtdCents,
       hoursApproved: b.hoursApproved,
       decisionsMadeLast30: b.decisionsMadeLast30,
+      headshotUrl: p.headshotUrl,
+      contributions: b.contributions,
     };
   });
 
   rows.sort((a, b) => b.invoicedCents - a.invoicedCents);
+
+  const fullPartners = rows.filter((r) => r.isFullPartner);
+  const associatePartners = rows.filter((r) => !r.isFullPartner);
 
   const totals = rows.reduce(
     (acc, r) => ({
@@ -302,6 +388,12 @@ export async function computePartnerScoreboard(): Promise<PartnerScoreboard> {
       marginCents: acc.marginCents + r.marginCents,
       weightedPipelineCents: acc.weightedPipelineCents + r.weightedPipelineCents,
       wonDealsYtdCents: acc.wonDealsYtdCents + r.wonDealsYtdCents,
+      contributionValueCents:
+        acc.contributionValueCents +
+        r.contributions.bdWonValueCents +
+        r.contributions.ledValueCents +
+        r.contributions.directlySupportedValueCents +
+        r.contributions.partiallySupportedValueCents,
     }),
     {
       activePartners: 0,
@@ -309,8 +401,9 @@ export async function computePartnerScoreboard(): Promise<PartnerScoreboard> {
       marginCents: 0,
       weightedPipelineCents: 0,
       wonDealsYtdCents: 0,
+      contributionValueCents: 0,
     },
   );
 
-  return { rows, totals };
+  return { fullPartners, associatePartners, totals };
 }

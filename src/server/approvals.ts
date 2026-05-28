@@ -25,7 +25,13 @@ export type ApprovalQueueItem = {
   subjectId: string;
   requiredRole: Role;
   status: 'pending' | 'approved' | 'rejected';
-  requestedBy: { id: string; initials: string; firstName: string; lastName: string };
+  requestedBy: {
+    id: string;
+    initials: string;
+    firstName: string;
+    lastName: string;
+    headshotUrl: string | null;
+  };
   createdAt: Date;
   thresholdContext: Record<string, unknown> | null;
   summary: string;
@@ -42,7 +48,15 @@ export async function listPendingApprovals(session: Session): Promise<ApprovalQu
     },
     orderBy: { createdAt: 'asc' },
     include: {
-      requestedBy: { select: { id: true, initials: true, firstName: true, lastName: true } },
+      requestedBy: {
+        select: {
+          id: true,
+          initials: true,
+          firstName: true,
+          lastName: true,
+          headshotUrl: true,
+        },
+      },
     },
   });
 
@@ -134,6 +148,7 @@ export type ApprovalsAnalytics = {
     initials: string;
     name: string;
     count: number;
+    headshotUrl: string | null;
   }>;
 };
 
@@ -164,7 +179,7 @@ export async function getApprovalsAnalytics(session: Session): Promise<Approvals
         createdAt: true,
         decidedAt: true,
         decidedBy: {
-          select: { id: true, initials: true, firstName: true, lastName: true },
+          select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
         },
       },
     }),
@@ -185,7 +200,7 @@ export async function getApprovalsAnalytics(session: Session): Promise<Approvals
   let cycleCount = 0;
   const approverTally = new Map<
     string,
-    { initials: string; name: string; count: number }
+    { initials: string; name: string; count: number; headshotUrl: string | null }
   >();
   for (const d of recentDecided) {
     if (!d.decidedAt) continue;
@@ -200,7 +215,8 @@ export async function getApprovalsAnalytics(session: Session): Promise<Approvals
           initials: d.decidedBy.initials,
           name: `${d.decidedBy.firstName} ${d.decidedBy.lastName}`,
           count: 0,
-        } as { initials: string; name: string; count: number });
+          headshotUrl: d.decidedBy.headshotUrl,
+        });
       entry.count += 1;
       approverTally.set(key, entry);
     }

@@ -4,6 +4,22 @@
     {
       "path": "/api/cron/xero-bank-pull",
       "schedule": "30 17 * * *"
+    },
+    {
+      "path": "/api/cron/navan-sync",
+      "schedule": "0 21,3 * * *"
+    },
+    {
+      "path": "/api/cron/uber-sync",
+      "schedule": "30 21,3 * * *"
+    },
+    {
+      "path": "/api/cron/uber-sftp-pull",
+      "schedule": "45 21,3 * * *"
+    },
+    {
+      "path": "/api/cron/data-export",
+      "schedule": "0 16 * * *"
     }
   ]
 }

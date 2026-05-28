@@ -171,6 +171,6 @@ export async function createPayRun(
 
   revalidatePath('/payroll');
   revalidatePath('/bills');
-  revalidatePath('/ap');
+  revalidatePath('/payables');
   redirect(`/payroll/${newId}`);
 }

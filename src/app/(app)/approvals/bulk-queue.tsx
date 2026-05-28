@@ -4,11 +4,12 @@ import Link from 'next/link';
 import { useFormState, useFormStatus } from 'react-dom';
 import { useState } from 'react';
 import { decideApprovalBulk, type BulkDecisionState } from './actions';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { DecisionForm } from './decision-form';
+import { QueueRowAllocator } from './row-allocator';
 
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
@@ -47,10 +48,88 @@ export type QueueItemLite = {
   amountCents: number | null;
   summary: string;
   createdAt: string; // ISO — avoid passing Date across client boundary
-  requestedBy: { initials: string; firstName: string; lastName: string };
+  requestedBy: {
+    id: string;
+    initials: string;
+    firstName: string;
+    lastName: string;
+    headshotUrl: string | null;
+  };
+  /** Current project allocation for the subject (expense OR bill).
+   *  Drives the inline project-override picker on the decision form
+   *  and the "needs allocation" amber chip when the value is null. */
+  subjectProjectId?: string | null;
+  /** Current project's code + name. Threaded through so pickers can
+   *  pin a "(current) FHB000 - …" option when the row is tagged to
+   *  a bucket that's otherwise filtered out of the picker. */
+  subjectProjectCode?: string | null;
+  subjectProjectName?: string | null;
+  /** Current cost-type (category) for the subject. Drives the cost-
+   *  type override picker. Free-form on Bills today, canonical enum on
+   *  Expenses — the picker normalises both onto the canonical lib. */
+  subjectCategory?: string | null;
+  /** Current "associated user" — bills only, the traveller / cost-
+   *  attributed person. Drives the person-override picker. Expenses
+   *  have no override here (submitter is fixed). */
+  subjectAttributedToPersonId?: string | null;
+  /** Denormalised attributed-to person details for display. Surfaces
+   *  the actual cost recipient (e.g. the traveller) on the queue row
+   *  for bills, even when the viewer is a non-admin and personOptions
+   *  isn't populated for them. Null when no one is attributed (or
+   *  for expense subjects). */
+  subjectAttributedTo?: {
+    initials: string;
+    firstName: string;
+    lastName: string;
+    headshotUrl: string | null;
+  } | null;
+  /** Source tag for the subject — e.g. `navan_csv` / `navan_api` for
+   *  firm-paid travel bills. Surfaces a small chip in the queue so
+   *  the reviewing admin sees at a glance that the row came from
+   *  Navan and only needs project allocation, not full review. */
+  subjectSource?: string | null;
 };
 
-export function BulkApprovalQueue({ items }: { items: QueueItemLite[] }) {
+export type ApprovalProjectOption = {
+  id: string;
+  code: string;
+  name: string;
+};
+
+export type ApprovalPersonOption = {
+  id: string;
+  firstName: string;
+  lastName: string;
+};
+
+export type ApprovalCategoryOption = {
+  value: string;
+  label: string;
+};
+
+export function BulkApprovalQueue({
+  items,
+  projectOptions,
+  personOptions,
+  categoryOptions,
+  canOverrideAllocation,
+}: {
+  items: QueueItemLite[];
+  /** Eligible projects for the admin override (FHB/FHO/FHX expense
+   *  buckets pre-sorted to the top). Empty when the viewer can't
+   *  override. */
+  projectOptions: ApprovalProjectOption[];
+  /** Active people for the "associated user" picker (bills only).
+   *  Empty when the viewer can't override. */
+  personOptions: ApprovalPersonOption[];
+  /** Canonical category list (drives Xero GL account on push). Empty
+   *  when the viewer can't override. */
+  categoryOptions: ApprovalCategoryOption[];
+  /** True iff the viewer can override project / person / category at
+   *  the approval gate. Renamed from `canOverrideProject` — same
+   *  capability gate, broader scope. */
+  canOverrideAllocation: boolean;
+}) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [note, setNote] = useState('');
   const [state, action] = useFormState<BulkDecisionState, FormData>(
@@ -75,6 +154,15 @@ export function BulkApprovalQueue({ items }: { items: QueueItemLite[] }) {
 
   const selectedItems = items.filter((i) => selected.has(i.id));
   const selectedValue = selectedItems.reduce((s, i) => s + (i.amountCents ?? 0), 0);
+  // Selected rows whose subject still has no project tag — the bulk
+  // approve endpoint skips these to force per-row allocation. Surface
+  // the count up front so admin doesn't think bulk approve silently
+  // ate the row.
+  const selectedNeedingAllocation = selectedItems.filter(
+    (i) =>
+      (i.subjectType === 'expense' || i.subjectType === 'bill') &&
+      (i.subjectProjectId ?? null) === null,
+  ).length;
 
   return (
     <div className="space-y-3">
@@ -129,6 +217,15 @@ export function BulkApprovalQueue({ items }: { items: QueueItemLite[] }) {
             label={`Reject ${selected.size}`}
             variant="destructive"
           />
+          {selectedNeedingAllocation > 0 && (
+            <div className="w-full rounded border border-status-amber bg-status-amber-soft px-2 py-1 text-xs text-status-amber">
+              ⚠ {selectedNeedingAllocation} selected row
+              {selectedNeedingAllocation === 1 ? '' : 's'} {selectedNeedingAllocation === 1 ? 'has' : 'have'} no
+              project allocation — bulk approve will skip{' '}
+              {selectedNeedingAllocation === 1 ? 'it' : 'them'}. Open each row
+              to pick a project before approving.
+            </div>
+          )}
           {state.status === 'error' && (
             <div className="w-full rounded border border-status-red bg-status-red-soft px-2 py-1 text-xs text-status-red">
               {state.message}
@@ -177,6 +274,22 @@ export function BulkApprovalQueue({ items }: { items: QueueItemLite[] }) {
                   <Badge variant="outline" className="text-xs">
                     {ageLabel(createdAt)}
                   </Badge>
+                  {/* Flag rows that came in without a project tag —
+                       admin must pick one before approve. The Navan
+                       firm-paid travel imports are the headline case
+                       but the same chip fires on any bill/expense
+                       routed in OPEX. */}
+                  {(item.subjectType === 'expense' || item.subjectType === 'bill') &&
+                    (item.subjectProjectId ?? null) === null && (
+                      <Badge variant="amber" className="text-[10px]">
+                        ⚠ needs project allocation
+                      </Badge>
+                    )}
+                  {item.subjectSource && (
+                    <Badge variant="blue" className="text-[10px]">
+                      via {item.subjectSource.replace(/_/g, ' ')}
+                    </Badge>
+                  )}
                 </div>
                 <p className="text-sm text-ink-2">
                   {href ? (
@@ -187,16 +300,66 @@ export function BulkApprovalQueue({ items }: { items: QueueItemLite[] }) {
                     item.summary
                   )}
                 </p>
+                {/* Inline allocator — bills only, admin only. Lets
+                    admin re-tag user + project right on the queue
+                    row without clicking Approve. Auto-saves on each
+                    picker change. */}
+                {item.subjectType === 'bill' && canOverrideAllocation && (
+                  <QueueRowAllocator
+                    approvalId={item.id}
+                    initialProjectId={item.subjectProjectId ?? null}
+                    initialProjectCode={item.subjectProjectCode ?? null}
+                    initialProjectName={item.subjectProjectName ?? null}
+                    initialAttributedToPersonId={
+                      item.subjectAttributedToPersonId ?? null
+                    }
+                    projectOptions={projectOptions}
+                    personOptions={personOptions}
+                  />
+                )}
                 <div className="flex items-center gap-2 text-xs text-ink-3">
-                  <Avatar className="h-5 w-5">
-                    <AvatarFallback className="text-[9px]">
-                      {item.requestedBy.initials}
-                    </AvatarFallback>
-                  </Avatar>
-                  <span>
-                    {item.requestedBy.firstName} {item.requestedBy.lastName} · submitted{' '}
-                    {createdAt.toLocaleDateString('en-AU')}
-                  </span>
+                  {/* For bills with an attributedTo person, prefer
+                      that as the "cost belongs to" face. Falls back
+                      to the original requestedBy (= who fired the
+                      import / submission) when there's no
+                      attribution. Expenses always show submitter,
+                      since submitter IS the cost recipient. */}
+                  {item.subjectType === 'bill' && item.subjectAttributedTo ? (
+                    <>
+                      <PersonAvatar
+                        className="h-5 w-5"
+                        fallbackClassName="text-[9px]"
+                        initials={item.subjectAttributedTo.initials}
+                        headshotUrl={item.subjectAttributedTo.headshotUrl}
+                      />
+                      <span>
+                        {item.subjectAttributedTo.firstName}{' '}
+                        {item.subjectAttributedTo.lastName} · cost attributed
+                        {item.requestedBy.id !==
+                          item.subjectAttributedToPersonId && (
+                          <span className="text-ink-3">
+                            {' '}
+                            · imported by {item.requestedBy.firstName}{' '}
+                            {item.requestedBy.lastName}
+                          </span>
+                        )}{' '}
+                        · {createdAt.toLocaleDateString('en-AU')}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <PersonAvatar
+                        className="h-5 w-5"
+                        fallbackClassName="text-[9px]"
+                        initials={item.requestedBy.initials}
+                        headshotUrl={item.requestedBy.headshotUrl}
+                      />
+                      <span>
+                        {item.requestedBy.firstName} {item.requestedBy.lastName} ·
+                        submitted {createdAt.toLocaleDateString('en-AU')}
+                      </span>
+                    </>
+                  )}
                   {href && (
                     <>
                       <span>·</span>
@@ -208,7 +371,34 @@ export function BulkApprovalQueue({ items }: { items: QueueItemLite[] }) {
                 </div>
               </div>
               <div className="shrink-0">
-                <DecisionForm approvalId={item.id} />
+                <DecisionForm
+                  approvalId={item.id}
+                  allocationContext={
+                    item.subjectType === 'expense' || item.subjectType === 'bill'
+                      ? {
+                          canOverrideAllocation,
+                          subjectType: item.subjectType,
+                          currentProjectId: item.subjectProjectId ?? null,
+                          currentProjectCode: item.subjectProjectCode ?? null,
+                          currentProjectName: item.subjectProjectName ?? null,
+                          currentCategory: item.subjectCategory ?? null,
+                          // Expenses don't expose an attributedTo
+                          // picker — submitter is fixed. Pass undefined
+                          // so the form hides the row entirely for
+                          // expense subjects.
+                          currentAttributedToPersonId:
+                            item.subjectType === 'bill'
+                              ? item.subjectAttributedToPersonId ?? null
+                              : undefined,
+                          projectOptions,
+                          personOptions,
+                          categoryOptions,
+                          needsAllocation:
+                            (item.subjectProjectId ?? null) === null,
+                        }
+                      : undefined
+                  }
+                />
               </div>
             </div>
           </Card>

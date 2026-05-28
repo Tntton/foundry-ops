@@ -5,15 +5,13 @@ import { useState } from 'react';
 import { submitExpense, type NewExpenseState } from './actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { EXPENSE_CATEGORIES } from '@/lib/expense-categories';
 
-const CATEGORIES = [
-  { v: 'travel', label: 'Travel' },
-  { v: 'meals', label: 'Meals' },
-  { v: 'office', label: 'Office' },
-  { v: 'tools', label: 'Tools / software' },
-  { v: 'subscriptions', label: 'Subscriptions' },
-  { v: 'other', label: 'Other' },
-];
+const CATEGORIES = EXPENSE_CATEGORIES.map((c) => ({
+  v: c.value,
+  label: c.label,
+  hint: c.hint,
+}));
 
 type ProjectOpt = { id: string; code: string; name: string };
 
@@ -44,10 +42,15 @@ export function NewExpenseForm({ projects }: { projects: ProjectOpt[] }) {
           <Field label="Date" error={errs['date']} required>
             <Input name="date" type="date" required defaultValue={today} />
           </Field>
-          <Field label="Category" error={errs['category']} required>
+          <Field
+            label="Category"
+            error={errs['category']}
+            required
+            hint="Maps to a Xero account; ATO deductibility groups baked in."
+          >
             <Select name="category" required defaultValue="travel">
               {CATEGORIES.map((c) => (
-                <option key={c.v} value={c.v}>
+                <option key={c.v} value={c.v} title={c.hint}>
                   {c.label}
                 </option>
               ))}

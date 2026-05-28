@@ -1,11 +1,11 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import type { Band, Employment, Region } from '@prisma/client';
+import type { Band, Employment } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { listPeople } from '@/server/directory';
 import { hasCapability } from '@/server/capabilities';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,9 +20,10 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card } from '@/components/ui/card';
 import { formatFte, formatRateCents } from '@/lib/format';
+import { labelForLevel } from '@/lib/levels';
 
 const BAND_OPTIONS: readonly Band[] = ['MP', 'Partner', 'Expert', 'Consultant', 'Analyst'];
-const REGION_OPTIONS: readonly Region[] = ['AU', 'NZ'];
+const REGION_OPTIONS: readonly string[] = ['AU', 'NZ', 'US', 'CA', 'GB'];
 const EMPLOYMENT_OPTIONS: readonly Employment[] = ['ft', 'contractor'];
 
 export default async function DirectoryPage({
@@ -38,17 +39,133 @@ export default async function DirectoryPage({
   };
 }) {
   const session = await getSession();
-  if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) {
-    notFound();
+  // Pure-staff viewers get a stripped-down read-only directory — name,
+  // band/level, region only. No tabs, no client roster, no profile
+  // links. Anything beyond `staff` (manager/partner/admin/super_admin)
+  // gets the full directory below.
+  const isLeader = hasAnyRole(session, [
+    'super_admin',
+    'admin',
+    'partner',
+  ]);
+  if (!session) notFound();
+  if (!isLeader) {
+    const stafQ = searchParams.q?.trim() ?? '';
+    const allPeople = await listPeople({ active: 'active' });
+    const visible = stafQ
+      ? allPeople.filter((p) =>
+          `${p.firstName} ${p.lastName} ${p.initials}`
+            .toLowerCase()
+            .includes(stafQ.toLowerCase()),
+        )
+      : allPeople;
+    return (
+      <div className="space-y-4">
+        <header>
+          <h1 className="text-xl font-semibold text-ink">Directory</h1>
+          <p className="text-sm text-ink-3">
+            Everyone at Foundry. Read-only — for the rest of the
+            directory (clients, contractors, suppliers) ask a partner /
+            admin.
+          </p>
+        </header>
+        <form className="flex items-center gap-2" action="/directory">
+          <Input
+            name="q"
+            defaultValue={stafQ}
+            placeholder="Search by name…"
+            className="max-w-sm"
+          />
+          <Button type="submit" variant="outline" size="sm">
+            Search
+          </Button>
+          {stafQ && (
+            <Button asChild type="button" variant="ghost" size="sm">
+              <Link href="/directory">Clear</Link>
+            </Button>
+          )}
+          <span className="ml-auto text-xs text-ink-3">
+            {visible.length} {visible.length === 1 ? 'person' : 'people'}
+          </span>
+        </form>
+        <Card className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Person</TableHead>
+                <TableHead>Band / Level</TableHead>
+                <TableHead>Region</TableHead>
+                <TableHead>Work email</TableHead>
+                <TableHead>WhatsApp</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visible.map((p) => (
+                <TableRow key={p.id}>
+                  <TableCell className="font-medium text-ink">
+                    <span className="flex items-center gap-2">
+                      <PersonAvatar
+                        className="h-7 w-7"
+                        fallbackClassName="text-[10px]"
+                        initials={p.initials}
+                        headshotUrl={p.headshotUrl}
+                      />
+                      <span>
+                        {p.firstName} {p.lastName}
+                      </span>
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-sm text-ink-2">
+                    <div>{labelForLevel(p.level)}</div>
+                    <div className="text-[11px] text-ink-3">
+                      {p.band} · {p.level}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-sm text-ink-2">
+                    {p.region}
+                  </TableCell>
+                  <TableCell>
+                    {/* mailto: link so a single click opens the
+                         viewer's mail client. Font-mono keeps the
+                         column alignment tight. */}
+                    <a
+                      href={`mailto:${p.email}`}
+                      className="font-mono text-xs text-ink-2 hover:text-brand hover:underline"
+                    >
+                      {p.email}
+                    </a>
+                  </TableCell>
+                  <TableCell>
+                    {p.whatsappNumber ? (
+                      <a
+                        href={`https://wa.me/${p.whatsappNumber.replace(/[^0-9]/g, '')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono text-xs text-ink-2 hover:text-brand hover:underline"
+                      >
+                        {p.whatsappNumber}
+                      </a>
+                    ) : (
+                      <span className="text-xs text-ink-4">—</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      </div>
+    );
   }
 
   const q = searchParams.q ?? '';
   const band = BAND_OPTIONS.includes(searchParams.band as Band)
     ? (searchParams.band as Band)
     : undefined;
-  const region = REGION_OPTIONS.includes(searchParams.region as Region)
-    ? (searchParams.region as Region)
-    : undefined;
+  const region =
+    searchParams.region && /^[A-Z]{2}$/.test(searchParams.region)
+      ? searchParams.region
+      : undefined;
   const employment = EMPLOYMENT_OPTIONS.includes(searchParams.employment as Employment)
     ? (searchParams.employment as Employment)
     : undefined;
@@ -62,6 +179,9 @@ export default async function DirectoryPage({
   const canSeePay = hasCapability(session, 'ratecard.view');
 
   const people = await listPeople({ search: q, band, region, employment, active });
+  // Client roster moved to /directory/clients (per TT, 2026-05-10):
+  // people-tab now focuses on people only; client-tab carries the
+  // active client list with the LTM filter.
 
   const deletedFlag = searchParams.deleted === '1';
 
@@ -98,6 +218,9 @@ export default async function DirectoryPage({
           <TabsTrigger value="suppliers" asChild>
             <Link href="/directory/suppliers">Suppliers</Link>
           </TabsTrigger>
+          <TabsTrigger value="company" asChild>
+            <Link href="/directory/company">Company</Link>
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="people">
@@ -113,8 +236,33 @@ export default async function DirectoryPage({
           />
         </TabsContent>
       </Tabs>
+
     </div>
   );
+}
+
+/**
+ * Friendly last-login readout for the directory table. Shows "Today
+ * 14:32" / "Yesterday 09:01" / "3 days ago" / "12 Apr 2026". Hover
+ * tooltip carries the full timestamp.
+ */
+function formatLastLogin(d: Date): string {
+  const now = Date.now();
+  const ms = now - d.getTime();
+  const days = Math.floor(ms / 86_400_000);
+  const time = d.toLocaleTimeString('en-AU', {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  if (days === 0) return `Today ${time}`;
+  if (days === 1) return `Yesterday ${time}`;
+  if (days < 7) return `${days} days ago`;
+  if (days < 14) return 'Last week';
+  return d.toLocaleDateString('en-AU', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
 }
 
 function PeopleTab({
@@ -129,7 +277,7 @@ function PeopleTab({
 }: {
   q: string;
   band: Band | undefined;
-  region: Region | undefined;
+  region: string | undefined;
   employment: Employment | undefined;
   active: 'active' | 'archived' | 'all';
   rows: Awaited<ReturnType<typeof listPeople>>;
@@ -194,6 +342,7 @@ function PeopleTab({
                 <TableHead>Employment</TableHead>
                 <TableHead>FTE</TableHead>
                 {canSeePay && <TableHead className="text-right">Rate</TableHead>}
+                <TableHead>Last login</TableHead>
                 <TableHead>Status</TableHead>
                 {canEdit && <TableHead className="w-20 text-right">Actions</TableHead>}
               </TableRow>
@@ -206,9 +355,12 @@ function PeopleTab({
                       href={`/directory/people/${p.id}`}
                       className="flex items-center gap-2 hover:text-ink"
                     >
-                      <Avatar className="h-7 w-7">
-                        <AvatarFallback className="text-[10px]">{p.initials}</AvatarFallback>
-                      </Avatar>
+                      <PersonAvatar
+  className="h-7 w-7"
+  fallbackClassName="text-[10px]"
+  initials={p.initials}
+  headshotUrl={p.headshotUrl}
+/>
                       <div>
                         <div className="font-medium text-ink">
                           {p.firstName} {p.lastName}
@@ -218,8 +370,16 @@ function PeopleTab({
                     </Link>
                   </TableCell>
                   <TableCell>
-                    <div className="font-medium text-ink-2">{p.band}</div>
-                    <div className="text-[11px] text-ink-3">{p.level}</div>
+                    {/* Show the level *label* (e.g. "Associate
+                         Partner" for L3) rather than the raw band, so
+                         the partner / associate-partner distinction
+                         is visible without staring at the level code. */}
+                    <div className="font-medium text-ink-2">
+                      {labelForLevel(p.level)}
+                    </div>
+                    <div className="text-[11px] text-ink-3">
+                      {p.band} · {p.level}
+                    </div>
                   </TableCell>
                   <TableCell>{p.region}</TableCell>
                   <TableCell>
@@ -227,18 +387,57 @@ function PeopleTab({
                       {p.employment === 'ft' ? 'FT' : 'Contractor'}
                     </Badge>
                   </TableCell>
-                  <TableCell className="tabular-nums">{formatFte(p.fte)}</TableCell>
+                  <TableCell className="tabular-nums">
+                    {p.fte !== null ? formatFte(p.fte) : <span className="text-ink-4">—</span>}
+                  </TableCell>
                   {canSeePay && (
                     <TableCell className="text-right tabular-nums">
                       {formatRateCents(p.rate, p.rateUnit)}
                     </TableCell>
                   )}
                   <TableCell>
-                    {p.active ? (
-                      <Badge variant="green">Active</Badge>
+                    {p.lastLoginAt ? (
+                      <span
+                        className="text-xs text-ink-2"
+                        title={p.lastLoginAt.toLocaleString('en-AU')}
+                      >
+                        {formatLastLogin(p.lastLoginAt)}
+                      </span>
                     ) : (
-                      <Badge variant="outline">Ended</Badge>
+                      <span className="text-xs text-ink-4 italic">
+                        Not yet logged in
+                      </span>
                     )}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {p.active ? (
+                        <Badge variant="green">Active</Badge>
+                      ) : (
+                        <Badge variant="outline">Ended</Badge>
+                      )}
+                      {p.poolStatusOverride && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full border border-line bg-card px-1.5 py-0.5 text-[10px] text-ink-2"
+                          title="Manual status override"
+                        >
+                          <span
+                            className={`inline-block h-1.5 w-1.5 rounded-full ${
+                              p.poolStatusOverride === 'on_project'
+                                ? 'bg-status-green'
+                                : p.poolStatusOverride === 'never_on_project'
+                                  ? 'bg-status-red'
+                                  : p.poolStatusOverride === 'on_sabbatical'
+                                    ? 'bg-ink-4'
+                                    : 'bg-ink-3'
+                            }`}
+                          />
+                          {p.poolStatusOverride
+                            .replace(/_/g, ' ')
+                            .replace(/^./, (c) => c.toUpperCase())}
+                        </span>
+                      )}
+                    </div>
                   </TableCell>
                   {canEdit && (
                     <TableCell className="text-right">

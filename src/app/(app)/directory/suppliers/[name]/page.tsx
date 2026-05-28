@@ -13,6 +13,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { CompanyLogo } from '@/components/company-logo';
+import { SupplierEditForm } from './edit-form';
 
 function formatMoney(cents: number): string {
   if (cents === 0) return '—';
@@ -51,13 +53,61 @@ export default async function SupplierDetailPage({
         </Link>
       </div>
 
-      <header>
-        <h1 className="text-xl font-semibold text-ink">{supplier.name}</h1>
-        <p className="text-sm text-ink-3">
-          External supplier. All bills listed below — this is aggregated from the Bill
-          rows, not a dedicated Supplier record.
-        </p>
+      <header className="flex items-start gap-4">
+        <CompanyLogo
+          src={supplier.profile?.logoUrl ?? null}
+          name={supplier.name}
+          className="h-14 w-14"
+        />
+        <div className="min-w-0 flex-1">
+          <h1 className="text-xl font-semibold text-ink">{supplier.name}</h1>
+          <p className="text-sm text-ink-3">
+            External supplier. Bills aggregated below; structured profile (ABN +
+            website + logo) editable in the section underneath.
+          </p>
+          {supplier.profile?.website && (
+            <p className="mt-1 text-xs text-ink-3">
+              <a
+                href={supplier.profile.website}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-brand hover:underline"
+              >
+                {supplier.profile.website.replace(/^https?:\/\//, '')} ↗
+              </a>
+              {supplier.profile.abn && (
+                <>
+                  <span className="ml-2">·</span>
+                  <span className="ml-2 font-mono">ABN {supplier.profile.abn}</span>
+                </>
+              )}
+            </p>
+          )}
+        </div>
       </header>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-semibold uppercase tracking-wide text-ink-3">
+            Supplier profile
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SupplierEditForm
+            supplier={{
+              name: supplier.name,
+              legalName: supplier.profile?.legalName ?? null,
+              abn: supplier.profile?.abn ?? null,
+              acn: supplier.profile?.acn ?? null,
+              supplierType: supplier.profile?.supplierType ?? 'private_company',
+              website: supplier.profile?.website ?? null,
+              logoUrl: supplier.profile?.logoUrl ?? null,
+              contactEmail: supplier.profile?.contactEmail ?? null,
+              contactPhone: supplier.profile?.contactPhone ?? null,
+            }}
+          />
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <TotalCard label="Bills" value={String(supplier.totals.billCount)} sub="any status" />

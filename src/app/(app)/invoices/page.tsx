@@ -4,6 +4,8 @@ import type { InvoiceStatus } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { listInvoices } from '@/server/invoices';
+import { listInvoiceSuggestions } from '@/server/invoice-suggestions';
+import { InvoiceSuggestionsCard } from '@/components/invoice-suggestions-card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -72,6 +74,10 @@ export default async function InvoicesPage({
     ...(q ? { search: q } : {}),
   });
   const canCreate = hasCapability(session, 'invoice.create');
+  // "Invoices to generate" suggestions — what should be raised next
+  // based on milestone status + project initiation. Runs sequentially
+  // after the main list to stay within the pgbouncer pool.
+  const suggestions = await listInvoiceSuggestions(session);
   const deletedFlag = searchParams.deleted === '1';
 
   return (
@@ -95,11 +101,16 @@ export default async function InvoicesPage({
           </a>
           {canCreate && (
             <Button asChild>
-              <Link href="/invoices/new">+ New invoice</Link>
+              <Link href="/invoices/new">+ New project invoice</Link>
             </Button>
           )}
         </div>
       </header>
+
+      <InvoiceSuggestionsCard
+        suggestions={suggestions}
+        canCreate={canCreate}
+      />
 
       <form
         action="/invoices"
@@ -209,6 +220,15 @@ export default async function InvoicesPage({
                     <Badge variant={STATUS_VARIANT[i.status] ?? 'outline'} className="capitalize">
                       {i.status.replace('_', ' ')}
                     </Badge>
+                    {i.status === 'approved' && !i.taxInvoiceFinalisedAt && (
+                      <Link
+                        href={`/invoices/${i.id}/preview`}
+                        className="ml-1 inline-flex items-center rounded-full bg-status-amber px-2 py-0.5 text-[10px] font-medium text-white hover:bg-status-amber/90"
+                        title="Tax invoice not yet finalised — click to issue"
+                      >
+                        Awaiting finalisation
+                      </Link>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

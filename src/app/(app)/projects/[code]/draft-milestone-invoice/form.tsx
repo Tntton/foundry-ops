@@ -8,6 +8,7 @@ import {
 } from './actions';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import type { RebillableCost } from '@/server/invoice-drafter';
 
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
@@ -35,15 +36,23 @@ export type MilestoneOption = {
 export function DraftMilestoneInvoiceForm({
   projectId,
   milestones,
+  rebillableCosts,
 }: {
   projectId: string;
   milestones: MilestoneOption[];
+  rebillableCosts: RebillableCost[];
 }) {
   const [state, action] = useFormState<DraftFromMilestonesState, FormData>(
     createInvoiceFromMilestones,
     { status: 'idle' },
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedCosts, setSelectedCosts] = useState<Record<string, boolean>>(
+    () =>
+      Object.fromEntries(
+        rebillableCosts.map((c) => [`${c.kind}:${c.id}`, true]),
+      ),
+  );
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -67,6 +76,13 @@ export function DraftMilestoneInvoiceForm({
   const total = milestones
     .filter((m) => selected.has(m.id))
     .reduce((s, m) => s + m.amountCents, 0);
+  const selectedCostsTotal = rebillableCosts
+    .filter((c) => selectedCosts[`${c.kind}:${c.id}`])
+    .reduce((s, c) => s + c.amountExGstCents, 0);
+  const grandTotal = total + selectedCostsTotal;
+  const submitDisabled =
+    selected.size === 0 &&
+    !rebillableCosts.some((c) => selectedCosts[`${c.kind}:${c.id}`]);
 
   return (
     <form action={action} className="space-y-3">
@@ -138,10 +154,88 @@ export function DraftMilestoneInvoiceForm({
           );
         })}
       </ul>
+      {rebillableCosts.length > 0 && (
+        <fieldset className="space-y-2 rounded-md border border-status-amber/40 bg-status-amber-soft/20 px-3 py-2">
+          <legend className="px-1 text-xs font-medium uppercase tracking-wide text-status-amber">
+            Pass-through costs · {rebillableCosts.length}
+          </legend>
+          <p className="text-[11px] text-ink-3">
+            Bills + reimbursements tagged{' '}
+            <strong className="text-ink-2">↪ Rebillable</strong> on this
+            project that haven&apos;t been forwarded yet. Untick anything you
+            don&apos;t want on this invoice. Net amounts go onto the invoice;
+            GST recalculates at the invoice level.
+          </p>
+          <ul className="space-y-1">
+            {rebillableCosts.map((c) => {
+              const key = `${c.kind}:${c.id}`;
+              const fieldName =
+                c.kind === 'bill' ? 'rebillableBillIds' : 'rebillableExpenseIds';
+              const checked = selectedCosts[key] ?? false;
+              return (
+                <li key={key}>
+                  <label className="flex items-start gap-2 rounded-md border border-line bg-card px-2 py-1.5 text-xs hover:bg-surface-hover">
+                    <input
+                      type="checkbox"
+                      name={fieldName}
+                      value={c.id}
+                      checked={checked}
+                      onChange={(e) =>
+                        setSelectedCosts((prev) => ({
+                          ...prev,
+                          [key]: e.target.checked,
+                        }))
+                      }
+                      className="mt-0.5"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`rounded-full px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
+                            c.kind === 'bill'
+                              ? 'bg-status-amber-soft text-status-amber'
+                              : 'bg-status-blue-soft text-status-blue'
+                          }`}
+                        >
+                          {c.kind}
+                        </span>
+                        <span className="truncate text-ink">{c.label}</span>
+                      </div>
+                      <div className="text-[10px] text-ink-3">
+                        {c.date.toLocaleDateString('en-AU')} · {c.category}
+                      </div>
+                    </div>
+                    <div className="text-right tabular-nums">
+                      <div className="text-ink">{formatMoney(c.amountExGstCents)}</div>
+                      <div className="text-[10px] text-ink-3">ex GST</div>
+                    </div>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="flex items-center justify-between border-t border-status-amber/30 pt-2 text-xs">
+            <span className="text-ink-3">Pass-through subtotal</span>
+            <span className="font-semibold tabular-nums text-status-amber">
+              {formatMoney(selectedCostsTotal)} ex GST
+            </span>
+          </div>
+        </fieldset>
+      )}
+
+      {(milestones.length > 0 || rebillableCosts.length > 0) && (
+        <div className="flex items-center justify-between border-t border-line pt-2 text-sm">
+          <span className="text-ink-3">Invoice total</span>
+          <span className="font-semibold tabular-nums text-ink">
+            {formatMoney(grandTotal)} ex GST
+          </span>
+        </div>
+      )}
+
       {state.status === 'error' && (
         <p className="text-sm text-status-red">{state.message}</p>
       )}
-      <Submit disabled={selected.size === 0} />
+      <Submit disabled={submitDisabled} />
     </form>
   );
 }

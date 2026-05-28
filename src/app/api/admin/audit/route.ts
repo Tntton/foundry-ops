@@ -47,7 +47,7 @@ export async function GET(req: Request) {
     take: limit,
     include: {
       actor: {
-        select: { id: true, initials: true, firstName: true, lastName: true, email: true },
+        select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true, email: true },
       },
     },
   });

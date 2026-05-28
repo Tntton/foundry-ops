@@ -3,11 +3,18 @@
 import { useFormState, useFormStatus } from 'react-dom';
 import { useState } from 'react';
 import { saveProjectTeam, type TeamEditState } from './actions';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { PersonAvatar } from '@/components/person-avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
-type PersonOpt = { id: string; initials: string; firstName: string; lastName: string; band: string };
+type PersonOpt = {
+  id: string;
+  initials: string;
+  firstName: string;
+  lastName: string;
+  band: string;
+  headshotUrl: string | null;
+};
 type TeamMember = {
   personId: string;
   roleOnProject: string;
@@ -66,9 +73,12 @@ export function TeamEditForm({
                   <td className="px-3 py-2">
                     <input type="hidden" name="personId" value={m.personId} />
                     <div className="flex items-center gap-2">
-                      <Avatar className="h-7 w-7">
-                        <AvatarFallback className="text-[10px]">{m.initials}</AvatarFallback>
-                      </Avatar>
+                      <PersonAvatar
+  className="h-7 w-7"
+  fallbackClassName="text-[10px]"
+  initials={m.initials}
+  headshotUrl={m.headshotUrl}
+/>
                       <span className="text-ink">
                         {m.firstName} {m.lastName}
                       </span>

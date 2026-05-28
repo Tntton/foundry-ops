@@ -60,6 +60,7 @@ export async function createClient(
     primaryPartnerId: formData.get('primaryPartnerId'),
     paymentTerms: formData.get('paymentTerms') || 'net-30',
   };
+  const createProjectAfter = formData.get('createProjectAfter') === '1';
 
   const parsed = ClientCreate.safeParse(raw);
   if (!parsed.success) {
@@ -133,5 +134,8 @@ export async function createClient(
   }
 
   revalidatePath('/directory/clients');
+  if (createProjectAfter) {
+    redirect(`/projects/new?clientId=${newId}`);
+  }
   redirect(`/directory/clients/${newId}`);
 }

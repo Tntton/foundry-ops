@@ -1,6 +1,7 @@
 'use client';
 
 import { useFormState, useFormStatus } from 'react-dom';
+import { useState } from 'react';
 import { createClient, type NewClientState } from './actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,11 +15,18 @@ type PartnerOption = {
   lastName: string;
 };
 
-export function NewClientForm({ partners }: { partners: PartnerOption[] }) {
+export function NewClientForm({
+  partners,
+  createProjectAfterDefault = false,
+}: {
+  partners: PartnerOption[];
+  createProjectAfterDefault?: boolean;
+}) {
   const [state, action] = useFormState<NewClientState, FormData>(createClient, {
     status: 'idle',
   });
   const errs = state.status === 'error' ? state.fieldErrors ?? {} : {};
+  const [createProjectAfter, setCreateProjectAfter] = useState(createProjectAfterDefault);
 
   return (
     <form action={action} className="space-y-6">
@@ -102,21 +110,39 @@ export function NewClientForm({ partners }: { partners: PartnerOption[] }) {
         </Field>
       </Section>
 
-      <div className="flex justify-end gap-2">
-        <Button type="button" asChild variant="ghost">
-          <a href="/directory/clients">Cancel</a>
-        </Button>
-        <SubmitButton />
+      <input type="hidden" name="createProjectAfter" value={createProjectAfter ? '1' : '0'} />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <label className="flex items-center gap-2 text-xs text-ink-3">
+          <input
+            type="checkbox"
+            checked={createProjectAfter}
+            onChange={(e) => setCreateProjectAfter(e.target.checked)}
+          />
+          <span>Create a project for this client right after save</span>
+        </label>
+        <div className="flex gap-2">
+          <Button type="button" asChild variant="ghost">
+            <a href="/directory/clients">Cancel</a>
+          </Button>
+          <SubmitButton createProjectAfter={createProjectAfter} />
+        </div>
       </div>
     </form>
   );
 }
 
-function SubmitButton() {
+function SubmitButton({ createProjectAfter }: { createProjectAfter: boolean }) {
   const { pending } = useFormStatus();
+  const label = createProjectAfter
+    ? pending
+      ? 'Creating…'
+      : 'Save & start project →'
+    : pending
+      ? 'Creating…'
+      : 'Create client';
   return (
     <Button type="submit" disabled={pending}>
-      {pending ? 'Creating…' : 'Create client'}
+      {label}
     </Button>
   );
 }

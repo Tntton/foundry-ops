@@ -119,15 +119,21 @@ const QUICK_ACTIONS: QuickAction[] = [
   },
   {
     kind: 'action',
-    label: 'AR aging',
-    href: '/ar',
-    keywords: ['ar', 'receivables', 'overdue', 'chase'],
+    label: 'Receivables',
+    href: '/receivables',
+    keywords: ['ar', 'receivables', 'overdue', 'chase', 'aging'],
   },
   {
     kind: 'action',
-    label: 'AP aging',
-    href: '/ap',
-    keywords: ['ap', 'payables', 'owe', 'supplier'],
+    label: 'Payables',
+    href: '/payables',
+    keywords: ['ap', 'payables', 'owe', 'supplier', 'aging', 'rebillable'],
+  },
+  {
+    kind: 'action',
+    label: 'Reimbursables',
+    href: '/reimbursables',
+    keywords: ['reimburse', 'expenses', 'staff', 'rebillable'],
   },
   {
     kind: 'action',

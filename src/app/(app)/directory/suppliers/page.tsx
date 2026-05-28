@@ -14,6 +14,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { CompanyLogo } from '@/components/company-logo';
 
 function formatMoney(cents: number): string {
   if (cents === 0) return '—';
@@ -63,6 +64,9 @@ export default async function SuppliersPage() {
           <TabsTrigger value="suppliers" asChild>
             <Link href="/directory/suppliers">Suppliers</Link>
           </TabsTrigger>
+          <TabsTrigger value="company" asChild>
+            <Link href="/directory/company">Company</Link>
+          </TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -75,8 +79,8 @@ export default async function SuppliersPage() {
         </div>
       )}
 
-      <Card className="p-0">
-        {rows.length === 0 ? (
+      {rows.length === 0 ? (
+        <Card className="p-0">
           <div className="p-12 text-center text-sm text-ink-3">
             No supplier bills yet. Add one under{' '}
             <Link href="/bills/new" className="text-brand hover:underline">
@@ -84,7 +88,75 @@ export default async function SuppliersPage() {
             </Link>
             .
           </div>
-        ) : (
+        </Card>
+      ) : (
+        // Split into "regular" (≥5 bills processed) vs "other" (<5).
+        // Regulars are the recurring vendors we manage actively;
+        // other is one-off / low-volume suppliers that surface here so
+        // they're not lost, but don't dominate the main list.
+        (() => {
+          const REGULAR_THRESHOLD = 5;
+          const regular = rows.filter((s) => s.billCount >= REGULAR_THRESHOLD);
+          const other = rows.filter((s) => s.billCount < REGULAR_THRESHOLD);
+          return (
+            <div className="space-y-6">
+              <SupplierSection
+                title="Regular suppliers"
+                subtitle={`Vendors with ${REGULAR_THRESHOLD}+ bills processed.`}
+                rows={regular}
+                emptyHint={`No supplier has hit ${REGULAR_THRESHOLD} bills yet.`}
+              />
+              <SupplierSection
+                title="Other suppliers"
+                subtitle="Low-volume / one-off vendors (under 5 bills)."
+                rows={other}
+                emptyHint="No occasional suppliers."
+              />
+            </div>
+          );
+        })()
+      )}
+    </div>
+  );
+}
+
+function SupplierSection({
+  title,
+  subtitle,
+  rows,
+  emptyHint,
+}: {
+  title: string;
+  subtitle: string;
+  rows: Array<{
+    name: string;
+    billCount: number;
+    totalPaidCents: number;
+    lastBillDate: Date | null;
+    categories: string[];
+    unpaidCents: number;
+    logoUrl: string | null;
+    website: string | null;
+  }>;
+  emptyHint: string;
+}) {
+  return (
+    <section>
+      <header className="mb-2 flex items-baseline justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-ink">
+            {title}
+            <span className="ml-2 text-xs tabular-nums text-ink-3">
+              {rows.length}
+            </span>
+          </h2>
+          <p className="text-[11px] text-ink-3">{subtitle}</p>
+        </div>
+      </header>
+      {rows.length === 0 ? (
+        <Card className="p-6 text-center text-xs text-ink-3">{emptyHint}</Card>
+      ) : (
+        <Card className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
@@ -102,9 +174,14 @@ export default async function SuppliersPage() {
                   <TableCell className="font-medium text-ink">
                     <Link
                       href={`/directory/suppliers/${encodeURIComponent(s.name)}`}
-                      className="hover:underline"
+                      className="flex items-center gap-2 hover:underline"
                     >
-                      {s.name}
+                      <CompanyLogo
+                        src={s.logoUrl}
+                        name={s.name}
+                        className="h-7 w-7"
+                      />
+                      <span>{s.name}</span>
                     </Link>
                   </TableCell>
                   <TableCell>
@@ -116,23 +193,39 @@ export default async function SuppliersPage() {
                       ))}
                     </div>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">{s.billCount}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {s.billCount}
+                  </TableCell>
                   <TableCell className="text-right tabular-nums text-ink">
-                    {formatMoney(s.totalPaidCents)}
+                    {(s.totalPaidCents === 0
+                      ? '—'
+                      : new Intl.NumberFormat('en-AU', {
+                          style: 'currency',
+                          currency: 'AUD',
+                          maximumFractionDigits: 0,
+                        }).format(s.totalPaidCents / 100))}
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-status-amber">
-                    {formatMoney(s.unpaidCents)}
+                    {(s.unpaidCents === 0
+                      ? '—'
+                      : new Intl.NumberFormat('en-AU', {
+                          style: 'currency',
+                          currency: 'AUD',
+                          maximumFractionDigits: 0,
+                        }).format(s.unpaidCents / 100))}
                   </TableCell>
                   <TableCell className="tabular-nums text-xs text-ink-3">
-                    {s.lastBillDate ? s.lastBillDate.toLocaleDateString('en-AU') : '—'}
+                    {s.lastBillDate
+                      ? s.lastBillDate.toLocaleDateString('en-AU')
+                      : '—'}
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
-        )}
-      </Card>
-    </div>
+        </Card>
+      )}
+    </section>
   );
 }
 

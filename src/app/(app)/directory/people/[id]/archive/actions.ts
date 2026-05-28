@@ -7,6 +7,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
+import { notifyAdminPool } from '@/server/user-updates';
 import { setM365UserEnabled } from '@/server/integrations/m365';
 
 export type ArchiveState =
@@ -77,6 +78,17 @@ export async function archivePerson(
           after: { endDate: endDate.toISOString() },
         },
         source: 'web',
+      });
+      // Admin-pool fan-out — team-shape change visible in the
+      // dashboard updates feed.
+      await notifyAdminPool(tx, {
+        actorPersonId: session.person.id,
+        kind: 'person_archived',
+        title: `${person.firstName} ${person.lastName} archived`,
+        body: `Effective ${endDate.toISOString().slice(0, 10)} · M365 deactivation runs after the audit row commits.`,
+        href: `/directory/people/${personId}`,
+        entityType: 'person',
+        entityId: personId,
       });
     });
   } catch (err) {

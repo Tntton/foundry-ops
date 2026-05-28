@@ -5,6 +5,12 @@ import { hasCapability } from '@/server/capabilities';
 import { optionalEnv } from '@/server/env';
 import { graphConfigured } from '@/server/graph';
 import { getXeroIntegration, xeroConfigured } from '@/server/integrations/xero';
+import { getNavanIntegration, navanConfigured } from '@/server/integrations/navan';
+import {
+  getDocuSignIntegration,
+  type DocuSignConfig,
+} from '@/server/integrations/docusign';
+import { getUberIntegration, uberConfigured } from '@/server/integrations/uber';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
@@ -17,6 +23,19 @@ export default async function IntegrationsIndexPage() {
   const xeroRow = await getXeroIntegration();
   const xeroConnected = xeroRow?.status === 'connected';
   const xeroEnvConfigured = xeroConfigured();
+
+  const navanRow = await getNavanIntegration();
+  const navanConnected = navanRow?.status === 'connected';
+  const navanEnvConfigured = navanConfigured();
+
+  const uberRow = await getUberIntegration();
+  const uberConnected = uberRow?.status === 'connected';
+  const uberEnvConfigured = uberConfigured();
+
+  const docusignRow = await getDocuSignIntegration();
+  const docusignConnected = docusignRow?.status === 'connected';
+  const docusignCfg = (docusignRow?.config ?? {}) as DocuSignConfig;
+  const docusignConsentStamped = Boolean(docusignCfg.consentedAt);
 
   const m365Configured = graphConfigured();
   const sharepointSite = optionalEnv('SHAREPOINT_SITE_URL');
@@ -43,6 +62,42 @@ export default async function IntegrationsIndexPage() {
             xeroConnected
               ? { label: 'Connected', variant: 'green' }
               : xeroEnvConfigured
+                ? { label: 'Disconnected', variant: 'outline' }
+                : { label: 'Not configured', variant: 'amber' }
+          }
+        />
+
+        <IntegrationCard
+          href="/admin/integrations/navan"
+          title="Navan"
+          blurb="Pulls travel bookings + receipts from Foundry's Navan account, lands them as Expense rows in /bills/intake."
+          status={
+            navanConnected
+              ? {
+                  label: navanRow?.lastSyncAt
+                    ? `Connected · synced ${navanRow.lastSyncAt.toLocaleDateString('en-AU')}`
+                    : 'Connected · no sync yet',
+                  variant: 'green',
+                }
+              : navanEnvConfigured
+                ? { label: 'Disconnected', variant: 'outline' }
+                : { label: 'Not configured', variant: 'amber' }
+          }
+        />
+
+        <IntegrationCard
+          href="/admin/integrations/uber"
+          title="Uber for Business"
+          blurb="Pulls Uber rides from Foundry's corporate Uber account, lands them as firm-paid Bills attributed to the rider for project allocation in /approvals."
+          status={
+            uberConnected
+              ? {
+                  label: uberRow?.lastSyncAt
+                    ? `Connected · synced ${uberRow.lastSyncAt.toLocaleDateString('en-AU')}`
+                    : 'Connected · no sync yet',
+                  variant: 'green',
+                }
+              : uberEnvConfigured
                 ? { label: 'Disconnected', variant: 'outline' }
                 : { label: 'Not configured', variant: 'amber' }
           }
@@ -122,9 +177,22 @@ export default async function IntegrationsIndexPage() {
           status={{ label: 'Later', variant: 'outline' }}
         />
         <IntegrationCard
+          href="/admin/integrations/docusign"
           title="DocuSign"
-          blurb="Contract send + signature webhook."
-          status={{ label: 'Later', variant: 'outline' }}
+          blurb="JWT-grant e-signature for CSAs, Work Orders, and contractor agreements. Connect webhook posts envelope status updates back to /api/docusign/webhook."
+          status={
+            docusignConnected
+              ? docusignConsentStamped
+                ? {
+                    label:
+                      docusignCfg.environment === 'prod'
+                        ? 'Connected · prod'
+                        : 'Connected · demo',
+                    variant: 'green',
+                  }
+                : { label: 'Consent pending', variant: 'amber' }
+              : { label: 'Disconnected', variant: 'outline' }
+          }
         />
         <IntegrationCard
           title="WhatsApp Business"

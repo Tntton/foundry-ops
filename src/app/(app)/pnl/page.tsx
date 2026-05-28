@@ -5,6 +5,7 @@ import { hasAnyRole } from '@/server/roles';
 import { computeFirmPnL } from '@/server/reports/pnl';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { WaterfallChart, type WaterfallStep } from '@/components/charts/waterfall';
 import {
   Table,
   TableBody,
@@ -43,6 +44,105 @@ export default async function FirmPnLPage() {
     1,
     ...pnl.monthly.flatMap((m) => [m.revenueCents, m.costCents]),
   );
+
+  // ─── Firm waterfall ───────────────────────────────────────────────
+  // Booked → unbilled → invoiced → cost → gross margin → opex →
+  // EBIT → tax reserve → partner profit. OPEX isn't tracked yet so
+  // we render it as $0 with a placeholder hint; tax reserve uses a
+  // 30% default. Both segments are flagged as `estimated` so partners
+  // see at a glance that those numbers are projections, not actuals.
+  const TAX_RESERVE_PCT = 30;
+  const waterfallBooked = pnl.totals.contractValueCents;
+  const waterfallInvoiced = pnl.totals.revenueCents;
+  const waterfallUnbilled = Math.max(0, waterfallBooked - waterfallInvoiced);
+  const waterfallCost = pnl.totals.costCents;
+  // Realised gross margin = invoiced − cost (vs the data-model
+  // `marginCents` which also adds WIP back; we stick to the
+  // pure invoiced-vs-cost view for the cascade).
+  const waterfallGrossMargin = waterfallInvoiced - waterfallCost;
+  const waterfallOpexCents = 0;
+  const waterfallEbit = waterfallGrossMargin - waterfallOpexCents;
+  const waterfallTaxReserve =
+    waterfallEbit > 0
+      ? Math.round((waterfallEbit * TAX_RESERVE_PCT) / 100)
+      : 0;
+  const waterfallProfit = waterfallEbit - waterfallTaxReserve;
+  const firmWaterfall: WaterfallStep[] = [
+    {
+      key: 'booked',
+      label: 'Booked',
+      sub: 'signed contracts',
+      valueCents: waterfallBooked,
+      kind: 'total',
+      tone: 'brand',
+    },
+    {
+      key: 'unbilled',
+      label: 'Unbilled',
+      sub: 'WIP + future work',
+      valueCents: -waterfallUnbilled,
+      kind: 'flow',
+      tone: 'orange',
+    },
+    {
+      key: 'invoiced',
+      label: 'Invoiced',
+      sub: 'issued to clients',
+      valueCents: waterfallInvoiced,
+      kind: 'subtotal',
+      tone: 'brand',
+    },
+    {
+      key: 'cost',
+      label: 'Project cost',
+      sub: 'time + expenses + bills',
+      valueCents: -waterfallCost,
+      kind: 'flow',
+      tone: 'orange',
+    },
+    {
+      key: 'gross',
+      label: 'Gross margin',
+      sub: 'invoiced − cost',
+      valueCents: waterfallGrossMargin,
+      kind: 'subtotal',
+      tone: waterfallGrossMargin >= 0 ? 'green' : 'red',
+    },
+    {
+      key: 'opex',
+      label: 'OPEX',
+      sub: 'firm overheads · tracker pending',
+      valueCents: -waterfallOpexCents,
+      kind: 'flow',
+      tone: 'orange',
+      estimated: true,
+    },
+    {
+      key: 'ebit',
+      label: 'EBIT',
+      sub: 'operating profit',
+      valueCents: waterfallEbit,
+      kind: 'subtotal',
+      tone: waterfallEbit >= 0 ? 'green' : 'red',
+    },
+    {
+      key: 'tax',
+      label: 'Tax reserve',
+      sub: `${TAX_RESERVE_PCT}% of EBIT · estimated`,
+      valueCents: -waterfallTaxReserve,
+      kind: 'flow',
+      tone: 'muted',
+      estimated: true,
+    },
+    {
+      key: 'profit',
+      label: 'Partner profit',
+      sub: 'distributable',
+      valueCents: waterfallProfit,
+      kind: 'total',
+      tone: waterfallProfit >= 0 ? 'green' : 'red',
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -90,6 +190,25 @@ export default async function FirmPnLPage() {
           sub="Approved + billed"
         />
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Firm waterfall</CardTitle>
+          <p className="text-xs text-ink-3">
+            Booked contract revenue cascading through unbilled work,
+            invoiced revenue, project cost, OPEX, and tax reserve to
+            partner profit. Hatched bars are estimates — OPEX isn&apos;t
+            yet tracked at the firm level and tax reserve assumes 30% of
+            EBIT.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <WaterfallChart
+            steps={firmWaterfall}
+            caption="Lifetime · all projects, ex GST"
+          />
+        </CardContent>
+      </Card>
 
       {pnl.monthly.length > 0 && (
         <Card>

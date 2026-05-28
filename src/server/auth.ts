@@ -105,8 +105,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   events: {
     async signIn({ user }) {
-      // Audit every successful sign-in. Non-blocking — errors logged but don't
-      // break the sign-in flow.
+      // Audit every successful sign-in + stamp `lastLoginAt` on the
+      // Person row so the directory can show "Last login" / "Not yet
+      // logged in". Non-blocking — errors logged but don't break the
+      // sign-in flow.
       try {
         if (!user?.email) return;
         const person = await prisma.person.findUnique({
@@ -115,6 +117,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         });
         if (!person) return;
         await prisma.$transaction(async (tx) => {
+          await tx.person.update({
+            where: { id: person.id },
+            data: { lastLoginAt: new Date() },
+          });
           await writeAudit(tx, {
             actor: { type: 'person', id: person.id },
             action: 'signed_in',
@@ -123,7 +129,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           });
         });
       } catch (err) {
-        console.error('[auth/events/signIn] audit failed:', err);
+        console.error('[auth/events/signIn] audit/lastLogin failed:', err);
       }
     },
   },
@@ -201,6 +207,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           select: {
             id: true,
             initials: true,
+            headshotUrl: true,
             firstName: true,
             lastName: true,
             roles: true,

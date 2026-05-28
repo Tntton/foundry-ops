@@ -94,7 +94,7 @@ export default async function AuditLogPage({
       orderBy: { at: 'desc' },
       take: PAGE_LIMIT,
       include: {
-        actor: { select: { id: true, initials: true, firstName: true, lastName: true } },
+        actor: { select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true } },
       },
     }),
     prisma.auditEvent.count({ where }),

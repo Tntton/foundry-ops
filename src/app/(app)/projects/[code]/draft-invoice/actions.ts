@@ -12,6 +12,8 @@ const DraftSchema = z.object({
   projectId: z.string().min(1),
   periodStart: z.coerce.date(),
   periodEnd: z.coerce.date(),
+  rebillableBillIds: z.array(z.string().min(1)).default([]),
+  rebillableExpenseIds: z.array(z.string().min(1)).default([]),
 });
 
 export type DraftFromTimeState =
@@ -34,6 +36,8 @@ export async function createInvoiceFromTimesheets(
     projectId: formData.get('projectId'),
     periodStart: formData.get('periodStart'),
     periodEnd: formData.get('periodEnd'),
+    rebillableBillIds: formData.getAll('rebillableBillIds').map(String),
+    rebillableExpenseIds: formData.getAll('rebillableExpenseIds').map(String),
   });
   if (!parsed.success) return { status: 'error', message: 'Invalid input' };
   if (parsed.data.periodEnd.getTime() <= parsed.data.periodStart.getTime()) {
@@ -47,6 +51,8 @@ export async function createInvoiceFromTimesheets(
       parsed.data.projectId,
       parsed.data.periodStart,
       parsed.data.periodEnd,
+      parsed.data.rebillableBillIds,
+      parsed.data.rebillableExpenseIds,
     );
     invoiceId = r.invoiceId;
   } catch (err) {

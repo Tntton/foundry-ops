@@ -4,7 +4,7 @@ import type { PayRunStatus, PayRunType } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { getPayRun } from '@/server/payruns';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -118,11 +118,12 @@ export default async function PayRunDetailPage({
           <CardContent className="flex flex-wrap items-center gap-3 text-sm">
             {payRun.approvedAt && payRun.approvedBy && (
               <span className="flex items-center gap-2 text-ink-3">
-                <Avatar className="h-5 w-5">
-                  <AvatarFallback className="text-[9px]">
-                    {payRun.approvedBy.initials}
-                  </AvatarFallback>
-                </Avatar>
+                <PersonAvatar
+  className="h-5 w-5"
+  fallbackClassName="text-[9px]"
+  initials={payRun.approvedBy.initials}
+  headshotUrl={payRun.approvedBy.headshotUrl}
+/>
                 Approved by {payRun.approvedBy.firstName} {payRun.approvedBy.lastName} on{' '}
                 {payRun.approvedAt.toLocaleDateString('en-AU')}
               </span>
@@ -171,11 +172,12 @@ export default async function PayRunDetailPage({
                         href={`/directory/people/${l.person.id}`}
                         className="flex items-center gap-1.5 hover:underline"
                       >
-                        <Avatar className="h-5 w-5">
-                          <AvatarFallback className="text-[9px]">
-                            {l.person.initials}
-                          </AvatarFallback>
-                        </Avatar>
+                        <PersonAvatar
+  className="h-5 w-5"
+  fallbackClassName="text-[9px]"
+  initials={l.person.initials}
+  headshotUrl={l.person.headshotUrl}
+/>
                         <span>
                           {l.person.firstName} {l.person.lastName}
                         </span>

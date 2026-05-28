@@ -18,7 +18,7 @@ export default async function NewBillPage() {
     prisma.person.findMany({
       where: { employment: 'contractor', endDate: null },
       orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
-      select: { id: true, initials: true, firstName: true, lastName: true },
+      select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
     }),
   ]);
 

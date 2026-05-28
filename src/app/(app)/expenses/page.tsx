@@ -4,7 +4,7 @@ import type { ExpenseStatus } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { listExpenses } from '@/server/expenses';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -62,7 +62,13 @@ const CATEGORY_OPTIONS = [
 export default async function ExpensesPage({
   searchParams,
 }: {
-  searchParams: { status?: string; category?: string; q?: string; scope?: string };
+  searchParams: {
+    status?: string;
+    category?: string;
+    q?: string;
+    scope?: string;
+    view?: string;
+  };
 }) {
   const session = await getSession();
   if (!session) notFound();
@@ -79,6 +85,8 @@ export default async function ExpensesPage({
   const canSeeAll = hasCapability(session, 'expense.approve.under_2k');
   const scope: 'mine' | 'all' =
     canSeeAll && searchParams.scope === 'all' ? 'all' : 'mine';
+  const view: 'list' | 'by-project' =
+    searchParams.view === 'by-project' ? 'by-project' : 'list';
 
   const rows = await listExpenses(session, scope, {
     ...(status ? { status } : {}),
@@ -87,13 +95,60 @@ export default async function ExpensesPage({
   });
   const canSubmit = hasCapability(session, 'expense.submit');
 
+  // Pivot helper for the "By project" view: groups rows by project code
+  // (OPEX = no project) with running subtotals. Sort buckets so OPEX lands
+  // last and the rest go alphabetically by project code.
+  type Bucket = {
+    key: string; // project code or '__OPEX__'
+    label: string; // 'IFM001 — Project X' or 'OPEX (no project)'
+    code: string | null;
+    name: string | null;
+    rows: typeof rows;
+    totalCents: number;
+    gstCents: number;
+  };
+  const buckets: Bucket[] = (() => {
+    const map = new Map<string, Bucket>();
+    for (const r of rows) {
+      const key = r.project?.code ?? '__OPEX__';
+      const existing = map.get(key);
+      if (existing) {
+        existing.rows.push(r);
+        existing.totalCents += r.amountCents;
+        existing.gstCents += r.gstCents;
+      } else {
+        map.set(key, {
+          key,
+          label: r.project
+            ? `${r.project.code} — ${r.project.name}`
+            : 'OPEX (no project)',
+          code: r.project?.code ?? null,
+          name: r.project?.name ?? null,
+          rows: [r],
+          totalCents: r.amountCents,
+          gstCents: r.gstCents,
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.key === '__OPEX__') return 1;
+      if (b.key === '__OPEX__') return -1;
+      return a.key.localeCompare(b.key);
+    });
+  })();
+  const grandTotalCents = rows.reduce((s, r) => s + r.amountCents, 0);
+
   return (
     <div className="space-y-6">
       <header className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-ink">Expenses</h1>
+          <h1 className="text-xl font-semibold text-ink">Submitted Expenses</h1>
           <p className="text-sm text-ink-3">
-            {scope === 'all' ? 'All expenses in scope.' : 'Your submitted expenses.'}
+            {scope === 'all'
+              ? 'All expenses in scope.'
+              : view === 'by-project'
+                ? 'Your spend grouped by project code.'
+                : 'Your submitted expenses.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -109,12 +164,60 @@ export default async function ExpensesPage({
             Download CSV
           </a>
           {canSubmit && (
+            <Button asChild variant="outline">
+              <Link href="/bills/intake">Drop a receipt (OCR) →</Link>
+            </Button>
+          )}
+          {canSubmit && (
             <Button asChild>
               <Link href="/expenses/new">+ New expense</Link>
             </Button>
           )}
         </div>
       </header>
+
+      <div
+        role="tablist"
+        aria-label="Expense view"
+        className="inline-flex items-center gap-1 rounded-md border border-line bg-card p-1 text-sm"
+      >
+        <Link
+          role="tab"
+          aria-selected={view === 'list'}
+          href={`/expenses${buildQs({
+            q,
+            status,
+            category,
+            scope: scope === 'all' ? 'all' : undefined,
+            view: undefined,
+          })}`}
+          className={`rounded-md px-3 py-1 ${
+            view === 'list'
+              ? 'bg-brand text-white'
+              : 'text-ink-2 hover:bg-surface-hover'
+          }`}
+        >
+          List
+        </Link>
+        <Link
+          role="tab"
+          aria-selected={view === 'by-project'}
+          href={`/expenses${buildQs({
+            q,
+            status,
+            category,
+            scope: scope === 'all' ? 'all' : undefined,
+            view: 'by-project',
+          })}`}
+          className={`rounded-md px-3 py-1 ${
+            view === 'by-project'
+              ? 'bg-brand text-white'
+              : 'text-ink-2 hover:bg-surface-hover'
+          }`}
+        >
+          By project
+        </Link>
+      </div>
 
       <form
         action="/expenses"
@@ -183,7 +286,90 @@ export default async function ExpensesPage({
         </span>
       </form>
 
-      <Card className="p-0">
+      {view === 'by-project' && rows.length > 0 && (
+        <Card className="p-0">
+          <div className="space-y-0 divide-y divide-line">
+            {buckets.map((b) => (
+              <section key={b.key} className="px-4 py-3">
+                <header className="mb-2 flex items-baseline justify-between gap-2">
+                  <h2 className="text-sm font-medium text-ink">
+                    {b.code ? (
+                      <Link
+                        href={`/projects/${b.code}`}
+                        className="hover:underline"
+                      >
+                        <span className="font-mono">{b.code}</span>{' '}
+                        {b.name && (
+                          <span className="text-ink-3">— {b.name}</span>
+                        )}
+                      </Link>
+                    ) : (
+                      <span className="text-ink-3">{b.label}</span>
+                    )}
+                  </h2>
+                  <div className="text-right text-xs">
+                    <div className="font-semibold tabular-nums text-ink">
+                      {formatMoney(b.totalCents)}
+                    </div>
+                    <div className="text-[10px] text-ink-3">
+                      {b.rows.length}{' '}
+                      {b.rows.length === 1 ? 'item' : 'items'} ·{' '}
+                      {formatMoney(b.gstCents)} GST
+                    </div>
+                  </div>
+                </header>
+                <ul className="divide-y divide-line text-xs">
+                  {b.rows.map((e) => (
+                    <li
+                      key={e.id}
+                      className="flex flex-wrap items-center justify-between gap-2 py-1.5"
+                    >
+                      <Link
+                        href={`/expenses/${e.id}`}
+                        className="flex min-w-0 flex-1 items-center gap-3 hover:text-ink"
+                      >
+                        <span className="tabular-nums text-ink-3">
+                          {e.date.toLocaleDateString('en-AU')}
+                        </span>
+                        <span className="capitalize text-ink-2">
+                          {e.category}
+                        </span>
+                        <span className="truncate text-ink">
+                          {e.vendor ?? e.description ?? '(no description)'}
+                        </span>
+                      </Link>
+                      <div className="flex items-center gap-3">
+                        <Badge
+                          variant={STATUS_VARIANT[e.status] ?? 'outline'}
+                          className="text-[10px] capitalize"
+                        >
+                          {e.status.replace('_', ' ')}
+                        </Badge>
+                        <span className="font-semibold tabular-nums text-ink">
+                          {formatMoney(e.amountCents)}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+            <div className="flex items-center justify-between bg-surface-subtle/40 px-4 py-3 text-sm">
+              <span className="text-ink-3">
+                {scope === 'mine' ? 'Your total' : 'Total in scope'} ·{' '}
+                {rows.length} item{rows.length === 1 ? '' : 's'}
+              </span>
+              <span className="font-semibold tabular-nums text-ink">
+                {formatMoney(grandTotalCents)}
+              </span>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      <Card
+        className={`p-0 ${view === 'by-project' && rows.length > 0 ? 'hidden' : ''}`}
+      >
         {rows.length === 0 ? (
           <div className="p-12 text-center text-sm text-ink-3">
             {q || status || category || scope === 'all' ? (
@@ -228,11 +414,12 @@ export default async function ExpensesPage({
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <Avatar className="h-6 w-6">
-                        <AvatarFallback className="text-[10px]">
-                          {e.person.initials}
-                        </AvatarFallback>
-                      </Avatar>
+                      <PersonAvatar
+  className="h-6 w-6"
+  fallbackClassName="text-[10px]"
+  initials={e.person.initials}
+  headshotUrl={e.person.headshotUrl}
+/>
                       <span className="text-sm">
                         {e.person.firstName} {e.person.lastName}
                       </span>

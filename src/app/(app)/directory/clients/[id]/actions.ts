@@ -64,6 +64,88 @@ export type ClientDeleteState =
   | { status: 'idle' }
   | { status: 'error'; message: string };
 
+export type ClientArchiveState =
+  | { status: 'idle' }
+  | { status: 'error'; message: string }
+  | { status: 'success'; message: string };
+
+export async function archiveClient(
+  clientId: string,
+  _prev: ClientArchiveState,
+): Promise<ClientArchiveState> {
+  const session = await getSession();
+  try {
+    requireCapability(session, 'client.edit');
+  } catch {
+    return { status: 'error', message: 'Not authorized' };
+  }
+  const client = await prisma.client.findUnique({ where: { id: clientId } });
+  if (!client) return { status: 'error', message: 'Client not found' };
+  if (client.archivedAt) return { status: 'success', message: 'Already archived.' };
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.client.update({
+        where: { id: clientId },
+        data: { archivedAt: new Date() },
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'archived',
+        entity: {
+          type: 'client',
+          id: clientId,
+          before: { archivedAt: null },
+          after: { archivedAt: 'now' },
+        },
+        source: 'web',
+      });
+    });
+  } catch (err) {
+    console.error('[client.archive] failed:', err);
+    return { status: 'error', message: 'Archive failed.' };
+  }
+  revalidatePath('/directory/clients');
+  revalidatePath(`/directory/clients/${clientId}`);
+  return { status: 'success', message: 'Client archived.' };
+}
+
+export async function unarchiveClient(
+  clientId: string,
+  _prev: ClientArchiveState,
+): Promise<ClientArchiveState> {
+  const session = await getSession();
+  try {
+    requireCapability(session, 'client.edit');
+  } catch {
+    return { status: 'error', message: 'Not authorized' };
+  }
+  const client = await prisma.client.findUnique({ where: { id: clientId } });
+  if (!client) return { status: 'error', message: 'Client not found' };
+  if (!client.archivedAt) return { status: 'success', message: 'Not archived.' };
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.client.update({
+        where: { id: clientId },
+        data: { archivedAt: null },
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'unarchived',
+        entity: { type: 'client', id: clientId, before: { archivedAt: 'set' }, after: { archivedAt: null } },
+        source: 'web',
+      });
+    });
+  } catch (err) {
+    console.error('[client.unarchive] failed:', err);
+    return { status: 'error', message: 'Unarchive failed.' };
+  }
+  revalidatePath('/directory/clients');
+  revalidatePath(`/directory/clients/${clientId}`);
+  return { status: 'success', message: 'Client restored.' };
+}
+
 const DeleteSchema = z.object({ confirmCode: z.string().trim() });
 
 /**

@@ -45,7 +45,10 @@ async function fetchToken(): Promise<CachedToken> {
   };
 }
 
-async function getAppToken(): Promise<string> {
+// Exported so the binary-upload paths (SharePoint backup, etc.)
+// can fetch directly without going through graphRaw — they need
+// custom content-type headers (application/zip / chunked upload).
+export async function getAppToken(): Promise<string> {
   if (cached && cached.expiresAt > Date.now()) return cached.accessToken;
   cached = await fetchToken();
   return cached.accessToken;

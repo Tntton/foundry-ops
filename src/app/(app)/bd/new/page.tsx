@@ -5,7 +5,11 @@ import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
 import { NewDealForm } from './form';
 
-export default async function NewDealPage() {
+export default async function NewDealPage({
+  searchParams,
+}: {
+  searchParams: { clientId?: string };
+}) {
   const session = await getSession();
   if (!hasCapability(session, 'deal.create')) notFound();
 
@@ -20,9 +24,18 @@ export default async function NewDealPage() {
         roles: { hasSome: ['super_admin', 'admin', 'partner'] },
       },
       orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
-      select: { id: true, initials: true, firstName: true, lastName: true },
+      select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
     }),
   ]);
+
+  // Pre-select the client when arriving from the client detail page's
+  // "+ New deal" cross-link (?clientId=…). Falls back to empty if the
+  // query param isn't a known client.
+  const defaultClientId =
+    searchParams.clientId &&
+    clients.some((c) => c.id === searchParams.clientId)
+      ? searchParams.clientId
+      : null;
 
   return (
     <div className="space-y-6">
@@ -38,7 +51,7 @@ export default async function NewDealPage() {
           probability.
         </p>
       </header>
-      <NewDealForm clients={clients} owners={owners} />
+      <NewDealForm clients={clients} owners={owners} defaultClientId={defaultClientId} />
     </div>
   );
 }

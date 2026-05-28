@@ -4,7 +4,8 @@ import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { listContractors } from '@/server/contractors';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { PersonAvatar } from '@/components/person-avatar';
+import { CompanyLogo } from '@/components/company-logo';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -82,6 +83,9 @@ export default async function ContractorsPage() {
           <TabsTrigger value="suppliers" asChild>
             <Link href="/directory/suppliers">Suppliers</Link>
           </TabsTrigger>
+          <TabsTrigger value="company" asChild>
+            <Link href="/directory/company">Company</Link>
+          </TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -120,12 +124,22 @@ export default async function ContractorsPage() {
             <Card key={c.id}>
               <CardHeader className="flex flex-row items-start justify-between gap-3">
                 <Link href={`/directory/people/${c.id}`} className="flex items-center gap-3">
-                  <Avatar>
-                    <AvatarFallback>{c.initials}</AvatarFallback>
-                  </Avatar>
+                  <PersonAvatar
+  initials={c.initials}
+  headshotUrl={c.headshotUrl}
+/>
                   <div>
-                    <div className="text-base font-semibold text-ink hover:underline">
-                      {c.firstName} {c.lastName}
+                    <div className="flex items-center gap-2">
+                      <div className="text-base font-semibold text-ink hover:underline">
+                        {c.firstName} {c.lastName}
+                      </div>
+                      {c.website && (
+                        <CompanyLogo
+                          src={c.logoUrl}
+                          name={c.website.replace(/^https?:\/\//, '')}
+                          className="h-5 w-5 p-0.5"
+                        />
+                      )}
                     </div>
                     <div className="mt-0.5 flex items-center gap-2 text-xs text-ink-3">
                       <span>{c.level}</span>

@@ -19,6 +19,7 @@ export type RiskRow = {
     initials: string;
     firstName: string;
     lastName: string;
+    headshotUrl: string | null;
   } | null;
 };
 
@@ -82,7 +83,7 @@ export async function listFirmRisks(filter: RiskFilter = {}): Promise<FirmRisksS
   const owners = ownerIds.length
     ? await prisma.person.findMany({
         where: { id: { in: ownerIds } },
-        select: { id: true, initials: true, firstName: true, lastName: true },
+        select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
       })
     : [];
   const ownerById = new Map(owners.map((o) => [o.id, o]));

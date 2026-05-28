@@ -9,11 +9,25 @@ import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
 import { optionalEnv } from '@/server/env';
 import { provisionM365User } from '@/server/integrations/m365';
+import { notifyAdminPool } from '@/server/user-updates';
 
 const FOUNDRY_SUFFIX = '@foundry.health';
 
 const NewPersonSchema = z.object({
   email: z.string().trim().toLowerCase().email(),
+  /** Personal email — captured for both FT staff and contractors so
+   *  payroll, contracts, and magic-link recovery have a real address
+   *  to reach them at. Required for contractors (their @foundry.health
+   *  is just the M365 account); optional for FT staff (most don't
+   *  need a separate personal address but can opt in). */
+  personalEmail: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .email()
+    .or(z.literal('').transform(() => null))
+    .nullable()
+    .optional(),
   firstName: z.string().trim().min(1).max(120),
   lastName: z.string().trim().min(1).max(120),
   initialsOverride: z.string().trim().max(6).optional().nullable(),
@@ -25,7 +39,7 @@ const NewPersonSchema = z.object({
     .max(40)
     .optional()
     .nullable(),
-  band: z.enum(['MP', 'Partner', 'Expert', 'Consultant', 'Analyst']),
+  band: z.enum(['MP', 'Partner', 'Associate_Partner', 'Expert', 'Consultant', 'Analyst']),
   level: z.string().trim().min(1).max(10),
   employment: z.enum(['ft', 'contractor']),
   fte: z.coerce.number().min(0.1).max(1.0),
@@ -54,6 +68,7 @@ export async function createPerson(
 
   const parsed = NewPersonSchema.safeParse({
     email: formData.get('email'),
+    personalEmail: formData.get('personalEmail') || null,
     firstName: formData.get('firstName'),
     lastName: formData.get('lastName'),
     initialsOverride: formData.get('initialsOverride') || null,
@@ -80,11 +95,34 @@ export async function createPerson(
   }
   const data = parsed.data;
 
-  if (data.employment === 'ft' && !data.email.endsWith(FOUNDRY_SUFFIX)) {
+  // Both FT staff AND contractors need an @foundry.health work email
+  // because that's the M365 account / SharePoint identity / Teams
+  // handle the firm grants them. The personal email field captures
+  // their real day-to-day inbox separately.
+  if (!data.email.endsWith(FOUNDRY_SUFFIX)) {
     return {
       status: 'error',
-      message: 'FT staff must have an @foundry.health email.',
-      fieldErrors: { email: 'Must end with @foundry.health for FT' },
+      message: 'Work email must end with @foundry.health (it becomes the M365 account).',
+      fieldErrors: { email: 'Must end with @foundry.health' },
+    };
+  }
+  // Contractors typically don't read their @foundry.health inbox —
+  // require a personal email so we can actually reach them off-firm
+  // (payroll forms, contracts, magic-link recovery).
+  if (data.employment === 'contractor' && !data.personalEmail) {
+    return {
+      status: 'error',
+      message: 'Contractors must have a personal email on file.',
+      fieldErrors: { personalEmail: 'Required for contractors' },
+    };
+  }
+  if (data.personalEmail && data.personalEmail.endsWith(FOUNDRY_SUFFIX)) {
+    return {
+      status: 'error',
+      message: 'Personal email must be different from the @foundry.health work email.',
+      fieldErrors: {
+        personalEmail: 'Use a non-foundry.health address',
+      },
     };
   }
 
@@ -105,7 +143,10 @@ export async function createPerson(
   let entraUserId: string | null = null;
   let temporaryPassword: string | null = null;
   const provisioningOn = optionalEnv('ENABLE_PROVISIONING') === '1';
-  if (provisioningOn && data.employment === 'ft') {
+  // Contractors now also get M365 accounts (the firm grants them
+  // SharePoint / Teams access via the @foundry.health UPN). Skip
+  // provisioning only when the env flag is off.
+  if (provisioningOn) {
     try {
       const result = await provisionM365User({
         firstName: data.firstName,
@@ -132,6 +173,7 @@ export async function createPerson(
       const person = await tx.person.create({
         data: {
           email: data.email,
+          personalEmail: data.personalEmail ?? null,
           firstName: data.firstName,
           lastName: data.lastName,
           initials,
@@ -157,6 +199,7 @@ export async function createPerson(
           id: person.id,
           after: {
             email: person.email,
+            personalEmail: person.personalEmail,
             initials: person.initials,
             band: person.band,
             level: person.level,
@@ -167,6 +210,17 @@ export async function createPerson(
           },
         },
         source: 'web',
+      });
+      // Admin-pool fan-out so leadership + ops sees new hires /
+      // contractor onboarding in their dashboard updates feed.
+      await notifyAdminPool(tx, {
+        actorPersonId: session.person.id,
+        kind: 'person_created',
+        title: `New ${data.employment === 'contractor' ? 'contractor' : 'team member'}: ${person.firstName} ${person.lastName}`,
+        body: `${person.band} · ${person.level}${person.entraUserId ? ' · M365 provisioned' : ''}`,
+        href: `/directory/people/${person.id}`,
+        entityType: 'person',
+        entityId: person.id,
       });
       return person.id;
     });

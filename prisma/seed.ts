@@ -179,6 +179,13 @@ async function seedTeam() {
     }
 
     const newInitials = await ensureUniqueInitials(row.initials);
+    // Staff designation = the FT/PT employee subset whose hours we
+    // track for utilisation. Hard-coded to the founders + lead
+    // consultant for now; the user can toggle others via the directory
+    // later.
+    const isStaff = ['trung@foundry.health', 'matt@foundry.health', 'sarah@foundry.health'].includes(
+      email.toLowerCase(),
+    );
     await prisma.person.create({
       data: {
         email,
@@ -194,6 +201,7 @@ async function seedTeam() {
         rate: toCents(rate),
         roles,
         startDate,
+        isStaff,
       },
     });
     created += 1;

@@ -15,6 +15,7 @@ export type UtilisationRow = {
   utilisationPct: number | null; // loggedHours / targetHours × 100
   active: boolean;
   topProjects: Array<{ code: string; name: string; hours: number }>;
+  headshotUrl: string | null;
 };
 
 export type FirmUtilisation = {
@@ -69,11 +70,15 @@ export async function computeFirmUtilisation(
       where: {
         startDate: { lt: end },
         OR: [{ endDate: null }, { endDate: { gt: start } }],
+        // Utilisation is a Staff-only metric — partners, fellows,
+        // contractors are excluded by design even if they logged hours.
+        isStaff: true,
       },
       orderBy: [{ endDate: 'asc' }, { lastName: 'asc' }],
       select: {
         id: true,
         initials: true,
+        headshotUrl: true,
         firstName: true,
         lastName: true,
         band: true,
@@ -197,6 +202,7 @@ export async function computeFirmUtilisation(
       utilisationPct,
       active: person.endDate === null || person.endDate >= new Date(),
       topProjects,
+      headshotUrl: person.headshotUrl,
     };
   });
 

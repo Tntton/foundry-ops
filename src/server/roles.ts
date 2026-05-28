@@ -7,10 +7,20 @@ export type SessionPerson = {
   lastName: string;
   initials: string;
   roles: Role[];
+  headshotUrl: string | null;
 };
 
 export type Session = {
   person: SessionPerson;
+  /** True when the signed-in person actually holds super_admin —
+   *  preserved across the view-as overlay so the UI knows they can
+   *  exit view-as mode. */
+  isRealSuperAdmin: boolean;
+  /** When the super_admin has engaged "view as", this is the role-set
+   *  they're pretending to be. `person.roles` already reflects the
+   *  overlay; this field exists so the UI can surface the banner +
+   *  exit affordance. Null when no overlay is active. */
+  viewAsRoles: Role[] | null;
 };
 
 export function hasRole(session: Session | null, role: Role): boolean {

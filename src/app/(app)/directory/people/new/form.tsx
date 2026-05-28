@@ -94,9 +94,27 @@ export function NewPersonForm({
             label="Work email"
             required
             error={errs['email']}
-            hint="FT requires @foundry.health"
+            hint="@foundry.health · becomes the M365 account"
           >
-            <Input name="email" type="email" required className="font-mono" />
+            <Input
+              name="email"
+              type="email"
+              required
+              className="font-mono"
+              placeholder="firstname.lastname@foundry.health"
+            />
+          </Field>
+          <Field
+            label="Personal email"
+            error={errs['personalEmail']}
+            hint="For payroll / contracts · required for contractors"
+          >
+            <Input
+              name="personalEmail"
+              type="email"
+              className="font-mono"
+              placeholder="firstname@gmail.com"
+            />
           </Field>
           <Field label="Job title" error={errs['jobTitle']}>
             <Input name="jobTitle" placeholder="Consultant / Partner / …" />
@@ -258,9 +276,11 @@ export function NewPersonForm({
       <div className="rounded-md border border-line bg-surface-subtle p-3 text-xs text-ink-3">
         {provisioningOn ? (
           <>
-            <strong>M365 provisioning is ON.</strong> Creating an FT person will auto-provision
-            a Microsoft 365 account with a temporary password (shown once on the next
-            screen). Contractors don&apos;t get M365 accounts.
+            <strong>M365 provisioning is ON.</strong> Both FT staff and
+            contractors auto-provision a Microsoft 365 account at
+            their work email, with a temporary password (shown once on
+            the next screen). Contractors get the same firm-domain
+            identity for SharePoint / Teams access.
           </>
         ) : (
           <>

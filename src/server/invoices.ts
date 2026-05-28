@@ -11,6 +11,9 @@ export type InvoiceListRow = {
   amountExGst: number;
   gst: number;
   status: string;
+  /** Set the moment the rendered tax invoice PDF is downloaded.
+   *  approved + null === awaiting finalisation. */
+  taxInvoiceFinalisedAt: Date | null;
   client: { id: string; code: string; legalName: string };
   project: { id: string; code: string; name: string };
 };
@@ -74,6 +77,9 @@ export async function listInvoices(
     amountExGst: i.amountExGst,
     gst: i.gst,
     status: i.status,
+    /** Set the moment the rendered tax invoice PDF is downloaded.
+     *  approved + null === awaiting finalisation. */
+    taxInvoiceFinalisedAt: i.taxInvoiceFinalisedAt,
     client: i.client,
     project: i.project,
   }));
