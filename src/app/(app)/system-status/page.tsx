@@ -6,6 +6,7 @@ import {
   type ComponentHealth,
   type HealthState,
 } from '@/server/system-health';
+import { formatLocalDateTime } from '@/lib/format';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
@@ -33,7 +34,7 @@ export default async function SystemStatusPage() {
         </div>
         <p className="mt-1 text-sm text-ink-3">
           Snapshot generated{' '}
-          {health.generatedAt.toLocaleString('en-AU', {
+          {formatLocalDateTime(health.generatedAt, {
             day: 'numeric',
             month: 'short',
             hour: '2-digit',

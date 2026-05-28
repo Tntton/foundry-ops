@@ -7,6 +7,7 @@ import {
   navanConfigured,
   type NavanConfig,
 } from '@/server/integrations/navan';
+import { formatLocalDateTime } from '@/lib/format';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -101,7 +102,7 @@ export default async function NavanIntegrationPage() {
                 label="Connected at"
                 value={
                   cfg.connectedAt
-                    ? new Date(cfg.connectedAt).toLocaleString('en-AU')
+                    ? formatLocalDateTime(new Date(cfg.connectedAt))
                     : '—'
                 }
               />
@@ -109,7 +110,7 @@ export default async function NavanIntegrationPage() {
                 label="Last sync"
                 value={
                   row?.lastSyncAt
-                    ? row.lastSyncAt.toLocaleString('en-AU')
+                    ? formatLocalDateTime(row.lastSyncAt)
                     : 'Never'
                 }
               />

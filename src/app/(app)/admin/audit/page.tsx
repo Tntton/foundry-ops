@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
+import { formatLocalDateTime } from '@/lib/format';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -204,7 +205,7 @@ export default async function AuditLogPage({
               {events.map((e) => (
                 <TableRow key={e.id}>
                   <TableCell className="whitespace-nowrap tabular-nums text-xs text-ink-3">
-                    {e.at.toLocaleString('en-AU', { hour12: false })}
+                    {formatLocalDateTime(e.at, { hour12: false })}
                   </TableCell>
                   <TableCell>
                     {e.actor ? (

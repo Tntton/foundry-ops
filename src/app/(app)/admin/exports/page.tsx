@@ -5,6 +5,7 @@ import { prisma } from '@/server/db';
 import { optionalEnv } from '@/server/env';
 import { graphConfigured } from '@/server/graph';
 import { resolveBackupsRoot } from '@/server/exports/sharepoint-backup';
+import { formatLocalDateTime } from '@/lib/format';
 import {
   Card,
   CardContent,
@@ -315,7 +316,7 @@ export default async function ExportsPage() {
                   return (
                     <tr key={r.id} className="border-t border-line">
                       <td className="px-3 py-2 tabular-nums text-ink-2">
-                        {r.at.toLocaleString('en-AU')}
+                        {formatLocalDateTime(r.at)}
                       </td>
                       <td className="px-3 py-2">
                         <Badge

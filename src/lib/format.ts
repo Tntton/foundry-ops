@@ -17,3 +17,23 @@ export function formatFte(fte: number): string {
   if (fte === 1) return 'FT';
   return fte.toFixed(2);
 }
+
+/**
+ * Format an absolute timestamp in the user's local timezone (Foundry is
+ * AU-based, so we pin to Australia/Sydney). The server runs in UTC, so
+ * `Date.toLocaleString()` without `timeZone` shows GMT to every staffer
+ * regardless of where they're sitting.
+ *
+ * Pass `Intl.DateTimeFormatOptions` to override format (e.g. `hour12: false`
+ * for 24-hour audit-style display, or a custom field set for compact
+ * snapshots).
+ */
+export function formatLocalDateTime(
+  d: Date,
+  opts?: Intl.DateTimeFormatOptions,
+): string {
+  return d.toLocaleString('en-AU', {
+    timeZone: 'Australia/Sydney',
+    ...opts,
+  });
+}

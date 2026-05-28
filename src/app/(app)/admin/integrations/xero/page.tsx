@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { getXeroIntegration, xeroConfigured, type XeroConfig } from '@/server/integrations/xero';
+import { formatLocalDateTime } from '@/lib/format';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -72,7 +73,7 @@ export default async function XeroIntegrationPage({
           ) : connected && cfg ? (
             <>
               <Row label="Connected at">
-                {new Date(cfg.connectedAt).toLocaleString('en-AU')}
+                {formatLocalDateTime(new Date(cfg.connectedAt))}
               </Row>
               <Row label="Organisations">
                 <ul className="space-y-1">

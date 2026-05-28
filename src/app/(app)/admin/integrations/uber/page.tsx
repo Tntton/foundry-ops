@@ -7,6 +7,7 @@ import {
   uberConfigured,
   type UberConfig,
 } from '@/server/integrations/uber';
+import { formatLocalDateTime } from '@/lib/format';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -103,7 +104,7 @@ export default async function UberIntegrationPage() {
                 label="Connected at"
                 value={
                   cfg.connectedAt
-                    ? new Date(cfg.connectedAt).toLocaleString('en-AU')
+                    ? formatLocalDateTime(new Date(cfg.connectedAt))
                     : '—'
                 }
               />
@@ -111,7 +112,7 @@ export default async function UberIntegrationPage() {
                 label="Last sync"
                 value={
                   row?.lastSyncAt
-                    ? row.lastSyncAt.toLocaleString('en-AU')
+                    ? formatLocalDateTime(row.lastSyncAt)
                     : 'Never'
                 }
               />
@@ -208,7 +209,7 @@ export default async function UberIntegrationPage() {
                   label="Last pull"
                   value={
                     cfg.sftp.lastPullAt
-                      ? new Date(cfg.sftp.lastPullAt).toLocaleString('en-AU')
+                      ? formatLocalDateTime(new Date(cfg.sftp.lastPullAt))
                       : 'Never'
                   }
                 />

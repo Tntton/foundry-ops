@@ -8,6 +8,7 @@ import {
   type DocuSignConfig,
 } from '@/server/integrations/docusign';
 import { prisma } from '@/server/db';
+import { formatLocalDateTime } from '@/lib/format';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -185,7 +186,7 @@ export default async function DocuSignIntegrationPage() {
                 label="Connected at"
                 value={
                   cfg.connectedAt
-                    ? new Date(cfg.connectedAt).toLocaleString('en-AU')
+                    ? formatLocalDateTime(new Date(cfg.connectedAt))
                     : '—'
                 }
               />
@@ -193,7 +194,7 @@ export default async function DocuSignIntegrationPage() {
                 label="Consent stamped"
                 value={
                   cfg.consentedAt
-                    ? new Date(cfg.consentedAt).toLocaleString('en-AU')
+                    ? formatLocalDateTime(new Date(cfg.consentedAt))
                     : '— pending —'
                 }
               />
