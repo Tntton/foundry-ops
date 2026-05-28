@@ -1,37 +1,81 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import type { RecruitTargetBand } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import {
   getRecruitBoard,
+  TARGET_BAND_LABELS,
   type RecruitCard,
 } from '@/server/recruits';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { QuickAddInColumn } from './quick-add';
 
 /**
  * Recruitment pipeline — kanban tracker for prospective hires. Super-
- * admin only. Mirrors the BD pipeline visual language but laid out as
- * horizontal rows (one row per pool) rather than vertical columns —
- * better signal density when most pools have a handful of candidates
- * and the firm wants to scan the whole funnel in a glance.
+ * admin only. Funnel-stage columns (left → right):
+ *   Screening · In Discussion · Offer · Nixed
  *
- * Rows top-to-bottom (most-senior first):
- *   Senior Leaders · Experts · Fellows · Consultants · Analysts · Nixed
+ * Target band (analyst / consultant / fellow / expert / senior leader)
+ * surfaces as a chip on each card so the band context isn't lost when
+ * we group by stage instead of by pool. Reasoning: the active question
+ * for leadership is "who's where in the funnel", and bands cluster
+ * predictably anyway (most cards are consultant/expert).
  *
- * Read-only kanban for v1 — moves between rows happen on the
- * detail page via the move + status actions. Drag-and-drop comes
- * later if it earns its keep.
+ * Stage categorisation is forgiving — `stage` is a free-form string
+ * on the model, so we bucket on keyword match. Anything that doesn't
+ * match Offer or In Discussion lands in Screening (the default for
+ * new prospects).
+ *
+ * Read-only kanban for v1 — stage / status changes happen on the
+ * detail page. Drag-and-drop comes later if it earns its keep.
  */
+
+type StageColumn = 'screening' | 'in_discussion' | 'offer' | 'nixed';
+
+const STAGE_LABELS: Record<StageColumn, string> = {
+  screening: 'Screening',
+  in_discussion: 'In Discussion',
+  offer: 'Offer',
+  nixed: 'Nixed',
+};
+
+const STAGE_ORDER: readonly StageColumn[] = [
+  'screening',
+  'in_discussion',
+  'offer',
+  'nixed',
+];
+
+function categorise(card: RecruitCard): StageColumn {
+  if (card.status === 'nixed') return 'nixed';
+  const stage = (card.stage ?? '').toLowerCase();
+  if (/offer|accept|sign/.test(stage)) return 'offer';
+  if (/interview|discuss|meeting|chat|call|reference/.test(stage))
+    return 'in_discussion';
+  // Default for null / "lead" / "screening" / "initial" / etc.
+  return 'screening';
+}
+
 export default async function RecruitsPage() {
   const session = await getSession();
   if (!session || !hasCapability(session, 'recruit.manage')) notFound();
 
   const board = await getRecruitBoard();
+
+  // Flatten + categorise. The server still returns band-grouped + nixed
+  // separately, but for this view we re-bucket by stage.
+  const buckets: Record<StageColumn, RecruitCard[]> = {
+    screening: [],
+    in_discussion: [],
+    offer: [],
+    nixed: [],
+  };
+  for (const col of board.columns) {
+    for (const c of col.cards) buckets[categorise(c)].push(c);
+  }
+  for (const c of board.nixed) buckets.nixed.push(c);
 
   return (
     <div className="space-y-6">
@@ -39,10 +83,9 @@ export default async function RecruitsPage() {
         <div>
           <h1 className="text-xl font-semibold text-ink">Talent pipeline</h1>
           <p className="text-sm text-ink-3">
-            Prospective hires by band. {board.totalActive} active ·{' '}
-            {board.totalNixed} nixed. Promote a card to a hire from the detail
-            page — the new Person record links back so the audit trail keeps the
-            full funnel history.
+            Prospects by funnel stage. {board.totalActive} active ·{' '}
+            {board.totalNixed} nixed. Band shown on each card as a chip. Move
+            cards between stages from the detail page.
           </p>
         </div>
         <Button asChild>
@@ -50,67 +93,47 @@ export default async function RecruitsPage() {
         </Button>
       </header>
 
-      <div className="flex flex-col gap-3">
-        {board.columns.map((col) => (
-          <KanbanRow key={col.band} band={col.band} label={col.label} cards={col.cards} />
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {STAGE_ORDER.map((stage) => (
+          <KanbanColumn
+            key={stage}
+            stage={stage}
+            cards={buckets[stage]}
+          />
         ))}
-        <KanbanRow
-          band={null}
-          label="Nixed"
-          cards={board.nixed}
-          variant="nixed"
-        />
       </div>
     </div>
   );
 }
 
-function KanbanRow({
-  band,
-  label,
+function KanbanColumn({
+  stage,
   cards,
-  variant = 'active',
 }: {
-  /** The pool the row represents. Null for the Nixed row —
-   *  no quick-add affordance there (you don't add directly to
-   *  Nixed; you add to a pool and optionally nix later). */
-  band: RecruitTargetBand | null;
-  label: string;
+  stage: StageColumn;
   cards: RecruitCard[];
-  variant?: 'active' | 'nixed';
 }) {
-  const tone =
-    variant === 'nixed'
-      ? 'border-line bg-surface-subtle/30'
-      : 'border-line bg-card';
+  const isNixed = stage === 'nixed';
+  const tone = isNixed
+    ? 'border-line bg-surface-subtle/30'
+    : 'border-line bg-card';
   return (
-    <Card className={tone}>
-      <CardHeader className="flex flex-row items-center justify-between gap-2 px-3 py-2">
+    <Card className={`flex flex-col ${tone}`}>
+      <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
         <CardTitle className="text-xs font-semibold uppercase tracking-wider text-ink-3">
-          {label}
+          {STAGE_LABELS[stage]}
         </CardTitle>
         <Badge variant="outline" className="text-[10px] tabular-nums">
           {cards.length}
         </Badge>
       </CardHeader>
-      <CardContent className="px-3 pb-3 pt-0">
-        {cards.length === 0 && !(band && variant === 'active') ? (
-          <p className="px-1 py-2 text-xs text-ink-3">
-            {variant === 'nixed' ? 'No nixed prospects.' : 'Empty pool.'}
+      <CardContent className="flex-1 space-y-2 p-2 pt-0">
+        {cards.length === 0 ? (
+          <p className="px-1 py-4 text-center text-xs text-ink-3">
+            {isNixed ? 'No nixed prospects.' : 'No prospects at this stage.'}
           </p>
         ) : (
-          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
-            {cards.map((c) => (
-              <RecruitCardTile key={c.id} card={c} />
-            ))}
-            {/* Quick-add — trailing slot on every active row. Skipped
-                on Nixed since that row is a destination, not a source. */}
-            {band && variant === 'active' && (
-              <div className="w-56 shrink-0">
-                <QuickAddInColumn band={band} bandLabel={label} />
-              </div>
-            )}
-          </div>
+          cards.map((c) => <RecruitCardTile key={c.id} card={c} />)
         )}
       </CardContent>
     </Card>
@@ -130,7 +153,7 @@ function RecruitCardTile({ card }: { card: RecruitCard }) {
   return (
     <Link
       href={`/talent/${card.id}`}
-      className={`block w-56 shrink-0 rounded-md border px-3 py-2 transition-colors hover:border-brand hover:bg-surface-hover ${
+      className={`block rounded-md border px-3 py-2 transition-colors hover:border-brand hover:bg-surface-hover ${
         nixed ? 'border-line bg-surface-subtle/50 opacity-70' : 'border-line bg-surface-elev'
       }`}
     >
@@ -151,13 +174,14 @@ function RecruitCardTile({ card }: { card: RecruitCard }) {
         />
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px]">
+        <Badge variant="outline" className="text-[10px]">
+          {TARGET_BAND_LABELS[card.targetBand]}
+        </Badge>
         {card.stage && (
-          <Badge variant="amber" className="text-[10px]">
-            {card.stage}
-          </Badge>
+          <span className="truncate text-ink-3">{card.stage}</span>
         )}
         {card.source && (
-          <span className="truncate text-ink-3">via {card.source}</span>
+          <span className="truncate text-ink-3">· via {card.source}</span>
         )}
       </div>
       <div className="mt-1 flex items-center justify-between text-[10px]">
