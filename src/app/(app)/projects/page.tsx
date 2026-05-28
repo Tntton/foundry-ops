@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/table';
 import { ProjectsKanban } from './kanban';
 import { CardAddMember, type CardPersonOption } from './card-add-member';
+import { auFyOf, auFyLabel, currentAuFyLabel } from '@/lib/au-fy';
 
 const STAGE_OPTIONS: readonly ProjectStage[] = [
   'kickoff',
@@ -302,7 +303,123 @@ export default async function ProjectsPage({
       {view === 'table' && (
         <ProjectsTable rows={rows} canSeeCommercials={canSeeCommercials} />
       )}
+
+      {/* Completed-projects archive grouped by AU FY. Built off the
+          same `rows` (no extra query) but filtered to archived only.
+          FY26 (current) expands by default; older years stay
+          collapsed until reviewed. */}
+      {canSeeCommercials && (
+        <CompletedByFiscalYear rows={rows} />
+      )}
     </div>
+  );
+}
+
+/**
+ * Completed-projects archive — collapsible sections per AU fiscal year.
+ * Each section shows the count + total contract value of archived
+ * projects whose start date falls in that FY. Current FY (the one
+ * containing today) opens by default; older years stay collapsed so
+ * the page doesn't visually balloon when historical data backfills.
+ *
+ * Falls back to `createdAt` when `startDate` is null so newly-imported
+ * projects without dates yet still bucket sensibly. Once Jas reconciles
+ * the start dates, the grouping snaps to the truth.
+ */
+function CompletedByFiscalYear({ rows }: { rows: ProjectListRow[] }) {
+  const archived = rows.filter((r) => r.stage === 'archived');
+  if (archived.length === 0) return null;
+  // Bucket by FY-of-startDate. Null startDate → current FY (we treat
+  // not-yet-backfilled rows as current-year for grouping purposes).
+  const currentFy = auFyOf(new Date());
+  const groups = new Map<number, ProjectListRow[]>();
+  for (const r of archived) {
+    const fy = r.startDate ? auFyOf(r.startDate) : currentFy;
+    const arr = groups.get(fy) ?? [];
+    arr.push(r);
+    groups.set(fy, arr);
+  }
+  const years = [...groups.keys()].sort((a, b) => b - a); // newest first
+
+  return (
+    <section className="space-y-3">
+      <header>
+        <h2 className="text-sm font-semibold text-ink">
+          Completed projects by fiscal year
+        </h2>
+        <p className="text-[11px] text-ink-3">
+          Closed engagements grouped by AU FY of their start date. Current
+          fiscal year ({currentAuFyLabel()}) shown expanded; older years
+          collapse — click to review.
+        </p>
+      </header>
+      {years.map((fy) => {
+        const projs = groups.get(fy) ?? [];
+        const total = projs.reduce((s, p) => s + p.contractValueCents, 0);
+        const isCurrent = fy === currentFy;
+        return (
+          <details
+            key={fy}
+            open={isCurrent}
+            className="rounded-lg border border-line bg-card"
+          >
+            <summary className="flex cursor-pointer flex-wrap items-baseline justify-between gap-2 px-4 py-3 text-sm">
+              <span className="font-semibold text-ink">
+                {auFyLabel(fy)}
+                {isCurrent && (
+                  <span className="ml-2 text-[10px] uppercase tracking-wide text-ink-3">
+                    current
+                  </span>
+                )}
+              </span>
+              <span className="text-ink-3">
+                {projs.length} {projs.length === 1 ? 'project' : 'projects'} ·{' '}
+                <span className="font-medium tabular-nums text-ink-2">
+                  {formatMoneyShort(total)}
+                </span>{' '}
+                completed
+              </span>
+            </summary>
+            <div className="border-t border-line">
+              <table className="w-full text-sm">
+                <thead className="bg-surface-subtle/40 text-[11px] uppercase tracking-wide text-ink-3">
+                  <tr>
+                    <th className="px-4 py-2 text-left">Code</th>
+                    <th className="px-4 py-2 text-left">Client</th>
+                    <th className="px-4 py-2 text-left">Project</th>
+                    <th className="px-4 py-2 text-right">Contract</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {projs
+                    .slice()
+                    .sort((a, b) => b.contractValueCents - a.contractValueCents)
+                    .map((p) => (
+                      <tr key={p.id} className="border-t border-line">
+                        <td className="px-4 py-2">
+                          <Link
+                            href={`/projects/${p.code}`}
+                            className="font-mono text-ink hover:underline"
+                          >
+                            {p.code}
+                          </Link>
+                        </td>
+                        <td className="px-4 py-2 text-ink-2">
+                          {p.client.legalName}
+                        </td>
+                        <td className="px-4 py-2 text-ink-2">{p.name}</td>
+                        <td className="px-4 py-2 text-right tabular-nums text-ink-2">
+                          {formatMoneyShort(p.contractValueCents)}
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        );
+      })}
+    </section>
   );
 }
 

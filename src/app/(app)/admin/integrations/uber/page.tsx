@@ -7,6 +7,7 @@ import {
   uberConfigured,
   type UberConfig,
 } from '@/server/integrations/uber';
+import { getUberEmailIntakeStats } from '@/server/integrations/uber-email-intake';
 import { formatLocalDateTime } from '@/lib/format';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -36,6 +37,7 @@ export default async function UberIntegrationPage() {
   const cfg = (row?.config ?? {}) as UberConfig;
   const connected = row?.status === 'connected';
   const envOk = uberConfigured();
+  const emailIntake = await getUberEmailIntakeStats();
 
   return (
     <div className="space-y-6">
@@ -250,6 +252,70 @@ export default async function UberIntegrationPage() {
               <SftpConfigForm />
             </>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Email-intake (Power Automate → SharePoint → cron). Paired
+           with the M365 Power Automate flow documented in
+           INTEGRATIONS.md §6: TT's mailbox flow watches for
+           `noreply@uber.com` ride receipts, drops each PDF into the
+           SharePoint inbox folder; the /api/cron/uber-receipts-pull
+           cron (every 15 min) lists, OCRs, lands an Expense
+           attributed to the rider, and moves the file to
+           Processed/YYYY-MM-DD/. Creates Expense (reimbursable) rows
+           rather than Bills — the email-receipt channel is for rides
+           paid on personal cards. Corporate-AMEX rides still flow as
+           Bills via the SFTP / CSV path above. */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-semibold uppercase tracking-wide text-ink-3">
+            Email-intake (Power Automate → SharePoint, every 15 min)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div className="space-y-1">
+            <Row
+              label="SharePoint enabled"
+              value={emailIntake.configured ? 'Yes' : 'No — set ENTRA_* + SHAREPOINT_SITE_URL'}
+            />
+            <Row label="Inbox folder" value={emailIntake.inboxPath} mono />
+            <Row label="Processed root" value={emailIntake.processedPath} mono />
+            <Row
+              label="Last poll"
+              value={
+                emailIntake.lastPollAt
+                  ? formatLocalDateTime(emailIntake.lastPollAt)
+                  : 'Never'
+              }
+            />
+            <Row
+              label="Files imported (24h)"
+              value={String(emailIntake.filesImported24h)}
+            />
+            <Row
+              label="Files unmatched (24h)"
+              value={String(emailIntake.filesUnmatched24h)}
+            />
+            <Row
+              label="Files failed (24h)"
+              value={String(emailIntake.filesFailed24h)}
+            />
+            {emailIntake.lastResult?.skippedReason && (
+              <Row
+                label="Last poll status"
+                value={`Skipped — ${emailIntake.lastResult.skippedReason}`}
+              />
+            )}
+          </div>
+          <p className="text-xs text-ink-3">
+            Pairs with a one-time M365 Power Automate flow on TT&apos;s
+            (or a shared) mailbox. Setup recipe in{' '}
+            <code className="font-mono">INTEGRATIONS.md</code> §6. PDFs
+            land as personal-card expenses attributed to the rider,
+            queued in <code className="font-mono">/approvals</code>.
+            Receipts paid on the corporate AMEX continue to arrive via
+            the SFTP / CSV channels above as Bills.
+          </p>
         </CardContent>
       </Card>
 

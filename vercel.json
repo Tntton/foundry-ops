@@ -19,6 +19,10 @@
       "schedule": "45 21 * * *"
     },
     {
+      "path": "/api/cron/uber-receipts-pull",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron/data-export",
       "schedule": "0 16 * * *"
     }

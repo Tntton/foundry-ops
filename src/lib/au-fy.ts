@@ -43,3 +43,18 @@ export function currentAuFyLabel(now: Date = new Date()): string {
   const ending = start.getFullYear() + 1;
   return `FY${String(ending).slice(-2)}`;
 }
+
+/**
+ * Returns the FY containing `date` as the year-ending integer. E.g.
+ * 2025-09-12 → 2026 (in FY26). Used for grouping archived projects
+ * onto a per-FY review surface.
+ */
+export function auFyOf(date: Date): number {
+  const y = date.getFullYear();
+  return date.getMonth() >= 6 ? y + 1 : y;
+}
+
+/** Short label for an arbitrary FY year-ending. 2026 → "FY26". */
+export function auFyLabel(yearEnding: number): string {
+  return `FY${String(yearEnding).slice(-2)}`;
+}

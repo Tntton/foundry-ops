@@ -107,10 +107,37 @@ export async function getSystemHealth(): Promise<SystemHealth> {
     'm365',
   ] as const;
   const integByKind = new Map(integrations.map((i) => [i.kind, i]));
+  // Uber has a third channel (email-intake via Power Automate) that
+  // doesn't write to Integration.status — its heartbeat is the cron's
+  // AuditEvent. Read it up-front so the per-integration block below
+  // can promote uber from `not_configured` to `up` based on a recent
+  // successful cron-fire even when nobody's connected the REST or
+  // SFTP feeds.
+  const uberEmailIntakeRecent = await prisma.auditEvent.findFirst({
+    where: {
+      entityType: 'integration',
+      entityId: 'uber',
+      action: 'synced',
+      at: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+    },
+    orderBy: { at: 'desc' },
+    select: { at: true },
+  });
   for (const kind of knownKinds) {
     const row = integByKind.get(kind);
     const label = kindLabel(kind);
     if (!row) {
+      // Uber email-intake doesn't need an Integration row — the cron
+      // alone is enough to make the integration "live". Promote to
+      // `up` when the cron has fired in the last 24h.
+      if (kind === 'uber' && uberEmailIntakeRecent) {
+        components.push({
+          name: label,
+          state: 'up',
+          detail: `Email-intake cron · last fire ${formatAgo(uberEmailIntakeRecent.at)}`,
+        });
+        continue;
+      }
       components.push({
         name: label,
         state: 'not_configured',
@@ -118,18 +145,25 @@ export async function getSystemHealth(): Promise<SystemHealth> {
       });
       continue;
     }
-    const state: HealthState =
+    let state: HealthState =
       row.status === 'connected'
         ? 'up'
         : row.status === 'error'
           ? 'down'
           : 'not_configured';
-    const detail =
+    let detail =
       row.status === 'connected' && row.lastSyncAt
         ? `Connected · last sync ${formatAgo(row.lastSyncAt)}`
         : row.status === 'connected'
           ? 'Connected · no sync yet'
           : `Status: ${row.status}`;
+    // Even with an Integration row present, the email-intake cron
+    // alone keeps Uber up — useful when admin has disconnected
+    // REST/SFTP but is still receiving email receipts.
+    if (kind === 'uber' && uberEmailIntakeRecent && state !== 'up') {
+      state = 'up';
+      detail = `Email-intake cron · last fire ${formatAgo(uberEmailIntakeRecent.at)}`;
+    }
     components.push({
       name: label,
       state,
