@@ -93,6 +93,9 @@ export function ProjectsKanban({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // Closed column is collapsed by default — leadership doesn't need it
+  // visible on every page-load. Click to reveal when reviewing.
+  const [closedHidden, setClosedHidden] = useState(true);
   // Optimistic state — we move the card immediately, then revert on server error.
   const [optimisticProjects, dispatch] = useOptimistic<
     KanbanProject[],
@@ -169,7 +172,11 @@ export function ProjectsKanban({
         subtitle="Engagements with paying clients — Foundry's revenue surface."
         count={clientProjects.length}
         grouped={clientGrouped}
-        pipeline={CLIENT_PIPELINE}
+        pipeline={
+          closedHidden
+            ? CLIENT_PIPELINE.filter((s) => s !== 'archived')
+            : CLIENT_PIPELINE
+        }
         labelOverride={null}
         canCreate={canCreate}
         canMove={canMove}
@@ -177,6 +184,11 @@ export function ProjectsKanban({
         allPeople={allPeople}
         onDrop={handleDrop}
         newProjectHref="/projects/new"
+        closedToggle={{
+          hidden: closedHidden,
+          count: clientGrouped.archived.length,
+          onToggle: () => setClosedHidden((v) => !v),
+        }}
       />
 
       <KanbanBand
@@ -225,6 +237,7 @@ function KanbanBand({
   onDrop,
   emptyHint,
   newProjectHref,
+  closedToggle,
 }: {
   title: string;
   subtitle: string;
@@ -247,7 +260,20 @@ function KanbanBand({
    *  pre-selects the internal kind via `?kind=internal`. */
   newProjectHref: string;
   emptyHint?: string;
+  /** Optional toggle for hiding the Closed column on the client band.
+   *  Internal band passes undefined since its pipeline doesn't include
+   *  archived. */
+  closedToggle?: {
+    hidden: boolean;
+    count: number;
+    onToggle: () => void;
+  };
 }) {
+  // Grid columns track pipeline length so the layout collapses when
+  // the Closed column is hidden. Tailwind needs literal classes at
+  // build time — list both variants so JIT keeps them.
+  const gridClass =
+    pipeline.length >= 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-3';
   return (
     <section>
       <header className="mb-2 flex items-baseline justify-between gap-3">
@@ -260,13 +286,24 @@ function KanbanBand({
           </h2>
           <p className="text-[11px] text-ink-3">{subtitle}</p>
         </div>
+        {closedToggle && (
+          <button
+            type="button"
+            onClick={closedToggle.onToggle}
+            className="rounded-md border border-line bg-surface-elev px-2.5 py-1 text-[11px] text-ink-2 hover:bg-surface-hover hover:text-ink"
+          >
+            {closedToggle.hidden
+              ? `Show closed (${closedToggle.count})`
+              : 'Hide closed'}
+          </button>
+        )}
       </header>
       {count === 0 && emptyHint ? (
         <div className="rounded-xl border border-dashed border-line bg-surface-subtle/30 p-6 text-center text-xs text-ink-3">
           {emptyHint}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
+        <div className={`grid grid-cols-1 gap-4 ${gridClass}`}>
           {pipeline.map((stage) => (
             <KanbanColumn
               key={stage}
