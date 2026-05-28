@@ -38,6 +38,15 @@ enum Role {
   super_admin
   admin
   partner
+  // Associate Partner / Director — junior to partner. Has most of
+  // partner's decision authority (invoice approval up to $20k, BD
+  // ownership, project creation, primary-partner-ship of a project
+  // including LT share fees) but DOES NOT see the partner scorecard
+  // (firm-wide partner-attribution surface). May also fulfil the
+  // `manager` role on projects they own, and bills hours via the
+  // standard rate (day or hour) — two rem models running side by
+  // side: time billing + LT share when they lead a project.
+  associate_partner
   manager
   staff
 }
@@ -45,9 +54,26 @@ enum Role {
 enum Band {
   MP
   Partner
+  // Associate Partner / Director band. Sits between Partner and the
+  // delivery pyramid (Expert/Consultant/Analyst). People with this
+  // band typically have the `associate_partner` role; the band
+  // drives display labels + the new-project primary-partner picker's
+  // candidate list.
+  Associate_Partner
   Expert
   Consultant
   Analyst
+}
+
+// Effective "engagement status" surfaced as a colour pip on the pool
+// chip + on directory / profile views. Default is computed from project
+// data; super_admin can override (e.g. flag someone as on_sabbatical
+// regardless of project history).
+enum PoolStatus {
+  on_project          // currently allocated to ≥1 active project
+  previous_project    // no active allocation, but has past project hours
+  never_on_project    // never appeared on a project
+  on_sabbatical       // manual override — paused / extended leave
 }
 
 enum Employment {
@@ -55,10 +81,8 @@ enum Employment {
   contractor
 }
 
-enum Region {
-  AU
-  NZ
-}
+// Region was AU/NZ only. Now stored as ISO 3166-1 alpha-2 on Person.region so we
+// can track contractors + overseas staff. AU/NZ/US/CA/GB shown at the top of the UI.
 
 enum RateUnit {
   hour
@@ -70,6 +94,15 @@ enum ProjectStage {
   delivery
   closing
   archived
+  // Internal-project lanes (FHP series). Standing = ongoing,
+  // always-on initiatives (primer development, social media).
+  // Benched = paused but not archived — episodic projects that may
+  // come back (e.g. a conference series). Client engagements never
+  // use these two stages — they stick with kickoff/delivery/closing/
+  // archived. Kept inside the same enum so Project.stage is a single
+  // column and the kanban can render different slices per band.
+  standing
+  benched
 }
 
 enum DealStage {
@@ -185,6 +218,33 @@ enum IntegrationKind {
   paydotcomau
   whatsapp
   docusign
+  // Navan (formerly TripActions) — corporate travel + expense.
+  // Pulls bookings (flights / hotels / cars) and the receipts the
+  // travellers attach in-app, lands them in /bills/intake as
+  // pre-extracted Expense rows so the staff member doesn't have to
+  // re-snap a receipt they already uploaded once.
+  navan
+  // Uber for Business — firm-paid corporate Uber account (rides +
+  // Eats meals). Mirrors the Navan integration: paid by Foundry's
+  // AMEX directly on the Uber platform, so trips land as Bill rows
+  // with `attributedToPersonId` set to the rider (cost attribution,
+  // NOT reimbursement). Pulls per-trip records since the last
+  // watermark and the operator's CSV "Trip activity" export as a
+  // manual fallback.
+  uber
+}
+
+enum EnvelopeStatus {
+  // Aligned with DocuSign's REST API envelope.status field. The
+  // platform reports more granular states (sent / delivered /
+  // signed / declined / voided / completed) — we mirror them so
+  // the UI can reflect the lifecycle without a lookup table.
+  created    // local row exists, not yet sent to DocuSign
+  sent       // envelope handed off to DocuSign + emailed to recipients
+  delivered  // at least one recipient opened the email
+  completed  // all recipients signed
+  declined   // a recipient refused to sign
+  voided     // sender cancelled before completion
 }
 
 enum IntegrationStatus {
@@ -205,29 +265,120 @@ model Person {
   firstName       String
   lastName        String
   email           String     @unique
+  // Personal email — captured separately from the @foundry.health work
+  // email so payroll forms, contracts, and magic-link recovery can
+  // reach the person at their real address. Optional, but recommended
+  // (especially for contractors whose @foundry.health UPN is the M365
+  // account, not their day-to-day inbox).
+  personalEmail   String?
   phone           String?
   whatsappNumber  String?    // must match E.164 when present; used for WhatsApp approval auth
+  linkedinUrl     String?    // LinkedIn profile URL — surfaced on the personnel file
+  // Company website — primarily for contractors who run their own
+  // consulting business (the "company" they bill from). Optional for
+  // staff/partners. Used to derive `domain` + `logoUrl`.
+  website         String?
+  // Host extracted from `website` (e.g. "consulting.com.au"). Mirrors
+  // the same shape Client uses so logo lookups can read either side
+  // with one code path.
+  domain          String?
+  // Resolved company-logo URL (Clearbit, see Client.logoUrl). Render
+  // this next to the headshot on contractor surfaces.
+  logoUrl         String?
   band            Band
   level           String     // MP / P / E1 / E2 / T1-T3 / A1-A3
   employment      Employment
-  fte             Decimal    @db.Decimal(3, 2) // 0.10–1.00
-  region          Region
+  fte             Decimal?   @db.Decimal(3, 2) // 0.10–1.00; null for contractors + partners
+  // "Staff" = the FT/PT employee subset whose hours we track for
+  // utilisation. Partners, fellows, contractors get isStaff=false even
+  // if they have an FTE value, because their utilisation is not the
+  // metric we manage the firm by. Drives filters on the bandwidth
+  // heatmap, resource-planning pool, and /utilisation report.
+  isStaff         Boolean    @default(false)
+
+  // Full partner = TT / Michael Bonning / Chris Parker only. Everyone
+  // else with role=partner is an Associate Partner. Drives the partner-
+  // scorecard split (Partners section vs Associate Partners) and any
+  // governance rules that apply only to full partners (BD pool, true-up).
+  isFullPartner   Boolean    @default(false)
+
+  // "Regular days" — the staff member's standard weekly schedule.
+  // When `regularDaysEnabled` is on, the availability editor pre-fills
+  // empty cells with these per-DOW hours so they don't have to retype
+  // their normal pattern every period. Hours are 0..24 per day.
+  regularDaysEnabled Boolean @default(false)
+  regularMonHours    Int     @default(0)
+  regularTueHours    Int     @default(0)
+  regularWedHours    Int     @default(0)
+  regularThuHours    Int     @default(0)
+  regularFriHours    Int     @default(0)
+  regularSatHours    Int     @default(0)
+  regularSunHours    Int     @default(0)
+
+  // Optional super_admin override for the engagement status pip.
+  // null → status is computed from project data (on/previous/never).
+  // Setting it forces the chip + directory / profile to display this
+  // status until cleared.
+  poolStatusOverride PoolStatus?
+  region          String     @db.VarChar(2)    // ISO 3166-1 alpha-2 (AU, NZ, US, CA, GB, …)
+  mailingAddress  String?    @db.Text
   rateUnit        RateUnit
   rate            Int        // cost rate in AUD cents
   billRate        Int?       // charge rate in AUD cents (optional)
   roles           Role[]
   startDate       DateTime
-  endDate         DateTime?  // null = active
+  endDate         DateTime?  // null = active (terminal — once set, person has left)
+  inactiveAt      DateTime?  // null = active; set = soft-paused (reversible). Disables all
+                             // inputs and excludes from FTE / utilisation roll-ups, but
+                             // still appears in directory + a separate "Inactive" pool
+                             // bucket so partners can see who's on leave / break.
 
   // External identities
   entraUserId     String?    @unique // M365 user ID
   xeroContactId   String?    @unique // for contractors paid via AP
+  // Stamped by the NextAuth signIn callback on every successful
+  // sign-in (Entra OR magic-link). Surfaces in the directory's
+  // people view so admins can spot accounts that were provisioned
+  // but never opened. Null = "Not yet logged in".
+  lastLoginAt     DateTime?
 
-  // Payroll (encrypted at rest — see CLAUDE.md security notes)
-  bankBsb         String?    // encrypted
-  bankAcc         String?    // encrypted
-  superFundId     String?    // encrypted
-  taxFileNumber   String?    // encrypted
+  // Payroll (encrypted at rest — see CLAUDE.md security notes).
+  // International-friendly: `bankCountry` selects the field convention.
+  // Defaults to AU since that's where most staff are paid; switching to
+  // any other ISO code surfaces the SWIFT / IBAN / institution fields
+  // instead of BSB+Acc.
+  bankCountry          String     @default("AU")
+  bankAccountName      String?    // encrypted
+  bankBsb              String?    // encrypted; AU only
+  bankAcc              String?    // encrypted; AU acc OR generic local acc number
+  bankSwift            String?    // encrypted; BIC for international wires
+  bankIban             String?    // encrypted; IBAN where applicable (most of EU + others)
+  bankName             String?    // encrypted; institution name (e.g. "CommBank")
+  superFundId          String?    // encrypted
+  taxFileNumber        String?    // encrypted
+
+  // Emergency contact — for after-hours / safety scenarios. Not encrypted
+  // (no equivalent statutory requirement) but only the staff member and
+  // admins should ever read it.
+  emergencyContactName         String?
+  emergencyContactRelationship String?
+  emergencyContactPhone        String?
+  emergencyContactEmail        String?
+
+  // Public-profile assets used for the firm's website + intro decks.
+  // Stored as `data:` URLs today (same pattern as Receipt Upload) until
+  // SharePoint sync lands. Headshot is image, CV is PDF.
+  headshotUrl     String?
+  cvUrl           String?
+  // Short bio for the "Meet the team" page on foundry.health. Markdown
+  // welcome but rendered as plain text for now.
+  websiteBlurb    String?    @db.Text
+
+  // Job-title-style "hats" the person wears beyond their primary
+  // band/level — e.g. ["AI/ML lead", "Mentor", "Hiring captain"]. Free
+  // strings; consumers should normalise on display. Distinct from
+  // `roles` (system permissions enum).
+  additionalRoles String[]   @default([])
 
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
@@ -241,8 +392,108 @@ model Person {
   expenses         Expense[]
   approvalsRequested Approval[]  @relation("ApprovalRequestedBy")
   approvalsDecided   Approval[]  @relation("ApprovalDecidedBy")
-  dealsOwned       Deal[]
+  dealsOwned       Deal[]      @relation("DealOwner")
+  dealsSecondary   Deal[]      @relation("DealSecondaryOwner")
   auditEvents      AuditEvent[]  @relation("AuditActor")
+  availabilityEntries AvailabilityForecast[]
+  partnerContributions ProjectPartnerContribution[]
+  educationEntries  EducationEntry[]
+  workHistoryEntries WorkHistoryEntry[]
+  whatsappConversation WhatsAppConversation?
+  userUpdates       UserUpdate[]
+  // Firm-paid bills the person triggered the cost on (e.g. Navan
+  // travel bookings under their name, AMEX charges paid for hotels
+  // they stayed at). Distinct from `expenses` — those are
+  // out-of-pocket reimbursables.
+  billsAttributedTo Bill[] @relation("BillAttributedTo")
+  // Recruitment-pipeline back-relations. `recruitsOwned` = prospects
+  // this partner is driving; `recruitsReferred` = prospects they
+  // introduced; `recruitedFrom` = the prospect row this Person was
+  // promoted from (1:1 — only set when the hire came through the
+  // pipeline).
+  recruitsOwned    RecruitProspect[] @relation("RecruitOwner")
+  recruitsReferred RecruitProspect[] @relation("RecruitReferredBy")
+  recruitedFrom    RecruitProspect?  @relation("RecruitLinkedPerson")
+  // DocuSign envelopes this person initiated as the sender.
+  // Required FK on the envelope side, so this is the audit-trail
+  // back-pointer.
+  docusignEnvelopes DocuSignEnvelope[] @relation("DocuSignSender")
+}
+
+// ─── CV-derived entries (education + work history) ────────────────
+//
+// Surfaced on the personnel file. Either entered manually inline or
+// extracted from an uploaded CV via Claude. The extraction action
+// writes new rows; users can then edit / delete inline.
+
+model EducationEntry {
+  id          String   @id @default(cuid())
+  personId    String
+  institution String
+  degree      String?
+  field       String?
+  // Free-text years so partials ("2014–present", "2018") survive
+  // extraction. UI shows a clean range when both are integer-parseable.
+  startYear   String?
+  endYear     String?
+  notes       String?  @db.Text
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  person      Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@index([personId])
+}
+
+model WorkHistoryEntry {
+  id          String   @id @default(cuid())
+  personId    String
+  company     String
+  title       String?
+  location    String?
+  startYear   String?
+  endYear     String?
+  current     Boolean  @default(false)
+  description String?  @db.Text
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  person      Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@index([personId])
+}
+
+// ============================================================================
+// AVAILABILITY FORECAST
+// ============================================================================
+
+// Per-person, per-day declared availability — what hours the staff
+// member expects to work that day, with an optional free-text comment.
+// Drives the Resource Planning bandwidth heatmap (which sums per week)
+// and the partner's "who's free?" mental model.
+//
+// Distinct from ProjectTeam.allocationPct (the planned project
+// commitment) and TimesheetEntry.hours (what was actually logged). This
+// is the *intent* — most staff are part-time/fractional and shape their
+// week around school runs / clinics / personal commitments, so capturing
+// per-day intent + a comment ("OOO Wed PM" etc.) gives partners a far
+// clearer picture than a single weekly number.
+//
+// Submitted from /availability. Unique on (personId, date) so re-submission
+// upserts; deleting a row clears that day's forecast.
+model AvailabilityForecast {
+  id           String    @id @default(cuid())
+  personId     String
+  date         DateTime  @db.Date // the day this entry applies to
+  hours        Int       // expected hours that day (0 = explicitly off)
+  notes        String?
+  submittedAt  DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  person       Person    @relation(fields: [personId], references: [id])
+
+  @@unique([personId, date])
+  @@index([date])
 }
 
 model Client {
@@ -250,12 +501,58 @@ model Client {
   code             String    @unique
   legalName        String
   tradingName      String?
+  // Australian Business Number — 11 digits, no spaces in DB.
   abn              String?
+  // Australian Company Number — 9 digits when applicable (e.g. Pty Ltd).
+  // ABN is required for invoicing; ACN is optional and only present for
+  // companies registered with ASIC.
+  acn              String?
+  // Free-form classifier so we can tailor the CSA / WO template per type.
+  // Suggested values: private_company / public_company / government /
+  // not_for_profit / partnership / sole_trader / individual.
+  clientType       String    @default("private_company")
+  // Legacy single-line address kept as a fallback for clients migrated
+  // from the prototype. New entries fill the structured fields below.
   billingAddress   String?
+  // Structured address — preferred for new clients. Joined back into a
+  // single string at render time when needed.
+  streetAddress    String?
+  suburb           String?
+  state            String?   // AU codes: NSW / VIC / QLD / WA / SA / TAS / ACT / NT
+  postcode         String?
+  country          String    @default("AU")
   billingEmail     String?
+  // Day-to-day client point of contact (separate from the partner who
+  // owns the relationship internally — that's `primaryPartnerId`).
+  contactName      String?
+  contactTitle     String?
+  contactEmail     String?
+  contactPhone     String?
+  // Public website (full URL — e.g. "https://www.example.com.au"). The
+  // canonical company-website field on the client record. Used to
+  // derive `domain` (host) and `logoUrl` (Clearbit) at save time.
+  website          String?
+  // Web domain — host extracted from `website` (e.g. "example.com.au").
+  // Kept as a separate field so legacy code that already reads `domain`
+  // for logo lookup keeps working without a join.
+  domain           String?
+  // Resolved company-logo URL. Today this is the Clearbit logo URL
+  // (`https://logo.clearbit.com/{domain}`); operators can override
+  // manually if Clearbit returns the wrong artwork. Frontend renders
+  // with an `<img onError>` fallback to the client's initials so a
+  // 404 never blanks the avatar.
+  logoUrl          String?
+  // Some clients (especially government / large corporates) require a
+  // PO number on every invoice. When true, the AR side surfaces a
+  // missing-PO warning before sending.
+  purchaseOrderRequired Boolean @default(false)
+  // Free-form payment notes shown alongside billing details on invoices —
+  // e.g. "Always send to ap@client.com.au with PO in subject line."
+  paymentInstructions   String?
   xeroContactId    String?   @unique
   primaryPartnerId String
-  paymentTerms     String    @default("net-30") // net-14 / net-30 / net-45
+  paymentTerms     String    @default("net-30") // net-14 / net-30 / net-45 / net-60
+  archivedAt       DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -278,14 +575,36 @@ model Project {
   stage                      ProjectStage @default(kickoff)
   contractValue              Int          // AUD cents ex GST
   currency                   String       @default("AUD")
-  startDate                  DateTime
-  endDate                    DateTime
+  // Theoretical dates — optional at create-time, but must be set before a
+  // project can be moved to `closing` / `archived` (reconciliation gate
+  // enforced in the project edit + stage-transition actions).
+  startDate                  DateTime?
+  endDate                    DateTime?
   actualEndDate              DateTime?
   primaryPartnerId           String
   managerId                  String
   sharepointFolderUrl        String?  // team/project work folder
   sharepointAdminFolderUrl   String?  // admin/financial folder (invoices, receipts, payment docs)
   xeroTrackingCategoryValue  String?
+  // When true, every Expense/Bill tagged to this project starts with
+  // `rebillable=true` so the cost forwards to a client invoice unless the
+  // PM explicitly opts out per item. Drives the Payables / Reimbursables
+  // workflow ("according to contract rules"). Defaults off: most fixed-fee
+  // engagements absorb costs.
+  defaultExpensesRebillable  Boolean      @default(false)
+  // ── Engagement paperwork (CSA + Work Order) ─────────────────────────
+  // CSA = Client Services Agreement (master legal framework with the
+  // client). Reused across every WO with the same client.
+  csaSharepointUrl           String?
+  csaUploadedAt              DateTime?
+  // Work Order = project-specific scope under the CSA. Either uploaded
+  // (countersigned PDF lives here) or generated as a Markdown draft for
+  // review before signing.
+  workOrderSharepointUrl     String?
+  workOrderUploadedAt        DateTime?
+  workOrderDraftText         String?      @db.Text
+  workOrderGeneratedAt       DateTime?
+  workOrderSignedAt          DateTime?
   createdAt                  DateTime     @default(now())
   updatedAt                  DateTime     @updatedAt
 
@@ -299,6 +618,144 @@ model Project {
   invoices                   Invoice[]
   bills                      Bill[]
   risks                      Risk[]
+  checklists                 ProjectChecklist[]
+  budget                     ProjectBudget?
+  partnerContributions       ProjectPartnerContribution[]
+}
+
+// ── Partner contribution attribution ────────────────────────────────
+//
+// Per-project record of which partners (or APs) deserve credit for what
+// share of the project, broken out by the kind of contribution:
+//   - bd_won            : sourced / closed the deal (BD)
+//   - led               : project lead / owning partner
+//   - directly_supported: active delivery role
+//   - partially_supported: advisory / occasional input
+//
+// `contributionPct` lets the leadership team hard-code a split (e.g.
+// "Trung 60% bd_won, Chris 40% bd_won") rather than relying on the
+// Project.primaryPartnerId default. The partner scorecard aggregates
+// project value by role × contributionPct.
+
+enum PartnerContributionRole {
+  bd_won
+  led
+  directly_supported
+  partially_supported
+}
+
+model ProjectPartnerContribution {
+  id              String                  @id @default(cuid())
+  projectId       String
+  personId        String
+  role            PartnerContributionRole
+  // 0..100 — the fraction of credit this person gets for this role on
+  // this project. Multiple people can hold the same role; the team can
+  // split (e.g. led 70/30) so totals don't have to sum to 100.
+  contributionPct Int                     @default(100)
+  notes           String?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+  project         Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  person          Person                  @relation(fields: [personId], references: [id])
+
+  @@unique([projectId, personId, role])
+  @@index([projectId])
+  @@index([personId])
+}
+
+// ── Project finance tracker (forecast + reconciliation) ────────────
+//
+// Modelled on the firm's "Project Breakdown" template (FY26 governance):
+//   Total fee → -OPEX 20% → -BD referral → -project expenses → net rev
+//          → -firm profit pool 15% → LT project share (residual)
+// Defaults reflect the governance principles. Per-line forecast inputs
+// (rate × units/week × weeks) drive the cascade. Reconciliation pulls
+// actuals from timesheets / expenses / bills against the same buckets.
+
+enum ProjectBudgetCategory {
+  partner_lt          // Leadership team per-diem (partners / APs)
+  manager             // Manager (FT or contracted)
+  consultant          // Consultant (FT or contracted)
+  analyst             // Analyst (FT)
+  expert_paid         // External expert, paid hourly / per-diem
+  project_resources   // Software / subs / expert networks (e.g. Hawksparks)
+  travel
+  meals
+  other
+}
+
+model ProjectBudget {
+  id                  String   @id @default(cuid())
+  projectId           String   @unique
+  // Project duration override; defaults to weeks between start/end.
+  numberOfWeeks       Int
+  // Total contracted fee for the cascade. Defaults to project.contractValue
+  // on first init but stored separately so partners can scenario-plan.
+  totalFeeCents       Int
+  // Fixed-percentage levers per FY26 governance. Editable per-project so
+  // exempt projects (small / no OPEX support) can override.
+  opexContributionPct Int      @default(20)
+  bdReferralPct       Int      @default(0)
+  bdReferralCapCents  Int      @default(5000000)  // $50,000 cap
+  firmProfitPoolPct   Int      @default(15)
+  ltShareCount        Int      @default(3)
+  notes               String?  @db.Text
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  project             Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lines               ProjectBudgetLine[]
+
+  @@index([projectId])
+}
+
+model ProjectBudgetLine {
+  id            String                @id @default(cuid())
+  budgetId      String
+  category      ProjectBudgetCategory
+  // Editable label — shows in the table's Description column.
+  description   String
+  // Daily / hourly / per-unit rate in AUD cents, ex GST.
+  rateCents     Int                   @default(0)
+  unitsPerWeek  Decimal               @db.Decimal(5, 2) @default(0)
+  weeks         Int                   @default(0)
+  comment       String?               @db.Text
+  sortOrder     Int                   @default(0)
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  budget        ProjectBudget         @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+
+  @@index([budgetId])
+}
+
+model ProjectChecklist {
+  id          String                @id @default(cuid())
+  projectId   String
+  label       String
+  order       Int                   @default(0)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  project     Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items       ProjectChecklistItem[]
+
+  @@index([projectId])
+}
+
+model ProjectChecklistItem {
+  id           String   @id @default(cuid())
+  checklistId  String
+  label        String
+  done         Boolean  @default(false)
+  order        Int      @default(0)
+  doneAt       DateTime?
+  doneById     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  checklist    ProjectChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+
+  @@index([checklistId])
 }
 
 model ProjectTeam {
@@ -307,6 +764,14 @@ model ProjectTeam {
   personId       String
   roleOnProject  String  // free text (e.g. "Lead", "Analyst", "SME")
   allocationPct  Int     // 0-100
+  // Optional per-project pay-rate override in AUD cents. When set, the
+  // P&L / team-utilisation / contractor-bill flows use this instead of
+  // Person.rate for hours logged on this project. Useful when a
+  // contractor charges a different rate for a specific engagement
+  // (e.g. discounted SME work, premium specialty rates) without
+  // changing their default firm-wide rate. Inherits the person's
+  // `rateUnit` ($/hr or $/day) — we don't allow flipping units here.
+  customRateCents Int?
 
   project        Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   person         Person  @relation(fields: [personId], references: [id])
@@ -350,19 +815,60 @@ model Deal {
   code               String    @unique
   clientId           String?   // may be prospective
   prospectiveName    String?   // if clientId null
-  name               String
+  // Free-form description of the prospective engagement — what work the
+  // client wants done, key deliverables / questions / scope hints. Kept
+  // separate from `notes` (which is partner-only meeting commentary)
+  // because this is the partner's working brief used to seed the Project
+  // description and Work Order template if the deal converts.
+  prospectiveProjectDetail String? @db.Text
+  name               String?
   stage              DealStage @default(lead)
+  sector             String?   // e.g. pharma / biotech / medtech / digital-health / provider
+  // Optional second-level classification under `sector`. For provider
+  // deals: cardiology / general-practice / day-hospital / telehealth-
+  // general / telehealth-vertical / etc. For pharma/biotech: therapeutic
+  // area. Surface free-text fallback when none of the curated options
+  // fit so partners can refine the taxonomy over time.
+  sectorSubtype      String?
+  clientType         String?   // e.g. mid-market-pe / corporate / startup / nfp
+  engagementType     String?   // e.g. cdd / strategy / advisory / jv / transaction-support
   expectedValue      Int       // AUD cents
   probability        Int       // 0-100
   ownerId            String
+  // Optional secondary contact — when more than one partner / AP is
+  // co-leading the relationship. Owner is still the primary
+  // accountable seat for the deal; secondary surfaces in the deal
+  // detail and on the BD board so the team isn't invisible.
+  secondaryOwnerId   String?
   targetCloseDate    DateTime?
+  firstConversationAt DateTime?
+  lastConversationAt  DateTime?
+  archivedAt         DateTime?
   convertedProjectId String?   @unique
   notes              String?   @db.Text
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
   client             Client?   @relation(fields: [clientId], references: [id])
-  owner              Person    @relation(fields: [ownerId], references: [id])
+  owner              Person    @relation("DealOwner", fields: [ownerId], references: [id])
+  secondaryOwner     Person?   @relation("DealSecondaryOwner", fields: [secondaryOwnerId], references: [id])
+  contacts           DealContact[]
+}
+
+model DealContact {
+  id        String   @id @default(cuid())
+  dealId    String
+  name      String
+  role      String?
+  email     String?
+  phone     String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@index([dealId])
 }
 
 // ============================================================================
@@ -408,6 +914,18 @@ model Expense {
   approvedById          String?
   approvedAt            DateTime?
   xeroBillId            String?
+  // Pass-through cost flag — when true, this expense is intended to be
+  // recharged to the client on the next invoice for `projectId`. The
+  // draft-invoice flow surfaces these as candidate line items. Set
+  // automatically from Project.defaultExpensesRebillable on create when
+  // tagged to a project; reviewer can toggle per item.
+  rebillable                Boolean       @default(false)
+  // Tracks the Invoice this cost has been forwarded to. Set when the
+  // draft-invoice flow includes this expense as a line. Once set, the
+  // cost is "billed" and excluded from "rebillable, not yet billed"
+  // tallies. No FK so we don't have to migrate the InvoiceLine model
+  // schema in the same step.
+  rebilledOnInvoiceId   String?
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
 
@@ -436,6 +954,18 @@ model Invoice {
   sentAt                 DateTime?
   paidAt                 DateTime?
   paymentReceivedAmount  Int?
+  // Template fields (Foundry Health Tax Invoice template). Render-time
+  // overrides per invoice — empty defaults pull from Client / project
+  // when the preview renders.
+  purchaseOrderRef       String?       // optional PO reference shown on the invoice
+  forSubject             String?       // FOR line — defaults to "Advisory services"
+  attentionTo            String?       // Attention: contact override (else Client.contactName)
+  // Set the moment the partner downloads the rendered tax invoice PDF
+  // off the preview page. After approval the invoice is "awaiting
+  // finalisation" until this is set; surfaced as a banner on the
+  // detail page and a chip on the listings so partners can see at a
+  // glance which approved invoices still need to be issued.
+  taxInvoiceFinalisedAt  DateTime?
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
 
@@ -462,6 +992,10 @@ model InvoiceLine {
 model Bill {
   id                       String     @id @default(cuid())
   supplierPersonId         String?    // contractor paid as Person
+  // Optional FK to the structured Supplier record (preferred when set;
+  // pre-Supplier-model bills keep using `supplierName` as a free-text
+  // fallback so historical rows render without a migration).
+  supplierId               String?
   supplierName             String?    // for organisations without a Person row
   supplierInvoiceNumber    String?
   receivedVia              String     // email / upload / manual
@@ -477,11 +1011,69 @@ model Bill {
   status                   BillStatus @default(pending_review)
   xeroBillId               String?    @unique
   abaBatchId               String?
+  // Pass-through cost flag — when true, the bill's net amount is intended
+  // to be recharged to the client on the next invoice for `projectId`.
+  // See Expense.rebillable for the matching field on the personal
+  // reimbursement path.
+  rebillable               Boolean    @default(false)
+  rebilledOnInvoiceId      String?
+  // Person the cost is attributed to for utilisation / project-cost
+  // reporting — e.g. the traveller on a Navan-imported flight bill.
+  // The firm paid the vendor directly (AMEX via Navan), so this is
+  // *not* a reimbursement target; it's metadata for cost allocation.
+  // Null when the bill isn't tied to a specific person (general OPEX).
+  attributedToPersonId     String?
   createdAt                DateTime   @default(now())
   updatedAt                DateTime   @updatedAt
 
   project                  Project?   @relation(fields: [projectId], references: [id])
   payRun                   PayRun?    @relation(fields: [abaBatchId], references: [id])
+  supplier                 Supplier?  @relation(fields: [supplierId], references: [id])
+  attributedTo             Person?    @relation("BillAttributedTo", fields: [attributedToPersonId], references: [id])
+}
+
+// ============================================================================
+// SUPPLIERS (external organisations that bill us, no Person row)
+// ============================================================================
+//
+// Until 2026-05 suppliers were free-text on Bill.supplierName and
+// /directory/suppliers grouped by name. Now backed by a real table so
+// we can record website + logo + ABN per supplier and reuse the same
+// ABR-lookup flow used for Clients. Bill.supplierName is retained for
+// legacy rows; new bills should set supplierId.
+
+model Supplier {
+  id              String    @id @default(cuid())
+  // Display name (matches the legacy free-text Bill.supplierName).
+  name            String    @unique
+  legalName       String?
+  abn             String?   // Australian Business Number, 11 digits
+  acn             String?   // Australian Company Number, 9 digits when applicable
+  // Public website (full URL). Source for derived domain + logoUrl.
+  website         String?
+  domain          String?
+  logoUrl         String?
+  // Free-form classifier mirroring Client.clientType — drives any
+  // supplier-specific reporting splits.
+  supplierType    String    @default("private_company")
+  // Structured address (matches Client shape so the same form widgets
+  // render against either entity).
+  streetAddress   String?
+  suburb          String?
+  state           String?
+  postcode        String?
+  country         String    @default("AU")
+  contactName     String?
+  contactEmail    String?
+  contactPhone    String?
+  // External identities — set when synced from Xero so we don't double-
+  // create supplier rows on the next sync.
+  xeroContactId   String?   @unique
+  archivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  bills           Bill[]
 }
 
 // ============================================================================
@@ -562,6 +1154,138 @@ model ApprovalPolicy {
 // ============================================================================
 // AUDIT + AGENTS
 // ============================================================================
+
+// ─── WhatsApp two-way messaging ────────────────────────────────────
+//
+// Inbound: webhook receives messages from staff via WhatsApp Cloud API.
+// We resolve the sender's E.164 phone to a Person via `whatsappNumber`.
+// Outbound: prompts (timesheet reminder, availability ask, expense
+// receipt request) are queued + sent through the same client.
+//
+// Conversation state machine: each Person has at most one active
+// conversation, tracking which flow they're in (timesheet / availability
+// / expense / status) and any pending data — keeps multi-turn flows
+// coherent across messages.
+
+enum WhatsAppFlow {
+  idle
+  timesheet
+  availability
+  expense
+  status_check
+}
+
+enum WhatsAppMessageDirection {
+  inbound
+  outbound
+}
+
+model WhatsAppConversation {
+  id           String        @id @default(cuid())
+  personId     String        @unique
+  flow         WhatsAppFlow  @default(idle)
+  // Free-form JSON state for the active flow — what step we're on,
+  // partially captured data (project + hours so far for timesheet
+  // entry, expense fields not yet asked, etc.). Cleared when flow
+  // returns to idle.
+  state        Json?
+  lastInboundAt  DateTime?
+  lastOutboundAt DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  person       Person        @relation(fields: [personId], references: [id], onDelete: Cascade)
+  messages     WhatsAppMessage[]
+
+  @@index([flow])
+}
+
+model WhatsAppMessage {
+  id              String                    @id @default(cuid())
+  conversationId  String
+  direction       WhatsAppMessageDirection
+  // Provider message id (Meta's wamid) so we can reconcile statuses
+  // and dedupe re-deliveries.
+  providerId      String?
+  fromPhone       String?  // E.164, omitted on outbound
+  toPhone         String?  // E.164, omitted on inbound
+  // Message body — text content, or a structured description for
+  // media (e.g. "[image] receipt.jpg → expense ABC123 created").
+  body            String                    @db.Text
+  // Original media reference if any (Meta media id) so we can refetch
+  // the binary later if needed.
+  mediaId         String?
+  // Set when the message routed to a higher-level effect (e.g. the
+  // entityId of the Expense / TimesheetEntry / AvailabilityForecast
+  // row created in response).
+  resultEntityType String?
+  resultEntityId   String?
+  errorMessage    String?  @db.Text
+  receivedAt      DateTime @default(now())
+  conversation    WhatsAppConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([providerId])
+}
+
+// ─── Per-person update feed ─────────────────────────────────────────
+//
+// Lightweight notification stream targeted at a single person — what's
+// new for them since they last looked. Independent of the firm-wide
+// audit log: audit captures every mutation; UserUpdate is opinionated
+// about what an individual cares to know about.
+//
+// Drives the dashboard "Latest updates" card + the nav unread bubble.
+// Rows transition unread → read when the user opens the surface that
+// displays them.
+
+enum UserUpdateKind {
+  project_allocated
+  project_unallocated
+  timesheet_approved
+  timesheet_rejected
+  expense_approved
+  expense_rejected
+  approval_requested
+  contribution_changed
+  pool_status_changed
+  inactive_set
+  inactive_cleared
+  cv_extracted
+  // Team-level lifecycle events. `person_created` fires when a new
+  // hire / contractor lands in the directory; `person_archived` when
+  // someone is offboarded. Both notify the admin pool so leadership
+  // gets a single feed-level signal of team-shape changes.
+  person_created
+  person_archived
+  // Project lifecycle. `project_created` fires once when a new
+  // project / FHP initiative is set up; `project_stage_changed`
+  // fires on every kanban-drop or settings-driven stage transition
+  // (delivery → closing, archived ↔ delivery, etc).
+  project_created
+  project_stage_changed
+  // Firm-wide admin signals — currently rate-card updates, with room
+  // for approval-policy / integration-connect events to slot in
+  // under this kind without expanding the enum further.
+  rate_card_updated
+  generic
+}
+
+model UserUpdate {
+  id          String         @id @default(cuid())
+  personId    String
+  kind        UserUpdateKind
+  title       String
+  body        String?        @db.Text
+  href        String?
+  entityType  String?
+  entityId    String?
+  readAt      DateTime?
+  createdAt   DateTime       @default(now())
+  person      Person         @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@index([personId, createdAt])
+  @@index([personId, readAt])
+}
 
 model AuditEvent {
   id          String      @id @default(cuid())
@@ -721,4 +1445,146 @@ model BankTransaction {
 
   @@index([date])
   @@index([matchedType, matchedId])
+}
+
+// ============================================================================
+// RECRUITMENT PIPELINE
+// ============================================================================
+//
+// Prospective hires being tracked through the firm's recruitment funnel.
+// Modelled on the BD pipeline (Deal model): kanban-style board with band-
+// based pools as columns. A prospect lives in exactly one targetBand pool
+// and one status (active / nixed / converted). When admin promotes them
+// to a hire, we mint a Person row + back-link via `linkedPersonId` and
+// flip status='converted' so the card moves out of the active board.
+//
+// Super-admin only. The hiring decision is firm-leadership material and
+// the surface stays gated behind the `recruit.manage` capability.
+
+enum RecruitTargetBand {
+  analyst
+  consultant
+  fellow
+  expert
+  senior_leader // Partner / Associate Partner / MP tier
+}
+
+enum RecruitStatus {
+  active     // in the pipeline
+  nixed      // passed / withdrew / not a fit (lives in the Nixed column)
+  converted  // promoted to a Person (linkedPersonId set)
+}
+
+model RecruitProspect {
+  id                String            @id @default(cuid())
+  firstName         String
+  lastName          String
+  email             String?
+  phone             String?
+  location          String? // city / region — free-form
+  // Which pool column the card lives in on the kanban.
+  targetBand        RecruitTargetBand
+  // Used both for the Nixed column AND to suppress already-converted
+  // prospects from the active board.
+  status            RecruitStatus     @default(active)
+  // Optional finer-grained stage within a pool — surfaces as a small
+  // chip on the card. Free-form string so leadership can iterate
+  // without a migration (lead / screening / interviewing / offer /
+  // accepted etc.).
+  stage             String?
+  // Where they came from. Free-form so admin can write "Referral from
+  // Doug", "LinkedIn search", "applied via website" — categorisation
+  // can come later if it earns its keep.
+  source            String?
+  // Person who referred them (when applicable). Surfaces on the card
+  // + lets admin chain "who introduced who" through the directory.
+  referredById      String?
+  referredBy        Person?           @relation("RecruitReferredBy", fields: [referredById], references: [id])
+  // The partner / admin driving this conversation. The kanban can
+  // filter by ownerId so each leader sees their own pipeline.
+  ownerId           String
+  owner             Person            @relation("RecruitOwner", fields: [ownerId], references: [id])
+  notes             String?           @db.Text
+  linkedinUrl       String?
+  cvSharepointUrl   String?
+  // Set once promote-to-Person fires. The Person record becomes the
+  // source of truth from there; this row stays as the pipeline audit
+  // trail.
+  linkedPersonId    String?           @unique
+  linkedPerson      Person?           @relation("RecruitLinkedPerson", fields: [linkedPersonId], references: [id])
+  // When nixed / converted, stamp the date so historical reporting
+  // can compute time-in-pipeline.
+  closedAt          DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@index([status, targetBand])
+  @@index([ownerId])
+}
+
+// ============================================================================
+// DOCUSIGN — e-signature pipeline
+// ============================================================================
+//
+// One row per signature ceremony. A "ceremony" = one document (or set of
+// documents) sent to one or more recipients to sign, tracked by
+// DocuSign's envelope id. Foundry creates the envelope via the REST
+// API, DocuSign emails the recipients, and the Connect webhook posts
+// status updates here as each recipient signs.
+//
+// `subjectType` + `subjectId` are the foreign domain entity this
+// envelope is attached to. Open set so we can re-use the same model
+// for CSAs, work orders, contractor agreements, NDAs, deal-side
+// engagement letters — anything that needs signing. Today's known
+// values: 'project' (Project.id, for CSA / Work Order), 'person'
+// (Person.id, for contractor agreements / IP assignments), 'deal'
+// (Deal.id, for proposal documents).
+//
+// Per locked decision A3 the actual PDFs live in SharePoint — this
+// model holds the DocuSign envelope id + status + a SharePoint URL
+// pointing at the SIGNED PDF (written after status='completed').
+
+model DocuSignEnvelope {
+  id                       String          @id @default(cuid())
+  /// DocuSign's envelope GUID (`envelopeId` in their REST API).
+  /// Unique because each envelope is a one-off ceremony.
+  externalEnvelopeId       String          @unique
+  /// Foundry-side reference. Open set so the model can host
+  /// signatures for any domain entity. Audited together with
+  /// `subjectId` — the (type, id) tuple is the join key back to the
+  /// owning entity.
+  subjectType              String
+  subjectId                String
+  status                   EnvelopeStatus  @default(created)
+  /// Subject line as it appeared in the recipient's email — handy
+  /// for the admin UI list view without re-fetching from DocuSign.
+  emailSubject             String?
+  /// Recipient list snapshot at send time. JSON because the shape
+  /// (name + email + role + signing order) is DocuSign-specific and
+  /// we don't want a join table for a v1 audit trail. Sample:
+  ///   [{ "name": "Jane Doe", "email": "jane@…", "routingOrder": 1,
+  ///      "status": "completed", "signedAt": "2026-05-22T…" }]
+  recipients               Json
+  /// Pointer to the SIGNED PDF in SharePoint admin folder. Set when
+  /// the webhook fires status='completed' and the post-sign download
+  /// finishes. Null until then.
+  signedDocSharepointUrl   String?
+  /// Person who initiated this envelope. Required — audit trail
+  /// always names a sender.
+  senderId                 String
+  sender                   Person          @relation("DocuSignSender", fields: [senderId], references: [id])
+  /// Lifecycle stamps. sentAt set when we hand off to DocuSign;
+  /// completedAt set when status flips to 'completed' / 'declined' /
+  /// 'voided'.
+  sentAt                   DateTime?
+  completedAt              DateTime?
+  /// Free-form note from the sender — what they wrote in the
+  /// DocuSign "message" body. Captured so the email isn't lost.
+  message                  String?         @db.Text
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
+
+  @@index([subjectType, subjectId])
+  @@index([status])
+  @@index([senderId])
 }
