@@ -1,7 +1,6 @@
 import { cookies } from 'next/headers';
 import type { Role } from '@prisma/client';
 import { auth } from '@/server/auth';
-import { prisma } from '@/server/db';
 import type { Session } from '@/server/roles';
 
 export { hasRole, hasAnyRole, requireSession, requireRole, requireAnyRole, UnauthorizedError } from '@/server/roles';
@@ -39,38 +38,37 @@ function readViewAsCookie(): Role[] | null {
 }
 
 export async function getSession(): Promise<Session | null> {
+  // Read directly from the JWT — the jwt() callback already cached
+  // the person fields at sign-in, so we skip a DB roundtrip on every
+  // authenticated page render. Was the dominant per-page tax.
   const authSession = await auth();
-  const personId = authSession?.user?.personId;
-  if (!personId) return null;
+  const user = authSession?.user as
+    | {
+        personId?: string;
+        email?: string;
+        firstName?: string;
+        lastName?: string;
+        initials?: string;
+        headshotUrl?: string | null;
+        roles?: Role[];
+      }
+    | undefined;
+  const personId = user?.personId;
+  if (!personId || !user) return null;
 
-  const person = await prisma.person.findUnique({
-    where: { id: personId },
-    select: {
-      id: true,
-      email: true,
-      firstName: true,
-      lastName: true,
-      initials: true,
-      headshotUrl: true,
-      roles: true,
-    },
-  });
-  if (!person) return null;
-
-  const isRealSuperAdmin = person.roles.includes('super_admin');
-  // Only super_admins are allowed to engage the overlay. If a non-
-  // super_admin has the cookie set somehow, ignore it.
+  const roles: Role[] = user.roles ?? [];
+  const isRealSuperAdmin = roles.includes('super_admin');
   const viewAsRoles = isRealSuperAdmin ? readViewAsCookie() : null;
-  const effectiveRoles = viewAsRoles ?? person.roles;
+  const effectiveRoles = viewAsRoles ?? roles;
 
   return {
     person: {
-      id: person.id,
-      email: person.email,
-      firstName: person.firstName,
-      lastName: person.lastName,
-      initials: person.initials,
-      headshotUrl: person.headshotUrl,
+      id: personId,
+      email: user.email ?? '',
+      firstName: user.firstName ?? '',
+      lastName: user.lastName ?? '',
+      initials: user.initials ?? '',
+      headshotUrl: user.headshotUrl ?? null,
       roles: effectiveRoles,
     },
     isRealSuperAdmin,
