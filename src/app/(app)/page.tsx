@@ -95,39 +95,43 @@ export default async function DashboardPage({
   // Partners + managers don't see this card; they get the project
   // tiles only (which already exclude the buckets).
   const isAdmin = hasAnyRole(session, ['super_admin', 'admin']);
+  const isSuperAdmin = hasAnyRole(session, ['super_admin']);
+  const isLeader = hasAnyRole(session, ['super_admin', 'admin', 'partner', 'associate_partner', 'manager']);
   const scope: 'mine' | 'all' =
     canSeeAllFirm && searchParams.scope === 'all' ? 'all' : 'mine';
-  const data = await computeManagerDashboard(session, scope);
-  // Budget watch is firm-wide and admin/partner-only (matching the
-  // surface that previously lived at /budget-watch). Loaded sequentially
-  // after manager dashboard to stay within the pgbouncer connection pool.
-  const budgetWatch: BudgetWatch | null = canSeeAllFirm
-    ? await computeBudgetWatch()
-    : null;
-  const adminExpenseReport: AdminExpenseReport | null = isAdmin
-    ? await computeAdminExpenseReport()
-    : null;
-  const adminBdPipeline: AdminBdPipeline | null = isAdmin
-    ? await computeAdminBdPipeline()
-    : null;
-  // "Invoices to generate" suggestions — super_admin only on the
-  // dashboard (per the explicit product call). Partners + managers
-  // see the same list at /invoices instead. Sequential after the
-  // other admin reports to stay within the pgbouncer pool.
-  const isSuperAdmin = hasAnyRole(session, ['super_admin']);
-  const invoiceSuggestions: InvoiceSuggestion[] | null = isSuperAdmin
-    ? await listInvoiceSuggestions(session)
-    : null;
+  // Fan out the dashboard's reads in parallel. Earlier comments
+  // mention sequential awaits to spare the pgbouncer pool, but we're
+  // on Supabase Pro now (large pool) and the page was taking 20+s.
+  const [
+    data,
+    budgetWatch,
+    adminExpenseReport,
+    adminBdPipeline,
+    invoiceSuggestions,
+    leaderPayload,
+    myUpdates,
+    staffProjects,
+  ] = await Promise.all([
+    computeManagerDashboard(session, scope),
+    canSeeAllFirm ? computeBudgetWatch() : Promise.resolve(null),
+    isAdmin ? computeAdminExpenseReport() : Promise.resolve(null),
+    isAdmin ? computeAdminBdPipeline() : Promise.resolve(null),
+    isSuperAdmin ? listInvoiceSuggestions(session) : Promise.resolve(null),
+    isLeader ? listLeaderPendingActions(session) : Promise.resolve(null),
+    listUserUpdates(session.person.id, 30),
+    isLeader ? Promise.resolve([] as ProjectListRow[]) : listProjects(session, { active: true }),
+  ]) as [
+    ManagerDashboard,
+    BudgetWatch | null,
+    AdminExpenseReport | null,
+    AdminBdPipeline | null,
+    InvoiceSuggestion[] | null,
+    Awaited<ReturnType<typeof listLeaderPendingActions>> | null,
+    Awaited<ReturnType<typeof listUserUpdates>>,
+    ProjectListRow[],
+  ];
   const canDraftInvoices = hasCapability(session, 'invoice.create');
 
-  // Leader action surface — pending decisions + role-aware quick
-  // tiles. Computed lazily inside the leader branch to skip the
-  // queries entirely for staff (their own helper has already run
-  // above).
-  const leaderPayload =
-    hasAnyRole(session, ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'])
-      ? await listLeaderPendingActions(session)
-      : null;
   // Highest-privilege role label for tile gating. Super_admin maps
   // to admin's tile set (they see the same firm-wide surface);
   // partner + associate_partner share the partner tile set (BD,
@@ -137,19 +141,6 @@ export default async function DashboardPage({
     : hasAnyRole(session, ['partner', 'associate_partner'])
       ? 'partner'
       : 'manager';
-  // Per-person notification feed for the "Latest updates for me" card.
-  // Sequential after the heavier dashboard queries so we stay within
-  // the pgbouncer pool — this query is cheap (one indexed scan).
-  const myUpdates = await listUserUpdates(session.person.id, 30);
-  const isLeader = hasAnyRole(session, ['super_admin', 'admin', 'partner', 'associate_partner', 'manager']);
-  // Pure-staff dashboard: ditch the leader sections (TopStats with
-  // utilisation %, QC tiles with margin/AR, BudgetWatch, TeamWeek)
-  // and show a focused active-projects list alongside the updates
-  // feed. listProjects() already scopes to "projects I'm on" for
-  // staff, so reuse it.
-  const staffProjects: ProjectListRow[] = isLeader
-    ? []
-    : await listProjects(session, { active: true });
 
   // Staff (no leader role) get a focused dashboard: quick-action
   // tiles + pending-action strip + projects + updates feed. Skips
