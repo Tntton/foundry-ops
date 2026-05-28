@@ -214,11 +214,16 @@ export async function createRecruitQuick(
 
 const MoveSchema = z.object({
   id: z.string().min(1),
-  /** Either move to a different band (still active) or change status
-   *  (nix / restore / convert). Both surface through the same handler
-   *  so the audit trail captures the kanban-card movement cleanly. */
+  /** Either move to a different band (still active), change status
+   *  (nix / restore / convert), or set the funnel stage. All three
+   *  surface through the same handler so the audit trail captures the
+   *  kanban-card movement cleanly. */
   targetBand: TARGET_BAND_ENUM.optional(),
   status: STATUS_ENUM.optional(),
+  /** Free-form stage string. The board uses canonical values
+   *  (`screening` / `in_discussion` / `offer`) for drag-drop moves;
+   *  detail-page edits can still write any free-form value. */
+  stage: z.string().max(64).nullable().optional(),
 });
 
 export type MoveRecruitState =
@@ -245,14 +250,23 @@ export async function moveRecruit(
   } catch {
     return { status: 'error', message: 'Not authorized' };
   }
+  const rawStage = formData.get('stage');
   const parsed = MoveSchema.safeParse({
     id: formData.get('id'),
     targetBand: (formData.get('targetBand') as string) || undefined,
     status: (formData.get('status') as string) || undefined,
+    stage:
+      rawStage === null
+        ? undefined
+        : rawStage === ''
+          ? null
+          : (rawStage as string),
   });
   if (!parsed.success) return { status: 'error', message: 'Invalid input' };
-  const { id, targetBand, status } = parsed.data;
-  if (!targetBand && !status) return { status: 'error', message: 'Nothing to change' };
+  const { id, targetBand, status, stage } = parsed.data;
+  if (!targetBand && !status && stage === undefined) {
+    return { status: 'error', message: 'Nothing to change' };
+  }
 
   const existing = await prisma.recruitProspect.findUnique({ where: { id } });
   if (!existing) return { status: 'error', message: 'Recruit not found' };
@@ -269,6 +283,9 @@ export async function moveRecruit(
     patch.status = status;
     patch.closedAt = status === 'nixed' ? new Date() : null;
   }
+  if (stage !== undefined && (stage ?? null) !== (existing.stage ?? null)) {
+    patch.stage = stage;
+  }
   if (Object.keys(patch).length === 0) return { status: 'success' };
 
   try {
@@ -283,10 +300,12 @@ export async function moveRecruit(
           before: {
             targetBand: existing.targetBand,
             status: existing.status,
+            stage: existing.stage,
           },
           after: {
             targetBand: patch.targetBand ?? existing.targetBand,
             status: patch.status ?? existing.status,
+            stage: patch.stage !== undefined ? patch.stage : existing.stage,
           },
         },
         source: 'web',
