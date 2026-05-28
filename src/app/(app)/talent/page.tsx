@@ -15,15 +15,15 @@ import { QuickAddInColumn } from './quick-add';
 
 /**
  * Recruitment pipeline — kanban tracker for prospective hires. Super-
- * admin only. Mirrors the BD pipeline visual language (columns = pools,
- * cards = candidates) but cards are people-shaped rather than deal-
- * shaped, and the rightmost column is Nixed (passed-on prospects)
- * instead of Won/Lost.
+ * admin only. Mirrors the BD pipeline visual language but laid out as
+ * horizontal rows (one row per pool) rather than vertical columns —
+ * better signal density when most pools have a handful of candidates
+ * and the firm wants to scan the whole funnel in a glance.
  *
- * Columns left-to-right (most-senior first):
+ * Rows top-to-bottom (most-senior first):
  *   Senior Leaders · Experts · Fellows · Consultants · Analysts · Nixed
  *
- * Read-only kanban for v1 — moves between columns happen on the
+ * Read-only kanban for v1 — moves between rows happen on the
  * detail page via the move + status actions. Drag-and-drop comes
  * later if it earns its keep.
  */
@@ -50,11 +50,11 @@ export default async function RecruitsPage() {
         </Button>
       </header>
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
+      <div className="flex flex-col gap-3">
         {board.columns.map((col) => (
-          <KanbanColumn key={col.band} band={col.band} label={col.label} cards={col.cards} />
+          <KanbanRow key={col.band} band={col.band} label={col.label} cards={col.cards} />
         ))}
-        <KanbanColumn
+        <KanbanRow
           band={null}
           label="Nixed"
           cards={board.nixed}
@@ -65,13 +65,13 @@ export default async function RecruitsPage() {
   );
 }
 
-function KanbanColumn({
+function KanbanRow({
   band,
   label,
   cards,
   variant = 'active',
 }: {
-  /** The pool the column represents. Null for the Nixed column —
+  /** The pool the row represents. Null for the Nixed row —
    *  no quick-add affordance there (you don't add directly to
    *  Nixed; you add to a pool and optionally nix later). */
   band: RecruitTargetBand | null;
@@ -84,8 +84,8 @@ function KanbanColumn({
       ? 'border-line bg-surface-subtle/30'
       : 'border-line bg-card';
   return (
-    <Card className={`flex flex-col ${tone}`}>
-      <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+    <Card className={tone}>
+      <CardHeader className="flex flex-row items-center justify-between gap-2 px-3 py-2">
         <CardTitle className="text-xs font-semibold uppercase tracking-wider text-ink-3">
           {label}
         </CardTitle>
@@ -93,18 +93,24 @@ function KanbanColumn({
           {cards.length}
         </Badge>
       </CardHeader>
-      <CardContent className="flex-1 space-y-2 p-2 pt-0">
-        {cards.length === 0 ? (
-          <p className="px-1 py-4 text-center text-xs text-ink-3">
+      <CardContent className="px-3 pb-3 pt-0">
+        {cards.length === 0 && !(band && variant === 'active') ? (
+          <p className="px-1 py-2 text-xs text-ink-3">
             {variant === 'nixed' ? 'No nixed prospects.' : 'Empty pool.'}
           </p>
         ) : (
-          cards.map((c) => <RecruitCardTile key={c.id} card={c} />)
-        )}
-        {/* Quick-add — bottom of every active column. Skipped on
-            Nixed since that column is a destination, not a source. */}
-        {band && variant === 'active' && (
-          <QuickAddInColumn band={band} bandLabel={label} />
+          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+            {cards.map((c) => (
+              <RecruitCardTile key={c.id} card={c} />
+            ))}
+            {/* Quick-add — trailing slot on every active row. Skipped
+                on Nixed since that row is a destination, not a source. */}
+            {band && variant === 'active' && (
+              <div className="w-56 shrink-0">
+                <QuickAddInColumn band={band} bandLabel={label} />
+              </div>
+            )}
+          </div>
         )}
       </CardContent>
     </Card>
@@ -124,7 +130,7 @@ function RecruitCardTile({ card }: { card: RecruitCard }) {
   return (
     <Link
       href={`/talent/${card.id}`}
-      className={`block rounded-md border px-3 py-2 transition-colors hover:border-brand hover:bg-surface-hover ${
+      className={`block w-56 shrink-0 rounded-md border px-3 py-2 transition-colors hover:border-brand hover:bg-surface-hover ${
         nixed ? 'border-line bg-surface-subtle/50 opacity-70' : 'border-line bg-surface-elev'
       }`}
     >
