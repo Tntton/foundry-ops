@@ -184,25 +184,25 @@ export async function computeManagerDashboard(
     },
   });
 
-  // Per-project P&L. Sequential to avoid cooking the DB on big tenants.
-  const pnlByProject = new Map<string, Awaited<ReturnType<typeof computeProjectPnL>>>();
-  for (const p of projects) {
-    pnlByProject.set(p.id, await computeProjectPnL(p.id));
-  }
-
-  // Open invoices for AR — we already have them in pnl, but pull headline
-  // status to distinguish "approved/sent/partial/overdue" from paid.
-  const openInvoices = await prisma.invoice.findMany({
-    where: {
-      projectId: { in: projects.map((p) => p.id) },
-      status: { in: ['approved', 'sent', 'partial', 'overdue'] },
-    },
-    select: {
-      projectId: true,
-      amountTotal: true,
-      paymentReceivedAmount: true,
-    },
-  });
+  // Per-project P&L + open invoices for AR, run in parallel. On a
+  // partner who leads ~10 projects this used to be ~10 sequential
+  // round trips; now it's one fan-out.
+  const projectIds = projects.map((p) => p.id);
+  const [pnlEntries, openInvoices] = await Promise.all([
+    Promise.all(projects.map(async (p) => [p.id, await computeProjectPnL(p.id)] as const)),
+    prisma.invoice.findMany({
+      where: {
+        projectId: { in: projectIds },
+        status: { in: ['approved', 'sent', 'partial', 'overdue'] },
+      },
+      select: {
+        projectId: true,
+        amountTotal: true,
+        paymentReceivedAmount: true,
+      },
+    }),
+  ]);
+  const pnlByProject = new Map<string, Awaited<ReturnType<typeof computeProjectPnL>>>(pnlEntries);
   const arByProject = new Map<string, number>();
   for (const inv of openInvoices) {
     const out = inv.amountTotal - (inv.paymentReceivedAmount ?? 0);

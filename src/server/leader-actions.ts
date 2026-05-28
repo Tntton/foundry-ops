@@ -81,127 +81,152 @@ export async function listLeaderPendingActions(
 
   const actions: LeaderPendingAction[] = [];
 
-  // ── 1. Approval queues — bills / expenses / invoices ─────────
-  // Bill approvals: only super_admin actually decides today, but the
-  // queue (`/approvals`) shows broader context. Show row only when
-  // the viewer can actually decide on bills (per A8 governance).
-  if (canApproveBills) {
-    const billCount = await prisma.approval.count({
-      where: { status: 'pending', subjectType: 'bill' },
-    });
-    if (billCount > 0) {
-      actions.push({
-        kind: 'bill_approval_queue',
-        title: `${billCount} bill${billCount === 1 ? '' : 's'} pending your approval`,
-        detail: 'Vendor invoices in the AP queue — open to decide.',
-        href: '/approvals',
-        tone: billCount >= 10 ? 'red' : 'amber',
-        count: billCount,
-      });
-    }
-  }
-
-  // Expense approvals: managers can act on under-$2k expenses for
-  // projects they manage; partners + admin see broader.
-  if (canApproveExpensesU2k) {
-    // For managers, scope to projects they manage. For admin /
-    // partner, firm-wide. Hard to do precisely without joining
-    // through subject — count broadly here and let the queue itself
-    // do the per-row gating.
-    const expenseCount = await prisma.approval.count({
+  // Fan out all the queries up front — they're independent. The for-
+  // loops that interpret results stay sequential further down.
+  const tsWhere = isAdmin
+    ? { status: 'submitted' as const }
+    : {
+        status: 'submitted' as const,
+        project: {
+          OR: [{ managerId: personId }, { primaryPartnerId: personId }],
+        },
+      };
+  const [
+    billCount,
+    expenseCount,
+    invoiceCount,
+    timesheetsToApprove,
+    projectsILead,
+    suggestions,
+    myDeals,
+    selfPending,
+  ] = await Promise.all([
+    canApproveBills
+      ? prisma.approval.count({ where: { status: 'pending', subjectType: 'bill' } })
+      : Promise.resolve(0),
+    canApproveExpensesU2k
+      ? prisma.approval.count({
+          where: {
+            status: 'pending',
+            subjectType: 'expense',
+            ...(isManager && !isAdmin && !isPartner
+              ? { requiredRole: { in: ['manager', 'partner'] } }
+              : {}),
+          },
+        })
+      : Promise.resolve(0),
+    canApproveInvoices
+      ? prisma.approval.count({ where: { status: 'pending', subjectType: 'invoice' } })
+      : Promise.resolve(0),
+    isManager || isPartner || isAdmin
+      ? prisma.timesheetEntry.count({ where: tsWhere })
+      : Promise.resolve(0),
+    prisma.project.findMany({
       where: {
-        status: 'pending',
-        subjectType: 'expense',
-        ...(isManager && !isAdmin && !isPartner
-          ? { requiredRole: { in: ['manager', 'partner'] } }
-          : {}),
+        stage: { in: ['kickoff', 'delivery'] },
+        ...(isAdmin
+          ? {}
+          : {
+              OR: [{ managerId: personId }, { primaryPartnerId: personId }],
+            }),
       },
-    });
-    if (expenseCount > 0) {
-      actions.push({
-        kind: 'expense_approval_queue',
-        title: `${expenseCount} expense${expenseCount === 1 ? '' : 's'} pending approval`,
-        detail: 'Receipts submitted by the team — open to decide.',
-        href: '/approvals',
-        tone: 'amber',
-        count: expenseCount,
-      });
-    }
-  }
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        stage: true,
+        startDate: true,
+        createdAt: true,
+        milestones: { select: { id: true } },
+        timesheetEntries: {
+          orderBy: { date: 'desc' as const },
+          take: 1,
+          select: { date: true },
+        },
+      },
+    }),
+    isAdmin || isPartner || isManager
+      ? listInvoiceSuggestions(session)
+      : Promise.resolve([] as Awaited<ReturnType<typeof listInvoiceSuggestions>>),
+    isPartner || isAdmin
+      ? prisma.deal.findMany({
+          where: {
+            stage: { in: ['lead', 'qualifying', 'proposal', 'negotiation'] },
+            archivedAt: null,
+            ...(isAdmin ? {} : { ownerId: personId }),
+          },
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            prospectiveName: true,
+            stage: true,
+            lastConversationAt: true,
+            updatedAt: true,
+          },
+        })
+      : Promise.resolve([] as Array<{
+          id: string;
+          code: string;
+          name: string | null;
+          prospectiveName: string | null;
+          stage: string;
+          lastConversationAt: Date | null;
+          updatedAt: Date;
+        }>),
+    listStaffPendingActions(personId),
+  ]);
 
-  // Invoice approvals (under-$20k tier for partner+).
-  if (canApproveInvoices) {
-    const invoiceCount = await prisma.approval.count({
-      where: { status: 'pending', subjectType: 'invoice' },
+  // ── 1. Approval queues — bills / expenses / invoices ─────────
+  if (canApproveBills && billCount > 0) {
+    actions.push({
+      kind: 'bill_approval_queue',
+      title: `${billCount} bill${billCount === 1 ? '' : 's'} pending your approval`,
+      detail: 'Vendor invoices in the AP queue — open to decide.',
+      href: '/approvals',
+      tone: billCount >= 10 ? 'red' : 'amber',
+      count: billCount,
     });
-    if (invoiceCount > 0) {
-      actions.push({
-        kind: 'invoice_approval_queue',
-        title: `${invoiceCount} invoice${invoiceCount === 1 ? '' : 's'} pending approval`,
-        detail: 'Drafts awaiting your sign-off before they leave.',
-        href: '/approvals',
-        tone: 'amber',
-        count: invoiceCount,
-      });
-    }
+  }
+  if (canApproveExpensesU2k && expenseCount > 0) {
+    actions.push({
+      kind: 'expense_approval_queue',
+      title: `${expenseCount} expense${expenseCount === 1 ? '' : 's'} pending approval`,
+      detail: 'Receipts submitted by the team — open to decide.',
+      href: '/approvals',
+      tone: 'amber',
+      count: expenseCount,
+    });
+  }
+  if (canApproveInvoices && invoiceCount > 0) {
+    actions.push({
+      kind: 'invoice_approval_queue',
+      title: `${invoiceCount} invoice${invoiceCount === 1 ? '' : 's'} pending approval`,
+      detail: 'Drafts awaiting your sign-off before they leave.',
+      href: '/approvals',
+      tone: 'amber',
+      count: invoiceCount,
+    });
   }
 
   // ── 2. Timesheets to approve (manager+) ──────────────────────
-  // Submitted timesheet entries for projects I manage or partner.
-  // Skipped for staff (they can't approve anyway).
-  let timesheetsToApprove = 0;
-  if (isManager || isPartner || isAdmin) {
-    const tsWhere = isAdmin
-      ? { status: 'submitted' as const }
-      : {
-          status: 'submitted' as const,
-          project: {
-            OR: [{ managerId: personId }, { primaryPartnerId: personId }],
-          },
-        };
-    timesheetsToApprove = await prisma.timesheetEntry.count({ where: tsWhere });
-    if (timesheetsToApprove > 0) {
-      actions.push({
-        kind: 'timesheet_approval_queue',
-        title: `${timesheetsToApprove} timesheet entr${timesheetsToApprove === 1 ? 'y' : 'ies'} to approve`,
-        detail: isAdmin
-          ? 'Submitted hours across the firm awaiting decision.'
-          : 'Hours submitted on projects you lead.',
-        href: '/timesheet/approve',
-        tone: 'amber',
-        count: timesheetsToApprove,
-      });
-    }
+  if ((isManager || isPartner || isAdmin) && timesheetsToApprove > 0) {
+    actions.push({
+      kind: 'timesheet_approval_queue',
+      title: `${timesheetsToApprove} timesheet entr${timesheetsToApprove === 1 ? 'y' : 'ies'} to approve`,
+      detail: isAdmin
+        ? 'Submitted hours across the firm awaiting decision.'
+        : 'Hours submitted on projects you lead.',
+      href: '/timesheet/approve',
+      tone: 'amber',
+      count: timesheetsToApprove,
+    });
   }
 
   // ── 3. Project ops gaps on projects I lead ───────────────────
   // Stale = no timesheet activity in 14d for an active project,
   // and the project is >14d old (skip fresh ones). Missing
   // milestones = kickoff stage > 14d old with zero milestones.
-  const projectsILead = await prisma.project.findMany({
-    where: {
-      stage: { in: ['kickoff', 'delivery'] },
-      ...(isAdmin
-        ? {}
-        : {
-            OR: [{ managerId: personId }, { primaryPartnerId: personId }],
-          }),
-    },
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      stage: true,
-      startDate: true,
-      createdAt: true,
-      milestones: { select: { id: true } },
-      timesheetEntries: {
-        orderBy: { date: 'desc' },
-        take: 1,
-        select: { date: true },
-      },
-    },
-  });
   const TWO_WEEKS_MS = 14 * 24 * 3600 * 1000;
   const now = Date.now();
   for (const p of projectsILead) {
@@ -236,38 +261,14 @@ export async function listLeaderPendingActions(
   }
 
   // ── 4. Invoice-to-draft suggestions (partner+) ───────────────
-  // Reuse the existing helper — it's already role-scoped.
-  let invoicesToDraft = 0;
-  if (isAdmin || isPartner || isManager) {
-    const suggestions = await listInvoiceSuggestions(session);
-    invoicesToDraft = suggestions.length;
-    // Don't push individual rows here — the InvoiceSuggestionsCard
-    // on the dashboard already lists them. Just expose the count
-    // for the quick-action tile badge.
-  }
+  // (suggestions list already fetched above — use the count for the tile badge.)
+  const invoicesToDraft = (isAdmin || isPartner || isManager) ? suggestions.length : 0;
 
   // ── 5. BD pipeline gaps (partner+) ───────────────────────────
   // Open deals I own with no activity in 14d+ — partner needs to
   // nudge the conversation along.
-  let myBdDeals = 0;
+  const myBdDeals = (isPartner || isAdmin) ? myDeals.length : 0;
   if (isPartner || isAdmin) {
-    const myDeals = await prisma.deal.findMany({
-      where: {
-        stage: { in: ['lead', 'qualifying', 'proposal', 'negotiation'] },
-        archivedAt: null,
-        ...(isAdmin ? {} : { ownerId: personId }),
-      },
-      select: {
-        id: true,
-        code: true,
-        name: true,
-        prospectiveName: true,
-        stage: true,
-        lastConversationAt: true,
-        updatedAt: true,
-      },
-    });
-    myBdDeals = myDeals.length;
     for (const d of myDeals) {
       const lastTouch = d.lastConversationAt ?? d.updatedAt;
       const ageDays = Math.floor((now - lastTouch.getTime()) / (24 * 3600 * 1000));
@@ -287,7 +288,6 @@ export async function listLeaderPendingActions(
   // Leaders submit timesheets and expenses too. Reuse the staff
   // helper but re-prefix the kinds so the dashboard can render them
   // alongside the leader-specific signals without confusion.
-  const selfPending = await listStaffPendingActions(personId);
   for (const s of selfPending) {
     actions.push(promoteSelfAction(s));
   }

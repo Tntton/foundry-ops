@@ -24,21 +24,6 @@ const COMMIT = process.env['VERCEL_GIT_COMMIT_SHA'] ?? process.env['GIT_COMMIT_S
  * sensitive: only state + last-sync timestamps + component names.
  * No credentials, no token info, no PII.
  */
-function parseDbUrlMeta(): { host: string; port: string; flags: string } | null {
-  const raw = process.env['DATABASE_URL'];
-  if (!raw) return null;
-  try {
-    const u = new URL(raw);
-    return {
-      host: u.hostname,
-      port: u.port || '(default)',
-      flags: u.search.replace(/=[^&]+/g, '=…').slice(0, 200),
-    };
-  } catch {
-    return { host: 'parse-error', port: '?', flags: '?' };
-  }
-}
-
 export async function GET() {
   const health = await getSystemHealth();
   const ok = health.overall !== 'down';
@@ -49,7 +34,6 @@ export async function GET() {
       version: VERSION,
       commit: COMMIT,
       at: health.generatedAt.toISOString(),
-      _dbMeta: parseDbUrlMeta(),
       components: health.components.map((c) => ({
         name: c.name,
         state: c.state,
