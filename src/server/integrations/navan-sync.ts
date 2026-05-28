@@ -170,6 +170,21 @@ function extractEmail(row: unknown): string | null {
     const v = pick(pick(row, nest), 'email', 'emailAddress', 'email_address');
     if (typeof v === 'string') return v;
   }
+  // Navan bookings: `passengers` is an array of { person: { email } }.
+  // Prefer the first passenger's person email (the actual traveller).
+  const passengers = pick(row, 'passengers');
+  if (Array.isArray(passengers)) {
+    for (const p of passengers) {
+      const personEmail = pick(pick(p, 'person'), 'email', 'emailAddress', 'email_address');
+      if (typeof personEmail === 'string') return personEmail;
+      const direct = pick(p, 'email', 'emailAddress', 'email_address');
+      if (typeof direct === 'string') return direct;
+    }
+  }
+  // Fallback to booker.email — the person who created the booking
+  // (often but not always the traveller).
+  const bookerEmail = pick(pick(row, 'booker'), 'email', 'emailAddress', 'email_address');
+  if (typeof bookerEmail === 'string') return bookerEmail;
   return null;
 }
 
