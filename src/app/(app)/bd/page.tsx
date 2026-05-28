@@ -20,6 +20,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { DealsKanban, type KanbanDeal } from './kanban';
+import { readCommercialsVisible } from '@/server/commercials-visible';
+import { CommercialsToggle } from '@/components/commercials-toggle';
 
 function buildQs(params: Record<string, string | undefined>): string {
   const entries = Object.entries(params)
@@ -77,6 +79,9 @@ export default async function BdPipelinePage({
   if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
 
   const canCreate = hasCapability(session, 'deal.create');
+  // Commercial values hidden by default — partners flip on for private
+  // review, off for team huddles. Same cookie as /projects.
+  const commercialsVisible = await readCommercialsVisible();
   const stage = STAGE_OPTIONS.includes(searchParams.stage as DealStage)
     ? (searchParams.stage as DealStage)
     : undefined;
@@ -146,6 +151,7 @@ export default async function BdPipelinePage({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <CommercialsToggle visible={commercialsVisible} path="/bd" />
           <a
             href={`/api/reports/deals${buildQs({ q, stage })}`}
             className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
@@ -168,17 +174,17 @@ export default async function BdPipelinePage({
         />
         <TotalCard
           label="Expected value"
-          value={formatMoney(summary.expectedValueCents)}
+          value={commercialsVisible ? formatMoney(summary.expectedValueCents) : '—'}
           sub="Open deals only"
         />
         <TotalCard
           label="Weighted"
-          value={formatMoney(summary.weightedValueCents)}
+          value={commercialsVisible ? formatMoney(summary.weightedValueCents) : '—'}
           sub="× probability"
         />
         <TotalCard
           label="Won YTD"
-          value={formatMoney(summary.wonValueYtdCents)}
+          value={commercialsVisible ? formatMoney(summary.wonValueYtdCents) : '—'}
           sub={`${summary.wonCountYtd} ${summary.wonCountYtd === 1 ? 'deal' : 'deals'}`}
         />
         <TotalCard
@@ -292,6 +298,7 @@ export default async function BdPipelinePage({
           quickCreateOwners={inlineOwners}
           quickCreateClients={inlineClients}
           defaultOwnerId={defaultOwnerId}
+          commercialsVisible={commercialsVisible}
         />
       ) : (
         <Card className="p-0">
@@ -398,13 +405,13 @@ export default async function BdPipelinePage({
                       </div>
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {formatMoney(d.expectedValueCents)}
+                      {commercialsVisible ? formatMoney(d.expectedValueCents) : '—'}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-xs text-ink-3">
                       {d.probabilityPct}%
                     </TableCell>
                     <TableCell className="text-right font-semibold tabular-nums text-ink">
-                      {formatMoney(d.weightedValueCents)}
+                      {commercialsVisible ? formatMoney(d.weightedValueCents) : '—'}
                     </TableCell>
                     <TableCell className="text-xs tabular-nums">
                       {d.daysSinceLastConversation === null ? (

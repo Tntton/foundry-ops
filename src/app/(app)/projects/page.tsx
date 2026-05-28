@@ -27,6 +27,8 @@ import {
 import { ProjectsKanban } from './kanban';
 import { CardAddMember, type CardPersonOption } from './card-add-member';
 import { auFyOf, auFyLabel, currentAuFyLabel } from '@/lib/au-fy';
+import { readCommercialsVisible } from '@/server/commercials-visible';
+import { CommercialsToggle } from '@/components/commercials-toggle';
 
 const STAGE_OPTIONS: readonly ProjectStage[] = [
   'kickoff',
@@ -141,6 +143,10 @@ export default async function ProjectsPage({
     'admin',
     'partner',
   ]);
+  // Per-session visibility toggle on top of the role gate — partners
+  // hide commercials when running team meetings on the projects page
+  // and flip them back on for private review.
+  const commercialsVisible = canSeeCommercials && (await readCommercialsVisible());
 
   // Pull payment-state for archived rows so the kanban "closed · paid" footer
   // is accurate without a second round-trip per card. Only matters for the
@@ -193,7 +199,7 @@ export default async function ProjectsPage({
           <h1 className="text-xl font-semibold text-ink">Projects</h1>
           <p className="text-sm text-ink-3">
             {totalCount} {totalCount === 1 ? 'project' : 'projects'} · {activeCount} active
-            {canSeeCommercials && inFlightCents > 0 && (
+            {commercialsVisible && inFlightCents > 0 && (
               <>
                 {' '}
                 · <span className="font-medium text-ink-2">{formatMoneyShort(inFlightCents)}</span>{' '}
@@ -211,6 +217,9 @@ export default async function ProjectsPage({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {canSeeCommercials && (
+            <CommercialsToggle visible={commercialsVisible} path="/projects" />
+          )}
           <ViewToggle current={view} q={q} stage={stage} active={active} />
           <a
             href={`/api/reports/projects${buildQs({
@@ -295,20 +304,21 @@ export default async function ProjectsPage({
         <ProjectsGrid
           rows={rows}
           paidByProject={paidByProject}
-          canSeeCommercials={canSeeCommercials}
+          canSeeCommercials={commercialsVisible}
           canAddTeam={canAddTeamFromCard}
           allPeople={allPeopleForCards}
         />
       )}
       {view === 'table' && (
-        <ProjectsTable rows={rows} canSeeCommercials={canSeeCommercials} />
+        <ProjectsTable rows={rows} canSeeCommercials={commercialsVisible} />
       )}
 
       {/* Completed-projects archive grouped by AU FY. Built off the
           same `rows` (no extra query) but filtered to archived only.
           FY26 (current) expands by default; older years stay
-          collapsed until reviewed. */}
-      {canSeeCommercials && (
+          collapsed until reviewed. Gated on commercialsVisible so
+          totals don't flash during team discussions. */}
+      {commercialsVisible && (
         <CompletedByFiscalYear rows={rows} />
       )}
     </div>

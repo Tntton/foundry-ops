@@ -204,6 +204,106 @@ One-time setup. TT (or any Super Admin) configures it from `flow.microsoft.com` 
 
 ---
 
+## 7. Mail intake — AP autoharvest (Graph polling)
+
+**Status:** building (TASK-093) · pairs with `/api/cron/invoice-autoharvest` (every 15 min).
+
+Vendor invoices arriving by email land as draft `Bill` rows queued for partner/admin approval. This is the AP-side counterpart to the manual upload flow at `/bills/intake` (TASK-046). Two mailboxes are polled:
+
+| Mailbox | Role | Lifecycle |
+|---|---|---|
+| `finance@foundry.health` | Canonical, end-state. Shared mailbox vendors are migrated to. | Permanent. |
+| `trung@foundry.health` | Transitional. TT receives invoices on his personal inbox; the cron filters aggressively to invoice-looking mail only. | Disabled via the admin toggle once all vendors finish migrating to `finance@`. |
+
+### Required permissions
+
+`Mail.Read` (Application). **Critical:** scope this via Exchange Online `ApplicationAccessPolicy` so the app can read only the two mailboxes — without this, application-level `Mail.Read` is tenant-wide (every mailbox in `foundry.health`). Per CLAUDE.md A6 (deny-by-default), tenant-wide is not acceptable.
+
+### One-time setup (TT / Super Admin)
+
+**Step 1 — Grant Mail.Read on the Entra app.**
+1. Azure portal → **Microsoft Entra ID** → **App registrations** → open the existing `Foundry Ops` app registration.
+2. **API permissions** → **Add a permission** → **Microsoft Graph** → **Application permissions** → check `Mail.Read` → **Add permissions**.
+3. **Grant admin consent for foundry.health** (button at the top of the permissions list). Confirm the row shows "Granted for foundry.health" with a green tick.
+
+**Admin-consent URL (for an audit-friendly trail — paste into a Global Admin browser session):**
+```
+https://login.microsoftonline.com/{ENTRA_TENANT_ID}/adminconsent?client_id={ENTRA_CLIENT_ID}
+```
+Substitute the tenant + client IDs from `.env.local`.
+
+**Step 2 — Restrict the app to the two mailboxes via Exchange Online PowerShell.**
+
+Install + connect (one-time, from any admin workstation):
+```powershell
+Install-Module -Name ExchangeOnlineManagement -Scope CurrentUser
+Connect-ExchangeOnline -UserPrincipalName trung@foundry.health
+```
+
+Create a mail-enabled security group containing the two target mailboxes (the policy is mail-group-scoped, not per-user):
+```powershell
+New-DistributionGroup -Name "Foundry Ops Mail Intake" `
+  -Alias "foundry-ops-mail-intake" `
+  -Type "Security" `
+  -PrimarySmtpAddress "foundry-ops-mail-intake@foundry.health" `
+  -Members @("finance@foundry.health", "trung@foundry.health")
+```
+
+Apply the application access policy (replace `{ENTRA_CLIENT_ID}` with the app registration's client ID — see `.env.local`):
+```powershell
+New-ApplicationAccessPolicy `
+  -AppId "{ENTRA_CLIENT_ID}" `
+  -PolicyScopeGroupId "foundry-ops-mail-intake@foundry.health" `
+  -AccessRight "RestrictAccess" `
+  -Description "Foundry Ops AP autoharvest — Mail.Read limited to finance@ + trung@"
+```
+
+Verify it took effect (should return `AccessAllowed`):
+```powershell
+Test-ApplicationAccessPolicy -Identity finance@foundry.health -AppId "{ENTRA_CLIENT_ID}"
+Test-ApplicationAccessPolicy -Identity trung@foundry.health -AppId "{ENTRA_CLIENT_ID}"
+```
+
+And confirm a random other mailbox is denied (should return `AccessDenied`):
+```powershell
+Test-ApplicationAccessPolicy -Identity {any-other-staff}@foundry.health -AppId "{ENTRA_CLIENT_ID}"
+```
+
+The policy can take up to **30 minutes** to propagate. Don't enable the cron until `Test-ApplicationAccessPolicy` returns `AccessDenied` on a non-target mailbox.
+
+### How it works
+
+- **Cursor.** `MailboxPollCursor` Prisma model holds `lastReceivedDateTime` per mailbox. Each poll calls `GET /users/{upn}/messages?$filter=receivedDateTime gt {cursor}&$expand=attachments&$top=50&$orderby=receivedDateTime asc` and advances the watermark to the newest processed `receivedDateTime`. Won't churn through historical mail — initial cursor seeds to "now".
+- **Heuristic (cheap filter before OCR tokens).** Sender domain ≠ `@foundry.health`; ≥1 attachment with `application/pdf` or `image/*` mime; subject regex `/invoice|bill|statement|receipt|payable|due|payment/i`; M365 categories `personal` / `private` skipped. Lean false-positive-tolerant.
+- **Extraction.** For each candidate, download attachments → `extractIntakeFields` (claude-sonnet, retries × 3 + Zod) → pick highest `confidence.overall` across attachments → match Supplier by ABN then by name (fall back to free-text `supplierName`).
+- **Dedupe.** By `(supplierName||supplierId) + supplierInvoiceNumber`. Follow-up reminders from the same vendor for the same invoice number land once.
+- **Output.** `Bill { status: pending_review, receivedVia: 'email', originalEmailId: <Graph message id>, supplierName, supplierInvoiceNumber, amountTotal, gst, issueDate, dueDate, category, attachmentSharepointUrl? }` + `Approval` row routed via `resolveRequiredRole('bill', amountCents)` + `AuditEvent` (`source: 'integration_sync'`, delta includes confidence + raw extraction). Same `prisma.$transaction`.
+- **Low-confidence handling.** `BillStatus` has no `awaiting_human` value (only `pending_review`/`approved`/`rejected`/`scheduled_for_payment`/`paid`). Low-confidence bills land as `pending_review` like the rest; the admin status page (§Admin) surfaces a 24h counter so reviewers know to spot-check them. This matches the Uber email-intake precedent.
+
+### Foundry-side configuration
+
+- Cron is wired in `vercel.json` at `*/15 * * * *`. Vercel Pro is required (same plan as the Uber cron).
+- Per-mailbox enable toggle on `/admin/integrations/mail-intake` (writes `MailboxPollCursor.enabled` + audit event).
+- Health check: `/system-status` surfaces "Mail intake" as a component — up when both mailboxes have polled successfully in last 60 min; degraded if one is stale or last poll set `lastError`; down if Graph rejects auth.
+
+### Failure handling
+
+- **Graph 401/403.** Mark `MailboxPollCursor.lastError`; cron loop continues with the other mailbox; admin status page surfaces the error; system-health flips to `degraded`. Common cause: ApplicationAccessPolicy not yet propagated, or Mail.Read consent revoked.
+- **OCR failure (all attempts).** Per-message error captured in `lastError`-style audit; message remains processable on next fire because the cursor only advances past *successfully* processed messages. Capped at 3 cursor stalls before surfacing in the admin failures list.
+- **Personal mail false-positive.** Heuristic is intentionally loose — if a random PDF gets through, it lands as a Bill `pending_review` with no Supplier match. Admin rejects it from the approvals queue; reject writes audit; no leak to Xero (Bills push to Xero only on approval).
+- **Vendor sends duplicate.** Dedupe key blocks; the follow-up email is logged but no Bill row created.
+- **Mailbox disabled mid-poll.** Toggle off via admin → cron skips that mailbox on next fire; in-flight processing for the current fire completes.
+
+### Migration plan (`trung@` → `finance@`)
+
+1. Cut the ApplicationAccessPolicy in with both mailboxes from day one (above).
+2. Both rows start `enabled: true`.
+3. As vendors migrate to `finance@` (TT updates Xero contact emails + sends one-off "please email finance@ in future" replies), the volume in `trung@` decays.
+4. Once `trung@` shows zero invoice arrivals for 30 days, TT flips the toggle on the admin page — cursor row stays but cron stops polling.
+5. Optionally, drop the `trung@foundry.health` member from the `Foundry Ops Mail Intake` distribution group to fully revoke app access.
+
+---
+
 ## Integration health dashboard
 
 On `/admin/integrations`:

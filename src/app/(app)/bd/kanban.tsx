@@ -103,6 +103,7 @@ export function DealsKanban({
   quickCreateOwners,
   quickCreateClients,
   defaultOwnerId,
+  commercialsVisible,
 }: {
   deals: KanbanDeal[];
   canCreate: boolean;
@@ -113,6 +114,9 @@ export function DealsKanban({
   quickCreateClients: QuickCreateClient[];
   /** Pre-selects the current user when they're an eligible owner. */
   defaultOwnerId: string | null;
+  /** When false, hide all $ amounts on cards + column headers. Partners
+   *  toggle this off during team huddles so values don't flash. */
+  commercialsVisible: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -190,6 +194,7 @@ export function DealsKanban({
               quickCreateOwners={quickCreateOwners}
               quickCreateClients={quickCreateClients}
               defaultOwnerId={defaultOwnerId}
+              commercialsVisible={commercialsVisible}
             />
           ))}
         </div>
@@ -210,6 +215,7 @@ function KanbanColumn({
   quickCreateOwners,
   quickCreateClients,
   defaultOwnerId,
+  commercialsVisible,
 }: {
   stage: DealStage;
   label: string;
@@ -222,6 +228,7 @@ function KanbanColumn({
   quickCreateOwners: QuickCreateOwner[];
   quickCreateClients: QuickCreateClient[];
   defaultOwnerId: string | null;
+  commercialsVisible: boolean;
 }) {
   const [hovering, setHovering] = useState(false);
   const expected = cards.reduce((s, d) => s + d.expectedValueCents, 0);
@@ -251,14 +258,16 @@ function KanbanColumn({
           <span className="text-sm font-semibold text-ink">{label}</span>
           <span className="text-xs tabular-nums text-ink-3">{cards.length}</span>
         </div>
-        <div className="text-right text-[10px] text-ink-3">
-          <div className="tabular-nums">{formatMoney(expected)}</div>
-          {weighted !== expected && (
-            <div className="tabular-nums text-ink-4">
-              {formatMoney(weighted)} wt.
-            </div>
-          )}
-        </div>
+        {commercialsVisible && (
+          <div className="text-right text-[10px] text-ink-3">
+            <div className="tabular-nums">{formatMoney(expected)}</div>
+            {weighted !== expected && (
+              <div className="tabular-nums text-ink-4">
+                {formatMoney(weighted)} wt.
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="mb-2 text-[10px] uppercase tracking-wide text-ink-4">
         {hint}
@@ -270,7 +279,12 @@ function KanbanColumn({
           </div>
         )}
         {cards.map((card) => (
-          <KanbanCard key={card.id} card={card} canMove={canMove} />
+          <KanbanCard
+            key={card.id}
+            card={card}
+            canMove={canMove}
+            commercialsVisible={commercialsVisible}
+          />
         ))}
         {canCreate && (
           <QuickCreate
@@ -453,9 +467,11 @@ function QuickCreate({
 function KanbanCard({
   card,
   canMove,
+  commercialsVisible,
 }: {
   card: KanbanDeal;
   canMove: boolean;
+  commercialsVisible: boolean;
 }) {
   const last = card.daysSinceLastConversation;
   const lastTone =
@@ -522,9 +538,13 @@ function KanbanCard({
         </div>
       )}
       <div className="mt-3 flex items-center justify-between">
-        <span className="font-semibold tabular-nums text-ink">
-          {formatMoney(card.expectedValueCents)}
-        </span>
+        {commercialsVisible ? (
+          <span className="font-semibold tabular-nums text-ink">
+            {formatMoney(card.expectedValueCents)}
+          </span>
+        ) : (
+          <span aria-hidden />
+        )}
         <div className="flex items-center gap-1.5 text-[11px]">
           <PersonAvatar
   className="h-5 w-5"

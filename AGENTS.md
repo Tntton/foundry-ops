@@ -50,25 +50,27 @@ See `TASKS.md` Phase 3 for the ordered build plan.
 
 **Status in prototype:** live · 38 runs/30d · 91% success · $0.018/run
 
-**Trigger:** email arriving in `bills@foundry.health` (Graph webhook).
+**Trigger:** Vercel cron `/api/cron/invoice-autoharvest` at `*/15 * * * *` polls `finance@foundry.health` (canonical) + `trung@foundry.health` (transitional) via Microsoft Graph application-token `Mail.Read`, scoped to those two mailboxes via Exchange `New-ApplicationAccessPolicy` (see `INTEGRATIONS.md §7`). Watermark per mailbox in `MailboxPollCursor.lastReceivedDateTime` so each fire processes only new mail. Originally specced as a Graph webhook subscription on `bills@`; cut to polling because (a) `bills@` is no longer an intake mailbox after the 2026-05-29 mailbox canonicalisation, (b) Graph mail webhooks require a public HTTPS callback that survives Vercel's 10s function ceiling and silently expire every 3 days — cron is simpler and equally responsive at 15-min cadence.
 
 **Input:** email body + attachments.
 
 **Output:**
-- Draft `Bill` row: supplier, supplier_invoice_number, issue_date, due_date, amount_total, gst, category, project (if referenced), attachment_sharepoint_url
-- Attachment filed to SharePoint `/AP/<YYYY>/<MM>/<filename>`
-- `received_via = 'email'`, `original_email_id` set for traceability
-- Supplier auto-matched to existing Person (contractor) or Organisation; flagged "new supplier" if not matched
+- Draft `Bill` row: `status = pending_review` (no `awaiting_human` enum value — low-confidence rows still land as `pending_review` and surface via the admin 24h counter); `receivedVia = 'email'`; `originalEmailId` = Graph message id; `supplierName` (free-text fallback) or `supplierId` when ABN/name matches the Supplier table; `supplierInvoiceNumber`, `issueDate`, `dueDate`, `amountTotal` (integer cents), `gst`, `category`.
+- Attachment file pointer: SharePoint upload deferred until TASK-046b lands (Graph Files scope). Until then, the message id is the link back; the admin status page deep-links to the Outlook web message.
+- `Approval` row created via `resolveRequiredRole('bill', amountCents)` — default >$20k → Super Admin (A8).
+- Supplier auto-matched by extracted ABN, then by normalised name; unmatched bills land with `supplierId = null` and free-text `supplierName` for the admin to assign in the approval queue.
 
-**Approval gate:** Admin reviews draft → Super Admin approves (per A8 default). Approved bill pushes to Xero as draft Bill.
+**Approval gate:** per A8 — `pending_review` → admin/super_admin approve in `/approvals` → status flips to `approved` → push to Xero as draft Bill (TASK-047).
 
-**Model:** `claude-sonnet` vision + text.
+**Model:** `claude-sonnet` vision + text via `extractIntakeFields` (shared with `/bills/intake` manual flow, retries × 3 + Zod-validated).
 
 **Edge cases to handle:**
-- Multiple attachments (take the PDF that looks like the invoice; discard signatures/cover emails)
-- Forwarded emails (parse the original message context)
-- Non-English receipts (rare but possible — Foundry works with some regional suppliers)
-- Missing ABN / GST (flag, don't guess)
+- Multiple attachments — try each, pick highest-confidence Bill candidate. Logo / footer images discarded by the confidence ranking.
+- Forwarded emails (Re: / Fwd:) — heuristic accepts (subject regex matches "Fwd: invoice"); OCR reads the attached PDF, not the forwarder's signature.
+- Internal forwards (staff member forwards a vendor invoice into finance@) — same path as above; sender domain becomes the forwarder's `@foundry.health` address but the attachment is the original vendor PDF.
+- Non-English invoices (rare; some regional suppliers) — model handles bilingual receipts in practice; falls through to manual review if confidence < threshold.
+- Missing ABN / GST — flag, don't guess (Zod schema allows null on both).
+- Follow-up reminders from the same vendor — dedupe by `(supplierName||supplierId) + supplierInvoiceNumber`; reminder logged in heartbeat audit but no second Bill row.
 
 ---
 
