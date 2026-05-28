@@ -202,7 +202,8 @@ export default async function AvailabilityPage({
       p.employment === 'contractor' ||
       p.band === 'Partner' ||
       p.band === 'MP' ||
-      p.band === 'Associate_Partner'
+      p.band === 'Associate_Partner' ||
+      p.band === 'Support_Staff'
     )
       return 0;
     return Math.round(Number(p.fte ?? 1) * 38);

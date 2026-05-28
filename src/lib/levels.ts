@@ -21,12 +21,13 @@ export type LevelCode =
   | 'A3'
   | 'A2'
   | 'A1'
-  | 'IO';
+  | 'IO'
+  | 'OM';
 
 export type LevelMeta = {
   code: LevelCode;
   label: string;
-  band: 'MP' | 'Partner' | 'Associate_Partner' | 'Expert' | 'Consultant' | 'Analyst';
+  band: 'MP' | 'Partner' | 'Associate_Partner' | 'Expert' | 'Consultant' | 'Analyst' | 'Support_Staff';
 };
 
 export const FOUNDRY_LEVELS: readonly LevelMeta[] = [
@@ -50,6 +51,10 @@ export const FOUNDRY_LEVELS: readonly LevelMeta[] = [
   { code: 'A2', label: 'Analyst', band: 'Analyst' },
   { code: 'A1', label: 'Junior Analyst', band: 'Analyst' },
   { code: 'IO', label: 'Intern', band: 'Analyst' },
+  // Support staff — non-delivery firm roles. Office Manager is the
+  // canonical example (Jas Navarro). Off the consulting pyramid:
+  // hours don't roll into utilisation, billable capacity is zero.
+  { code: 'OM', label: 'Office Manager', band: 'Support_Staff' },
 ];
 
 /**

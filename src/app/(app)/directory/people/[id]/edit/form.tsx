@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 import { FOUNDRY_LEVELS, type LevelCode } from '@/lib/levels';
 import { COUNTRY_OPTIONS } from '@/lib/countries';
 
-const BANDS = ['MP', 'Partner', 'Expert', 'Consultant', 'Analyst'] as const;
+const BANDS = ['MP', 'Partner', 'Associate_Partner', 'Expert', 'Consultant', 'Analyst', 'Support_Staff'] as const;
 const EMPLOYMENTS: Array<{ value: 'ft' | 'contractor'; label: string }> = [
   { value: 'ft', label: 'Full-time' },
   { value: 'contractor', label: 'Contractor' },

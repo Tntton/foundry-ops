@@ -413,7 +413,8 @@ export async function computeManagerDashboard(
         person.employment === 'contractor' ||
         person.band === 'Partner' ||
         person.band === 'MP' ||
-        person.band === 'Associate_Partner'
+        person.band === 'Associate_Partner' ||
+        person.band === 'Support_Staff'
           ? 0
           : Math.round((fte ?? 1) * BASELINE_HOURS_PER_FTE_WEEK);
 

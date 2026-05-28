@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FOUNDRY_LEVELS, type LevelCode } from '@/lib/levels';
 
-const BANDS = ['MP', 'Partner', 'Expert', 'Consultant', 'Analyst'] as const;
+const BANDS = ['MP', 'Partner', 'Associate_Partner', 'Expert', 'Consultant', 'Analyst', 'Support_Staff'] as const;
 const EMPLOYMENTS = [
   { v: 'ft' as const, label: 'Full-time' },
   { v: 'contractor' as const, label: 'Contractor' },

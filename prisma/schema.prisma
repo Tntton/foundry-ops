@@ -63,6 +63,11 @@ enum Band {
   Expert
   Consultant
   Analyst
+  // Firm-internal support roles — Office Manager etc. Off the
+  // consulting pyramid: hours don't roll into utilisation, billable
+  // capacity is zero, and resource-planning surfaces skip them. They
+  // still hold logins (Person row) for admin workflows.
+  Support_Staff
 }
 
 // Effective "engagement status" surfaced as a colour pip on the pool

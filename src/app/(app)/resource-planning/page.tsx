@@ -52,6 +52,11 @@ function allocationBucket(p: {
   // distinguishes them, not this utilisation cohort.
   if (p.band === 'Partner' || p.band === 'MP' || p.band === 'Associate_Partner')
     return { key: 'partner', label: 'Partner / AP / MP', sortKey: 95 };
+  // Support staff (Office Manager etc.) — not on the delivery pyramid;
+  // surface in their own group at the bottom rather than mixing with
+  // billable bands.
+  if (p.band === 'Support_Staff')
+    return { key: 'support', label: 'Support staff', sortKey: 98 };
   // Contractors break out by role so partners can see how the bench is
   // composed (consultants vs experts/fellows vs analysts).
   if (p.employment === 'contractor') {
