@@ -16,13 +16,13 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **acceptance:**
 - [x] All occurrences of `foundryhealth.com.au` in `CLAUDE.md`, `HANDOFF.md`, `AGENTS.md`, `INTEGRATIONS.md`, `TASKS.md` replaced with `foundry.health`
 - [x] Prototype .jsx files (`screens-7.jsx`, `screens-auth.jsx`, `screens-directory-people.jsx`, `screens-integrations-agents.jsx`) updated so future porting uses the correct domain
-- [x] Email aliases kept at existing local parts (`bills@`, `receipts@`, `accounts@`) — domain only swapped. **OPEN:** confirm whether `finance@foundry.health` is the canonical accounts mailbox or whether `bills@`, `receipts@`, `accounts@` are separate shared mailboxes — affects Graph subscription setup in TASK-046/TASK-093.
+- [x] Email aliases kept at existing local parts (`bills@`, `receipts@`, `accounts@`) — domain only swapped. **RESOLVED 2026-05-29 (TT):** `finance@foundry.health` is the canonical accounts mailbox (end-state); `trung@foundry.health` is polled as a transitional source while vendors migrate. `bills@`, `receipts@`, `accounts@` no longer planned as separate intake mailboxes — `accounts@` retained only as an outbound display alias; receipt intake stays on the Uber email-intake (TASK-040d) + WhatsApp (TASK-079) channels. INTEGRATIONS.md §1 + AGENTS.md §2 updated to match. See TASK-093 for the AP-intake build.
 - [x] `grep -r "foundryhealth.com.au" --exclude=TASKS.md` returns zero matches (TASK-000 self-references the old domain in its description, which is expected)
 - [x] Commit: `chore(TASK-000): correct domain foundryhealth.com.au → foundry.health`
 
 **context:** Confirmed by user 2026-04-19 — Foundry does not own `foundryhealth.com.au`; the real domain is `foundry.health`. All Entra tenant restrictions, auth allowlists, email routing, SharePoint URLs, and webhook hosts must use `foundry.health`.
 
-**note on completion:** 9 files updated; screens-auth.jsx line 49 collapsed the dual-domain check to a single `@foundry.health` check. Mailbox canonicalisation (finance@ vs bills@/receipts@/accounts@) left open for TASK-046/093 blocker resolution.
+**note on completion:** 9 files updated; screens-auth.jsx line 49 collapsed the dual-domain check to a single `@foundry.health` check. Mailbox canonicalisation resolved 2026-05-29 (TT) — see acceptance line above: `finance@` canonical, `trung@` transitional, `bills@/receipts@/accounts@` retired as intake mailboxes. TASK-093 now drives the AP-intake build against those two mailboxes via Graph polling.
 
 ### TASK-001 — Repo scaffolding
 **status:** done
@@ -759,13 +759,50 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Suggested matches land in Admin's review queue
 - [ ] Confirmed matches write `xero_match_id` on the record
 
-### TASK-093 — Agent: AP intake
-**status:** todo
-**depends on:** TASK-046, TASK-082
+### TASK-093 — Agent: AP intake (invoice-autoharvest from M365 mailboxes)
+**status:** doing
+**depends on:** TASK-046 (manual Bill flow + Bill model fields), TASK-040c (intake-ocr extractor — already in tree)
+
+**note on scope expansion (2026-05-29, TT):** Originally a one-line spec ("Graph subscription on `bills@`"). Replaced with the full enriched build below. TASK-082 (agent framework) is **not** a dependency — this agent runs as a Vercel cron (mirrors the Uber email-intake pattern at TASK-040d), not as an Inngest workflow. If/when the workflow framework lands, the per-message processing loop is portable.
+
+**Architecture (locked):**
+- Source: Microsoft Graph `/users/{upn}/messages` polled directly (app-token, `Mail.Read` scoped via `New-ApplicationAccessPolicy` to `finance@` + `trung@` only — least-privilege per A6, NOT tenant-wide).
+- Cursor: new `MailboxPollCursor` Prisma model — `{ mailboxUpn (unique), lastReceivedDateTime, enabled, lastPollAt, lastError, createdAt, updatedAt }`.
+- Cron: `/api/cron/invoice-autoharvest` at `*/15 * * * *` (Vercel Pro is already used by the Uber cron at TASK-040d).
+- Actor: pinned to first `super_admin` (= TT), mirroring the Uber cron precedent.
+- Output: `Bill { status: pending_review, receivedVia: 'email', originalEmailId, supplierId|null, supplierName, supplierInvoiceNumber, amountTotal, gst, issueDate, dueDate, category, attachmentSharepointUrl? }` + `Approval` row + `AuditEvent` in one `prisma.$transaction`. Note: low-confidence does **not** flip to `awaiting_human` (no such enum value on `BillStatus`); confidence surfaces in the audit-event delta + admin "needs-attention" counter instead.
+
 **acceptance:**
-- [ ] Trigger: email to `bills@foundry.health` (Graph subscription)
-- [ ] Output: Draft `Bill` + attachment filed to SharePoint
-- [ ] Supplier auto-matched or flagged "new supplier — review"
+- [ ] New Prisma model `MailboxPollCursor` + migration. Seed: rows for `finance@foundry.health` (enabled: true) and `trung@foundry.health` (enabled: true, transitional — comment in seed.ts notes this can be flipped off once vendors migrate). TT to confirm migration shape before `prisma migrate dev`.
+- [ ] `Mail.Read` (Application) granted on the existing Entra app registration + admin-consented in the `foundry.health` tenant; `New-ApplicationAccessPolicy` restricts the app to `finance@` + `trung@` (Exchange Online PowerShell steps documented in `INTEGRATIONS.md §1`). TT to run + confirm before the cron code lands.
+- [ ] `src/server/integrations/m365-mail-intake.ts`:
+  - `looksLikeInvoice(message)` — sender domain ≠ `@foundry.health` (allowing forwards from internal staff but downstream extraction reads the embedded original); ≥1 attachment with mimeType `application/pdf` or `image/*`; subject matches `/invoice|bill|statement|receipt|payable|due|payment/i`; M365 personal categories (`personal`, `private`) skipped.
+  - `pollMailbox(upn, since)` — Graph `GET /users/{upn}/messages?$filter=receivedDateTime gt {cursor}&$expand=attachments($select=id,name,contentType)&$top=50&$orderby=receivedDateTime asc`, paged via `@odata.nextLink`.
+  - `processMessage(msg)` — for each candidate attachment download via `/users/{upn}/messages/{mid}/attachments/{aid}/$value` (or contentBytes on `fileAttachment`); run `extractIntakeFields` (existing intake-ocr helper); pick highest `confidence.overall` across attachments; match supplier by ABN then by name (Supplier table); dedupe by `(supplierName || supplierId) + supplierInvoiceNumber`; create Bill+Approval+Audit in one tx.
+  - `getMailIntakeStats()` — admin-page data: per-mailbox `{ enabled, lastPollAt, lastError, billsCreated24h, candidatesScanned24h, lowConfidenceCount24h, failedExtracts24h, recentFailures: [{ subject, from, messageId, reason }] }`.
+- [ ] `/api/cron/invoice-autoharvest/route.ts` — `CRON_SECRET` gate, loop enabled cursors, write heartbeat AuditEvent per mailbox (so health derives from cron success), `maxDuration: 180`, returns JSON summary.
+- [ ] `vercel.json` — add `*/15 * * * *` cron entry.
+- [ ] `src/app/admin/integrations/mail-intake/page.tsx` — per-mailbox card (last poll, 24h counters, recent-failures table, enable/disable toggle bound to `MailboxPollCursor.enabled`). Server action writes audit on toggle.
+- [ ] `src/server/system-health.ts` — new "Mail intake" component: `up` when both enabled mailboxes have polled successfully in last 60min; `degraded` when one is stale or last poll set `lastError`; `down` when both fail; `not_configured` when no cursor rows or `Mail.Read` not granted.
+- [ ] Tests:
+  - Golden-file test for `looksLikeInvoice` (fixtures: invoice from Xero supplier; forwarded `Re: Fwd:` invoice; calendar invite; personal mail from gmail; multi-attachment with logo + invoice PDF; follow-up reminder).
+  - Mocked Graph response → poller test: cursor advances; only candidates pass to OCR (mocked); Bills created with correct fields; dedupe blocks repeat; per-message errors don't halt the loop; audit events written.
+- [ ] `INTEGRATIONS.md §1` updated (Mail.Read line) + new `§7 Mail intake (AP autoharvest)` mirroring §6 Uber structure.
+- [ ] `AGENTS.md §2` updated (trigger line: cron polling of finance@ + trung@ via Graph, not webhook on bills@).
+- [ ] Smoke test: TT triggers the cron from Vercel UI on prod, watches a real invoice land as a Bill row queued for approval. Smoke pass is the gate to mark this task `done`.
+
+**Do NOT (per CLAUDE.md):**
+- Auto-pay / auto-send anything — Bills land in the approval queue (A7).
+- Process emails older than the cursor watermark.
+- Skip Zod validation on the LLM output (`extractIntakeFields` already does retry × 3 + schema-validate).
+- Read mail outside the two scoped mailboxes (ApplicationAccessPolicy enforces this server-side).
+
+**Edge cases (named in spec, must be covered):**
+- Forwarded emails (`Re: Fwd:`) — heuristic accepts; OCR reads the embedded attachment regardless of forwarder.
+- Multiple attachments — try each, take highest-confidence Bill candidate.
+- Same vendor sending follow-up reminders — dedup by `invoiceNumber + supplierName`, not message ID.
+- Internal forwards from staff — sender domain check is the staff member's address; allowed (so admin can forward into finance@), but the OCR runs on the attachment content, not the forwarder's signature.
+- M365 personal categories present → skip without OCR.
 
 ### TASK-094 — Agent: Invoice drafter
 **status:** todo

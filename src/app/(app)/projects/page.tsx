@@ -327,8 +327,11 @@ export default async function ProjectsPage({
  * the start dates, the grouping snaps to the truth.
  */
 function CompletedByFiscalYear({ rows }: { rows: ProjectListRow[] }) {
+  // Foundry's first FY — FY21 is the floor so historical sections
+  // exist as placeholders even before historical project data is
+  // backfilled. Adjust if the firm pre-dates this.
+  const FIRST_FY = 2021;
   const archived = rows.filter((r) => r.stage === 'archived');
-  if (archived.length === 0) return null;
   // Bucket by FY-of-startDate. Null startDate → current FY (we treat
   // not-yet-backfilled rows as current-year for grouping purposes).
   const currentFy = auFyOf(new Date());
@@ -339,7 +342,11 @@ function CompletedByFiscalYear({ rows }: { rows: ProjectListRow[] }) {
     arr.push(r);
     groups.set(fy, arr);
   }
-  const years = [...groups.keys()].sort((a, b) => b - a); // newest first
+  // Render every FY from current → FIRST_FY (newest first), including
+  // empty ones, so historical years are visible as collapsed
+  // placeholders for review.
+  const years: number[] = [];
+  for (let fy = currentFy; fy >= FIRST_FY; fy--) years.push(fy);
 
   return (
     <section className="space-y-3">
@@ -381,40 +388,47 @@ function CompletedByFiscalYear({ rows }: { rows: ProjectListRow[] }) {
               </span>
             </summary>
             <div className="border-t border-line">
-              <table className="w-full text-sm">
-                <thead className="bg-surface-subtle/40 text-[11px] uppercase tracking-wide text-ink-3">
-                  <tr>
-                    <th className="px-4 py-2 text-left">Code</th>
-                    <th className="px-4 py-2 text-left">Client</th>
-                    <th className="px-4 py-2 text-left">Project</th>
-                    <th className="px-4 py-2 text-right">Contract</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projs
-                    .slice()
-                    .sort((a, b) => b.contractValueCents - a.contractValueCents)
-                    .map((p) => (
-                      <tr key={p.id} className="border-t border-line">
-                        <td className="px-4 py-2">
-                          <Link
-                            href={`/projects/${p.code}`}
-                            className="font-mono text-ink hover:underline"
-                          >
-                            {p.code}
-                          </Link>
-                        </td>
-                        <td className="px-4 py-2 text-ink-2">
-                          {p.client.legalName}
-                        </td>
-                        <td className="px-4 py-2 text-ink-2">{p.name}</td>
-                        <td className="px-4 py-2 text-right tabular-nums text-ink-2">
-                          {formatMoneyShort(p.contractValueCents)}
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
+              {projs.length === 0 ? (
+                <p className="px-4 py-3 text-center text-xs text-ink-3">
+                  No projects recorded for this fiscal year yet — historical
+                  data backfill pending.
+                </p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-surface-subtle/40 text-[11px] uppercase tracking-wide text-ink-3">
+                    <tr>
+                      <th className="px-4 py-2 text-left">Code</th>
+                      <th className="px-4 py-2 text-left">Client</th>
+                      <th className="px-4 py-2 text-left">Project</th>
+                      <th className="px-4 py-2 text-right">Contract</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projs
+                      .slice()
+                      .sort((a, b) => b.contractValueCents - a.contractValueCents)
+                      .map((p) => (
+                        <tr key={p.id} className="border-t border-line">
+                          <td className="px-4 py-2">
+                            <Link
+                              href={`/projects/${p.code}`}
+                              className="font-mono text-ink hover:underline"
+                            >
+                              {p.code}
+                            </Link>
+                          </td>
+                          <td className="px-4 py-2 text-ink-2">
+                            {p.client.legalName}
+                          </td>
+                          <td className="px-4 py-2 text-ink-2">{p.name}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-ink-2">
+                            {formatMoneyShort(p.contractValueCents)}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </details>
         );

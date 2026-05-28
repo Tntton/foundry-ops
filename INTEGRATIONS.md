@@ -16,7 +16,7 @@ Five external systems. Each has its own auth flow, surfaces, sync rules, and fai
 - `GroupMember.ReadWrite.All` (app) — role via group membership
 - `Files.ReadWrite.All` (app) — SharePoint provisioning
 - `Sites.ReadWrite.All` (app) — folder structure
-- `Mail.Read` (app, scoped to `bills@` and `receipts@`) — agent triggers
+- `Mail.Read` (app, scoped via `New-ApplicationAccessPolicy` to `finance@foundry.health` + `trung@foundry.health` only) — AP autoharvest cron. See §7 for the grant + scoping steps.
 - `Calendars.Read` (delegated) — timesheet reconciler
 - `ChannelMessage.Send` (app) — Teams notifications
 
@@ -29,7 +29,7 @@ Five external systems. Each has its own auth flow, surfaces, sync rules, and fai
 | OneDrive / SharePoint | app ↔ both | Project create, file attach | App stores pointers only, never binaries |
 | Excel exports | app → M365 | Nightly + on-demand | Read-only snapshots. **No 2-way sync.** |
 | Calendar | app ↔ M365 | Project kickoff, PAR review | Events + invites |
-| Mail | M365 → app | Agent-driven | `bills@` + `receipts@` inboxes monitored |
+| Mail | M365 → app | Cron poller (15 min) | `finance@` + `trung@` polled directly via Graph (§7). Receipts no longer email-routed — see §6 (Uber) + WhatsApp inbound. |
 | Teams | app → Teams | Approval events | Adaptive cards to `#ops`, DM to required approver |
 
 **Role → Entra group mapping:**
