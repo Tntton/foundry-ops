@@ -199,21 +199,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
 
     async jwt({ token, profile, user }) {
-      // Only hit the DB on initial sign-in (when `user`/`profile`
-      // are present). On subsequent requests the token already
-      // carries personId/initials/roles, so we skip the lookup —
-      // this was a hidden ~2× per-page DB tax. Token survives the
-      // session lifetime; if roles change, user re-signs in.
-      if (token['personId']) {
-        return token;
-      }
+      // Resolve email from either OIDC profile (Entra) or the authorize() user (magic-link).
       const email = extractEmail(profile) ?? (user?.email ? user.email.toLowerCase() : undefined);
       if (email) {
         const person = await prisma.person.findUnique({
           where: { email },
           select: {
             id: true,
-            email: true,
             initials: true,
             headshotUrl: true,
             firstName: true,
@@ -223,11 +215,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         });
         if (person) {
           token['personId'] = person.id;
-          token['email'] = person.email;
           token['initials'] = person.initials;
-          token['headshotUrl'] = person.headshotUrl;
-          token['firstName'] = person.firstName;
-          token['lastName'] = person.lastName;
           token.name = `${person.firstName} ${person.lastName}`;
           token['roles'] = person.roles;
         }
@@ -240,11 +228,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.personId = token['personId'] as string;
         session.user.initials = token['initials'] as string;
         session.user.roles = (token['roles'] as Role[]) ?? [];
-        if (token['email']) session.user.email = token['email'] as string;
-        const u = session.user as { firstName?: string; lastName?: string; headshotUrl?: string | null };
-        if (token['firstName']) u.firstName = token['firstName'] as string;
-        if (token['lastName']) u.lastName = token['lastName'] as string;
-        if (token['headshotUrl'] !== undefined) u.headshotUrl = token['headshotUrl'] as string | null;
       }
       return session;
     },
