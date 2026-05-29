@@ -28,7 +28,7 @@ export function TimesheetPreviewView({
       <div>
         <p className="text-xs text-ink-3">
           <Link href="/admin/import" className="hover:underline">
-            Bulk import
+            Data imports
           </Link>{' '}
           /{' '}
           <Link href="/admin/import/timesheets" className="hover:underline">

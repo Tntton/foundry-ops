@@ -19,7 +19,7 @@ export default async function BulkImportLandingPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold text-ink">Bulk import</h1>
+        <h1 className="text-xl font-semibold text-ink">Data imports</h1>
         <p className="mt-1 text-sm text-ink-3">
           Self-serve historical-data loaders. Each import previews every row before
           anything writes to the database, then a single explicit commit click

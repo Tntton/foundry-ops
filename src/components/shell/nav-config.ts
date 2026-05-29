@@ -305,7 +305,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         // Self-service CSV importers for the office manager. Personnel
         // (upsert by email) + timesheets (bulk pre-approved historical
         // entries). Dry-run preview before the explicit commit click.
-        label: 'Bulk import',
+        // Label paired with "Data exports" above for visual symmetry.
+        label: 'Data imports',
         href: '/admin/import',
         icon: Upload,
         roles: ['super_admin', 'admin'],
