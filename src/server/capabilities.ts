@@ -43,6 +43,13 @@ export type Capability =
   | 'auditlog.view'
   | 'approval.policy.edit'
   | 'timesheet.submit'
+  // Bulk historical timesheet import — the office-manager surface at
+  // /admin/import/timesheets. Rows land as `status='approved'` with
+  // the importer as `approverId`, so the capability is the same tier
+  // as "would normally approve a timesheet". Day-to-day approval
+  // happens per-project at the handler level (manager on own project);
+  // bulk import is firm-wide and stays admin / partner-tier+.
+  | 'timesheet.approve'
   // Partner scorecard (firm-wide partner-attribution view) is
   // gated by capability so Associate Partners can be excluded
   // without losing other partner-level rights. Per the AP tier
@@ -132,6 +139,11 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
 
   // Self-service
   'timesheet.submit': ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'],
+  // Bulk timesheet import — admin tier + partner/AP. Manager intentionally
+  // excluded: per-project approval is fine via the standard workflow, but
+  // a firm-wide historical import touches every project and should sit
+  // with the same tier that owns the books.
+  'timesheet.approve': ['super_admin', 'admin', 'partner', 'associate_partner'],
 
   // Partner scorecard — explicitly EXCLUDES AP per the AP tier
   // definition. Junior to partner: no scorecard visibility even

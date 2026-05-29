@@ -1,0 +1,8 @@
+email,firstName,lastName,band,level,employment,region,rateUnit,rateDollars,startDate,phone,whatsappNumber,personalEmail,linkedinUrl,fte,roles,jobTitle
+jas.navarro@foundry.health,Jas,Navarro,Support_Staff,L1,ft,AU,hour,75,2025-07-01,+61 400 111 222,+61 400 111 222,jas@gmail.com,,1.00,admin,Office Manager
+matt.byers@foundry.health,Matt,Byers,Partner,L4,ft,AU,day,2000,2024-01-15,,,,,1.00,partner,Partner
+suze.legrand@foundry.health,Suze,Legrand,Consultant,T2,ft,AU,hour,180,2025-08-04,,,,,1.00,staff,Consultant
+,Bob,NoEmail,Consultant,T2,ft,AU,hour,180,2025-08-04,,,,,1.00,staff,
+jas.navarro@foundry.health,Jas,Dupe,Support_Staff,L1,ft,AU,hour,75,2025-07-01,,,,,1.00,staff,
+invalid.contractor@external.com,Invalid,Contractor,Consultant,T2,contractor,AU,day,1500,2025-08-04,,,,,,staff,
+gary.partner@foundry.health,Gary,Partner,Partner,L4,ft,AU,day,2000,2025-09-01,,,,,,bad_role,Partner

@@ -1,0 +1,10 @@
+personEmail,projectCode,date,hours,notes
+matt.byers@foundry.health,PRJ-001,2025-07-15,7.5,Discovery
+matt.byers@foundry.health,PRJ-001,2025-07-16,4,Workshop prep
+suze.legrand@foundry.health,PRJ-001,2025-07-15,8,Workshops
+unknown@foundry.health,PRJ-001,2025-07-15,6,Should be rejected
+matt.byers@foundry.health,PRJ-999,2025-07-17,5,Bad project code
+matt.byers@foundry.health,PRJ-001,2018-01-01,8,Way too old
+matt.byers@foundry.health,PRJ-001,2025-07-15,3,Duplicate of row 1
+matt.byers@foundry.health,PRJ-001,not-a-date,4,Bad date
+matt.byers@foundry.health,PRJ-001,2025-07-18,30,Hours over cap

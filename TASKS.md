@@ -919,6 +919,27 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **acceptance:**
 - [ ] `RUNBOOK.md` in repo: secrets rotation, re-auth integrations, failed-agent replay, webhook replay, backup + restore
 
+### TASK-210 — Bulk CSV import: personnel + timesheets (office manager self-serve)
+**status:** done
+**depends on:** TASK-021, TASK-023
+**acceptance:**
+- [x] `/admin/import/personnel` page — drag-drop CSV, Zod-validated rows, preview table with `[new|update]` per row + inline errors, explicit Commit button on preview screen
+- [x] `/admin/import/timesheets` page — drag-drop CSV, matches Person by email + Project by code, preview shows total rows / hours / per-person summary / rejected rows / duplicates, explicit Commit
+- [x] Personnel commit upserts by email (initials auto-derived for new rows, `ensureUniqueInitials` on collisions), audit row written per import in same transaction
+- [x] Timesheet commit inserts as `status='approved'` with `approvedById=session.person.id`; duplicate `(person, project, date)` rows handled by skip-or-overwrite toggle (default skip); audit row per import
+- [x] Capability gates: `person.create` for personnel; new `timesheet.approve` capability for timesheets (super_admin / admin / partner / associate_partner)
+- [x] Shared dropzone + preview pattern (single client component); papaparse for parsing
+- [x] Dry-run state stashed in short-lived in-memory cache keyed by token + userId; preview URL `?stage=preview&token=…` is shareable / refreshable for ~10 minutes
+- [x] `public/templates/personnel-template.csv` + `public/templates/timesheets-template.csv` shipped + linked from each page
+- [x] Row cap 5000 per upload with clear error; massive files rejected
+- [x] "Download errors as CSV" link on preview when validation errors exist
+- [x] Nav: "Bulk import" item under System group, super_admin / admin only
+- [x] Vitest golden-file tests for personnel parser + timesheet parser
+- [x] Typecheck + tests + lint green
+- [x] Commit: `feat(TASK-210): bulk CSV import surfaces for personnel + timesheets`
+
+**note on completion:** Parser logic split into a pure `*WithExisting` / `*WithLookups` builder (no DB) + an async wrapper that pre-fetches lookups — so the golden-file tests don't need to mock Prisma. The pure layer is what's tested. `jobTitle` is accepted in the personnel CSV (parity with the new-person form) but silently dropped since `Person` has no jobTitle column — comment in the create call explains. Cache is per-process `Map` with 10-min TTL; single-region Vercel deployment makes this fine for the FY26-backfill window. Swap for a `ImportDryRun` DB table later if the surface needs multi-region or longer-than-TTL persistence.
+
 ---
 
 *End of TASKS.md. Start with TASK-001.*

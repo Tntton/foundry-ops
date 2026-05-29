@@ -41,6 +41,7 @@
     "lucide-react": "0.454.0",
     "next": "14.2.15",
     "next-auth": "5.0.0-beta.25",
+    "papaparse": "^5.5.3",
     "pdf-lib": "^1.17.1",
     "react": "18.3.1",
     "react-dom": "18.3.1",
@@ -53,6 +54,7 @@
   "devDependencies": {
     "@types/deep-diff": "1.0.5",
     "@types/node": "22.7.5",
+    "@types/papaparse": "^5.5.2",
     "@types/react": "18.3.11",
     "@types/react-dom": "18.3.0",
     "@types/ssh2-sftp-client": "^9.0.6",

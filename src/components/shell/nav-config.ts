@@ -22,6 +22,7 @@ import {
   UserSquare,
   KeyRound,
   Database,
+  Upload,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -298,6 +299,15 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: 'Data exports',
         href: '/admin/exports',
         icon: Database,
+        roles: ['super_admin', 'admin'],
+      },
+      {
+        // Self-service CSV importers for the office manager. Personnel
+        // (upsert by email) + timesheets (bulk pre-approved historical
+        // entries). Dry-run preview before the explicit commit click.
+        label: 'Bulk import',
+        href: '/admin/import',
+        icon: Upload,
         roles: ['super_admin', 'admin'],
       },
       // Agents surface: ships with TASK-080 onward. Hidden from nav until then.
