@@ -146,6 +146,10 @@ export default async function ResourcePlanningPage({
   if (!session || !hasAnyRole(session, ['super_admin', 'admin', 'partner'])) {
     notFound();
   }
+  // Support_Staff hold admin role for ops work but the bandwidth
+  // heatmap is a delivery-side tool with no relevance to them — match
+  // the nav-config denyBands rule here as a page-level defense.
+  if (session.person.band === 'Support_Staff') notFound();
 
   const weeksAhead = (() => {
     const n = Number(searchParams.weeks);

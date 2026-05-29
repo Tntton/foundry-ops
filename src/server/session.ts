@@ -53,6 +53,7 @@ export async function getSession(): Promise<Session | null> {
       initials: true,
       headshotUrl: true,
       roles: true,
+      band: true,
     },
   });
   if (!person) return null;
@@ -72,6 +73,7 @@ export async function getSession(): Promise<Session | null> {
       initials: person.initials,
       headshotUrl: person.headshotUrl,
       roles: effectiveRoles,
+      band: person.band,
     },
     isRealSuperAdmin,
     viewAsRoles,

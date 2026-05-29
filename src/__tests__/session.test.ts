@@ -18,6 +18,7 @@ const mkSession = (roles: Session['person']['roles']): Session => ({
     initials: 'TT',
     roles,
     headshotUrl: null,
+    band: 'Partner',
   },
   isRealSuperAdmin: roles.includes('super_admin'),
   viewAsRoles: null,

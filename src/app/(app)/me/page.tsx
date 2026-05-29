@@ -340,41 +340,47 @@ export default async function MyProfilePage() {
       </header>
 
       {/* ── Headline KPIs ───────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <KpiCard
-          label="Hours · 12 wks"
-          value={formatHours(recentHoursTotal)}
-          sub={`${formatHours(recentBillable)} billable`}
-        />
-        <KpiCard
-          label="Earnings · 12 wks"
-          value={formatMoney(recentEarningsCents)}
-          sub={`${me.rate ? formatMoney(me.rate) + '/' + me.rateUnit : '—'} cost rate`}
-        />
-        <KpiCard
-          label="Billable revenue · 12 wks"
-          value={
-            recentBillableRevenueCents !== null
-              ? formatMoney(recentBillableRevenueCents)
-              : '—'
-          }
-          sub={
-            me.billRate !== null
-              ? `${formatMoney(me.billRate)}/h to clients`
-              : 'no bill rate set'
-          }
-        />
-        <KpiCard
-          label="Lifetime hours"
-          value={formatHours(lifetimeHours)}
-          sub={`${formatHours(lifetimeBillable)} billed`}
-        />
-        <KpiCard
-          label="Tenure"
-          value={`${Math.floor(tenureMonths / 12)}y ${tenureMonths % 12}m`}
-          sub={`since ${me.startDate.toLocaleDateString('en-AU')}`}
-        />
-      </div>
+      {/* Hidden for Support_Staff — these metrics (hours, earnings, billable
+          revenue, lifetime hours) all assume billable consulting work and
+          surface as zeros/N/A for non-delivery bands. Tenure stays visible
+          on the bottom card. */}
+      {me.band !== 'Support_Staff' && (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+          <KpiCard
+            label="Hours · 12 wks"
+            value={formatHours(recentHoursTotal)}
+            sub={`${formatHours(recentBillable)} billable`}
+          />
+          <KpiCard
+            label="Earnings · 12 wks"
+            value={formatMoney(recentEarningsCents)}
+            sub={`${me.rate ? formatMoney(me.rate) + '/' + me.rateUnit : '—'} cost rate`}
+          />
+          <KpiCard
+            label="Billable revenue · 12 wks"
+            value={
+              recentBillableRevenueCents !== null
+                ? formatMoney(recentBillableRevenueCents)
+                : '—'
+            }
+            sub={
+              me.billRate !== null
+                ? `${formatMoney(me.billRate)}/h to clients`
+                : 'no bill rate set'
+            }
+          />
+          <KpiCard
+            label="Lifetime hours"
+            value={formatHours(lifetimeHours)}
+            sub={`${formatHours(lifetimeBillable)} billed`}
+          />
+          <KpiCard
+            label="Tenure"
+            value={`${Math.floor(tenureMonths / 12)}y ${tenureMonths % 12}m`}
+            sub={`since ${me.startDate.toLocaleDateString('en-AU')}`}
+          />
+        </div>
+      )}
 
       {/* ── Hours visualisation ─────────────────────────────────────── */}
       <Card>
@@ -479,6 +485,9 @@ export default async function MyProfilePage() {
         </Card>
 
         {/* ── Pay agreement ─────────────────────────────────────────── */}
+        {/* Support_Staff sees a slimmed version — just band/level/employment/FTE,
+            without the cost/bill rates + margin + lifetime billable revenue,
+            none of which apply to off-the-pyramid roles. */}
         <Card>
           <CardHeader>
             <CardTitle>Pay agreement</CardTitle>
@@ -500,43 +509,47 @@ export default async function MyProfilePage() {
               </span>
             </Row>
             <Row label="FTE">{fteLabel}</Row>
-            <div className="border-t border-line pt-2">
-              <Row label="Cost rate">
-                <span className="font-semibold tabular-nums text-ink">
-                  {formatMoney(me.rate)}
-                  <span className="text-xs text-ink-3">/{me.rateUnit}</span>
-                </span>
-              </Row>
-              <Row label="Bill rate">
-                {me.billRate !== null ? (
-                  <span className="font-semibold tabular-nums text-ink">
-                    {formatMoney(me.billRate)}
-                    <span className="text-xs text-ink-3">/{me.rateUnit}</span>
-                  </span>
-                ) : (
-                  <span className="text-ink-3">— not billable</span>
-                )}
-              </Row>
-              {me.billRate !== null && me.rate > 0 && (
-                <Row label="Margin per hour">
-                  <span className="tabular-nums text-ink-2">
-                    {formatMoney(me.billRate - me.rate)}{' '}
-                    <span className="text-[10px] text-ink-3">
-                      ({Math.round(((me.billRate - me.rate) / me.billRate) * 100)}
-                      %)
+            {me.band !== 'Support_Staff' && (
+              <>
+                <div className="border-t border-line pt-2">
+                  <Row label="Cost rate">
+                    <span className="font-semibold tabular-nums text-ink">
+                      {formatMoney(me.rate)}
+                      <span className="text-xs text-ink-3">/{me.rateUnit}</span>
                     </span>
-                  </span>
-                </Row>
-              )}
-            </div>
-            <p className="border-t border-line pt-2 text-[10px] text-ink-3">
-              Lifetime billable revenue contributed:{' '}
-              <strong className="text-ink-2">
-                {lifetimeBillableRevenueCents !== null
-                  ? formatMoney(lifetimeBillableRevenueCents)
-                  : '—'}
-              </strong>
-            </p>
+                  </Row>
+                  <Row label="Bill rate">
+                    {me.billRate !== null ? (
+                      <span className="font-semibold tabular-nums text-ink">
+                        {formatMoney(me.billRate)}
+                        <span className="text-xs text-ink-3">/{me.rateUnit}</span>
+                      </span>
+                    ) : (
+                      <span className="text-ink-3">— not billable</span>
+                    )}
+                  </Row>
+                  {me.billRate !== null && me.rate > 0 && (
+                    <Row label="Margin per hour">
+                      <span className="tabular-nums text-ink-2">
+                        {formatMoney(me.billRate - me.rate)}{' '}
+                        <span className="text-[10px] text-ink-3">
+                          ({Math.round(((me.billRate - me.rate) / me.billRate) * 100)}
+                          %)
+                        </span>
+                      </span>
+                    </Row>
+                  )}
+                </div>
+                <p className="border-t border-line pt-2 text-[10px] text-ink-3">
+                  Lifetime billable revenue contributed:{' '}
+                  <strong className="text-ink-2">
+                    {lifetimeBillableRevenueCents !== null
+                      ? formatMoney(lifetimeBillableRevenueCents)
+                      : '—'}
+                  </strong>
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>

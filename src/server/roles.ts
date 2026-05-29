@@ -1,4 +1,4 @@
-import type { Role } from '@prisma/client';
+import type { Role, Band } from '@prisma/client';
 
 export type SessionPerson = {
   id: string;
@@ -8,6 +8,10 @@ export type SessionPerson = {
   initials: string;
   roles: Role[];
   headshotUrl: string | null;
+  /** The Person.band of the signed-in user. Used by surfaces that need to
+   *  filter visibility by band (e.g. Support_Staff don't see delivery-side
+   *  planning tools even when they have the admin role). */
+  band: Band;
 };
 
 export type Session = {

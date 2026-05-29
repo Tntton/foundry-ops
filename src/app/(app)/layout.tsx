@@ -41,6 +41,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <PeriodAutoRefresh />
       <Sidebar
         roles={session.person.roles}
+        band={session.person.band}
         badges={{ '/': unreadUpdates }}
       />
       <div className="flex min-w-0 flex-1 flex-col">

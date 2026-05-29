@@ -62,6 +62,7 @@ export default async function TimesheetPage({
         endDate: true,
         roles: true,
         email: true,
+        band: true,
       },
     });
     if (!fetched) notFound();
@@ -73,6 +74,7 @@ export default async function TimesheetPage({
       email: fetched.email,
       roles: fetched.roles,
       headshotUrl: fetched.headshotUrl,
+      band: fetched.band,
     };
     actingOnBehalf = true;
   }
@@ -90,7 +92,12 @@ export default async function TimesheetPage({
   if (canActOnBehalf) {
     if (isAdminGroup) {
       teamOptions = await prisma.person.findMany({
-        where: { endDate: null },
+        // Exclude Support_Staff — they're off the consulting pyramid
+        // and have no project assignments to log against. They CAN
+        // log time for themselves via /timesheet (Jas e.g. still bills
+        // her hours) but admins shouldn't pick them in the on-behalf
+        // dropdown.
+        where: { endDate: null, band: { not: 'Support_Staff' } },
         orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
         select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
       });

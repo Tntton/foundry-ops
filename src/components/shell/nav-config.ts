@@ -1,4 +1,4 @@
-import type { Role } from '@prisma/client';
+import type { Role, Band } from '@prisma/client';
 import {
   LayoutDashboard,
   FolderKanban,
@@ -32,6 +32,11 @@ export type NavItem = {
   icon: LucideIcon;
   roles: readonly Role[]; // empty array = visible to everyone signed-in
   badge?: string;
+  /** Bands whose holders should NOT see this item even if their role
+   *  would otherwise grant access. Used for delivery-side surfaces
+   *  (Availability, Resource planning) that shouldn't surface for the
+   *  Office Manager (Support_Staff) even though she's `admin`. */
+  denyBands?: readonly Band[];
 };
 
 export type NavGroup = {
@@ -92,7 +97,11 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: 'Resource planning',
         href: '/resource-planning',
         icon: Gauge,
+        // Delivery-side capacity tool. Support_Staff (Office Manager
+        // etc.) hold the admin role for ops work but have no business
+        // looking at the bandwidth heatmap — explicitly excluded.
         roles: ['super_admin', 'admin', 'partner', 'associate_partner'],
+        denyBands: ['Support_Staff'],
       },
       {
         // Talent pipeline — kanban tracker for prospective hires
@@ -197,8 +206,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         icon: Gauge,
         // Sister surface to Timesheet — declare expected hours per
         // upcoming week so resourcing partners can plan against latent
-        // capacity. Same audience as the timesheet (everyone).
+        // capacity. Same audience as the timesheet (everyone) EXCEPT
+        // Support_Staff (Office Manager etc.), whose hours don't
+        // contribute to the bandwidth heatmap and who'd see an empty
+        // 8-week grid.
         roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'],
+        denyBands: ['Support_Staff'],
       },
       {
         label: 'Receipt Upload',
@@ -331,14 +344,22 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   },
 ];
 
-export function isItemVisible(item: NavItem, roles: readonly Role[]): boolean {
+export function isItemVisible(
+  item: NavItem,
+  roles: readonly Role[],
+  band?: Band | null,
+): boolean {
+  if (item.denyBands && band && item.denyBands.includes(band)) return false;
   if (item.roles.length === 0) return true;
   return item.roles.some((r) => roles.includes(r));
 }
 
-export function filterNavForRoles(roles: readonly Role[]): NavGroup[] {
+export function filterNavForRoles(
+  roles: readonly Role[],
+  band?: Band | null,
+): NavGroup[] {
   return NAV_GROUPS.map((g) => ({
     ...g,
-    items: g.items.filter((i) => isItemVisible(i, roles)),
+    items: g.items.filter((i) => isItemVisible(i, roles, band)),
   })).filter((g) => g.items.length > 0);
 }

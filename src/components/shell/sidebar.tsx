@@ -2,15 +2,20 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import type { Role } from '@prisma/client';
+import type { Role, Band } from '@prisma/client';
 import { filterNavForRoles } from '@/components/shell/nav-config';
 import { cn } from '@/lib/utils';
 
 export function Sidebar({
   roles,
+  band,
   badges,
 }: {
   roles: readonly Role[];
+  /** Person.band of the signed-in user — used to apply nav-item `denyBands`
+   *  filters (e.g. Support_Staff don't see delivery-side surfaces even when
+   *  they hold an admin role). */
+  band?: Band | null;
   /** Optional dynamic badges keyed by nav-item href — overrides any
    *  static `badge` on the item. Today this surfaces the unread
    *  UserUpdate count next to "Dashboard". */
@@ -21,7 +26,7 @@ export function Sidebar({
   // component reading `x-pathname` from headers, which Next 14 doesn't
   // set without middleware, so the highlight got stuck on Dashboard).
   const pathname = usePathname() ?? '/';
-  const groups = filterNavForRoles(roles);
+  const groups = filterNavForRoles(roles, band);
 
   return (
     <aside className="flex h-screen w-[240px] shrink-0 flex-col gap-6 border-r border-line bg-surface-subtle px-3 py-4">

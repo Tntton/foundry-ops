@@ -61,6 +61,7 @@ export default async function AvailabilityPage({
         endDate: true,
         roles: true,
         email: true,
+        band: true,
       },
     });
     if (!fetched || fetched.endDate !== null) notFound();
@@ -72,6 +73,7 @@ export default async function AvailabilityPage({
       email: fetched.email,
       roles: fetched.roles,
       headshotUrl: fetched.headshotUrl,
+      band: fetched.band,
     };
     actingOnBehalf = true;
   }
