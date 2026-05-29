@@ -48,10 +48,39 @@ export type PersonListFilter = {
   region?: string;
   employment?: Employment;
   active?: 'active' | 'archived' | 'all';
+  /** Optional sort override. Falls back to the default
+   *  band-then-lastName ordering used by the directory listing. */
+  sort?: PersonSortKey;
+  dir?: 'asc' | 'desc';
+};
+
+export type PersonSortKey =
+  | 'lastName'
+  | 'firstName'
+  | 'band'
+  | 'level'
+  | 'region'
+  | 'employment'
+  | 'fte'
+  | 'rate'
+  | 'startDate'
+  | 'lastLoginAt';
+
+const SORT_FIELD: Record<PersonSortKey, string> = {
+  lastName: 'lastName',
+  firstName: 'firstName',
+  band: 'band',
+  level: 'level',
+  region: 'region',
+  employment: 'employment',
+  fte: 'fte',
+  rate: 'rate',
+  startDate: 'startDate',
+  lastLoginAt: 'lastLoginAt',
 };
 
 export async function listPeople(filter: PersonListFilter = {}): Promise<PersonListRow[]> {
-  const { search, band, region, employment, active = 'active' } = filter;
+  const { search, band, region, employment, active = 'active', sort, dir = 'asc' } = filter;
 
   const where: Record<string, unknown> = {};
   if (band) where['band'] = band;
@@ -69,9 +98,13 @@ export async function listPeople(filter: PersonListFilter = {}): Promise<PersonL
     ];
   }
 
+  const orderBy: Array<Record<string, 'asc' | 'desc'>> = sort
+    ? [{ [SORT_FIELD[sort]]: dir }]
+    : [{ band: 'asc' }, { lastName: 'asc' }];
+
   const rows = await prisma.person.findMany({
     where,
-    orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
+    orderBy,
     select: {
       id: true,
       initials: true,

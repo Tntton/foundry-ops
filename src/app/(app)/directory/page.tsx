@@ -3,7 +3,8 @@ import { notFound } from 'next/navigation';
 import type { Band, Employment } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
-import { listPeople } from '@/server/directory';
+import { listPeople, type PersonSortKey } from '@/server/directory';
+import { SortableTh } from '@/components/sortable-th';
 import { hasCapability } from '@/server/capabilities';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
@@ -36,8 +37,18 @@ export default async function DirectoryPage({
     employment?: string;
     active?: string;
     deleted?: string;
+    sort?: string;
+    dir?: string;
   };
 }) {
+  const VALID_SORTS: readonly PersonSortKey[] = [
+    'lastName', 'firstName', 'band', 'level', 'region',
+    'employment', 'fte', 'rate', 'startDate', 'lastLoginAt',
+  ];
+  const sort = VALID_SORTS.includes(searchParams.sort as PersonSortKey)
+    ? (searchParams.sort as PersonSortKey)
+    : undefined;
+  const dir = searchParams.dir === 'desc' ? 'desc' : 'asc';
   const session = await getSession();
   // Pure-staff viewers get a stripped-down read-only directory — name,
   // band/level, region only. No tabs, no client roster, no profile
@@ -178,7 +189,7 @@ export default async function DirectoryPage({
   const canCreate = hasCapability(session, 'person.create');
   const canSeePay = hasCapability(session, 'ratecard.view');
 
-  const people = await listPeople({ search: q, band, region, employment, active });
+  const people = await listPeople({ search: q, band, region, employment, active, sort, dir });
   // Client roster moved to /directory/clients (per TT, 2026-05-10):
   // people-tab now focuses on people only; client-tab carries the
   // active client list with the LTM filter.
@@ -336,13 +347,13 @@ function PeopleTab({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Person</TableHead>
-                <TableHead>Band / Level</TableHead>
-                <TableHead>Region</TableHead>
-                <TableHead>Employment</TableHead>
-                <TableHead>FTE</TableHead>
-                {canSeePay && <TableHead className="text-right">Rate</TableHead>}
-                <TableHead>Last login</TableHead>
+                <SortableTh sortKey="lastName">Person</SortableTh>
+                <SortableTh sortKey="band">Band / Level</SortableTh>
+                <SortableTh sortKey="region">Region</SortableTh>
+                <SortableTh sortKey="employment">Employment</SortableTh>
+                <SortableTh sortKey="fte">FTE</SortableTh>
+                {canSeePay && <SortableTh sortKey="rate" className="text-right" align="right">Rate</SortableTh>}
+                <SortableTh sortKey="lastLoginAt">Last login</SortableTh>
                 <TableHead>Status</TableHead>
                 {canEdit && <TableHead className="w-20 text-right">Actions</TableHead>}
               </TableRow>
