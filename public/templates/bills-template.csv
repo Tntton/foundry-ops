@@ -1,0 +1,4 @@
+supplierName,supplierInvoiceNumber,issueDate,dueDate,amountTotalDollars,gstDollars,category,projectCode,attributedPersonEmail,rebillable
+Acme Hosting Pty Ltd,INV-2025-0042,2025-08-12,2025-09-11,1100.00,100.00,subscriptions,,,false
+Sydney Stationers,INV-3391,2025-07-30,2025-08-30,275.00,25.00,office,,,false
+Globex Travel,GBX-7720,2025-09-04,2025-10-04,3300.00,300.00,travel,PRJ-001,doug.barnaby@foundry.health,true

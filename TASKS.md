@@ -974,6 +974,25 @@ UPDATE "Person" SET email = 'mark.liu@foundry.health'         WHERE email = 'mar
 UPDATE "Person" SET email = 'shea.laws@foundry.health'        WHERE email = 'shea@foundry.health';
 ```
 
+### TASK-212 — Bulk CSV import: bills + expenses (office manager AP backfill)
+**status:** done
+**depends on:** TASK-210
+**acceptance:**
+- [x] `/admin/import/bills` page — drag-drop CSV, Zod-validated rows, preview table with supplier/project match status + duplicate detection on (supplier, invoice number), explicit Commit button
+- [x] `/admin/import/expenses` page — drag-drop CSV, matches Person by email + Project by code, preview shows totals + per-person + rejected rows, explicit Commit
+- [x] Bills commit defaults `status='paid'` for historical backfill (skips the approval queue); `receivedVia='upload'`; matches Supplier by name if a row exists, otherwise stores `supplierName` free-text
+- [x] Expenses commit defaults `status='approved'` with `approvedById=session.person.id` for historical backfill
+- [x] Both write one `bulk_imported` AuditEvent per file, single transaction per commit
+- [x] Capability gates: `bill.create` for bills, `expense.approve.under_2k` for expenses (acting on behalf of someone else is approval-tier work)
+- [x] Both pages reuse the shared `csv-dropzone.tsx` + dry-run preview cache pattern
+- [x] `public/templates/bills-template.csv` + `public/templates/expenses-template.csv` shipped + linked from each page
+- [x] Landing page `/admin/import` updated to show 4 importer cards (personnel / timesheets / bills / expenses)
+- [x] Vitest golden-file tests for both new parsers
+- [x] Typecheck + tests + lint green
+- [x] Commit: `feat(TASK-212): bulk CSV import for bills + expenses`
+
+**note on completion:** Same pattern as TASK-210 — pure `*WithLookups` builders separated from async wrappers so tests don't mock Prisma. Bills land in `status='paid'`, `receivedVia='upload'`. Expenses land in `status='approved'` with the importer as `approvedById`. Both write one `bulk_imported` AuditEvent per file. Project codes are optional — empty = OPEX; unmatched code = rejection (forces Jas to fix typos rather than silently OPEX-land them). Duplicate detection on bills uses (supplierName + supplierInvoiceNumber); when a duplicate is found, the preview surfaces a skip-vs-force toggle. Expenses don't have a stable duplicate key so no dedup pass for them — Jas dedupes manually.
+
 ### TASK-210 — Bulk CSV import: personnel + timesheets (office manager self-serve)
 **status:** done
 **depends on:** TASK-021, TASK-023

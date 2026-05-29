@@ -1,0 +1,9 @@
+personEmail,date,amountTotalDollars,gstDollars,category,description,projectCode,vendor,rebillable
+doug.barnaby@foundry.health,2025-07-15,44.00,4.00,meals,Client lunch,PRJ-001,Cafe Sydney,true
+doug.barnaby@foundry.health,2025-07-16,165.00,15.00,travel,Taxi,PRJ-001,13cabs,true
+matt.byers@foundry.health,2025-08-01,22.00,2.00,office,USB cable,,Officeworks,false
+unknown@foundry.health,2025-08-02,55.00,5.00,office,Should be rejected,,,false
+doug.barnaby@foundry.health,2025-08-03,100.00,200.00,office,Bad GST,,,false
+doug.barnaby@foundry.health,2018-01-01,40.00,4.00,office,Too old,,,false
+doug.barnaby@foundry.health,2025-08-04,50.00,5.00,office,Bad project,PRJ-999,,false
+doug.barnaby@foundry.health,not-a-date,50.00,5.00,office,Bad date,,,false

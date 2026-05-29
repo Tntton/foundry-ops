@@ -1,0 +1,8 @@
+supplierName,supplierInvoiceNumber,issueDate,dueDate,amountTotalDollars,gstDollars,category,projectCode,attributedPersonEmail,rebillable
+Acme Hosting,INV-001,2025-08-12,2025-09-11,1100.00,100.00,subscriptions,,,false
+Acme Hosting,INV-001,2025-08-12,2025-09-11,1100.00,100.00,subscriptions,,,false
+Globex Travel,GBX-7720,2025-09-04,2025-10-04,3300.00,300.00,travel,PRJ-001,doug.barnaby@foundry.health,true
+Bad Supplier,INV-002,2025-09-05,2025-09-25,500.00,1000.00,office,,,false
+Mystery Vendor,INV-003,2025-09-06,2025-10-06,220.00,20.00,office,PRJ-999,,false
+Mystery Vendor,INV-004,2025-09-07,2025-10-07,330.00,30.00,office,,unknown@foundry.health,false
+,INV-005,2025-09-08,2025-10-08,110.00,10.00,office,,,false

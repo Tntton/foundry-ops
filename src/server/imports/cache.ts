@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import type { PersonnelPreview } from './personnel';
 import type { TimesheetPreview } from './timesheets';
+import type { BillsPreview } from './bills';
+import type { ExpensesPreview } from './expenses';
 
 /**
  * In-memory dry-run cache for bulk-import previews.
@@ -25,7 +27,9 @@ const TTL_MS = 10 * 60 * 1000;
 
 export type CachedImport =
   | { kind: 'personnel'; userId: string; data: PersonnelPreview; expires: number }
-  | { kind: 'timesheets'; userId: string; data: TimesheetPreview; expires: number };
+  | { kind: 'timesheets'; userId: string; data: TimesheetPreview; expires: number }
+  | { kind: 'bills'; userId: string; data: BillsPreview; expires: number }
+  | { kind: 'expenses'; userId: string; data: ExpensesPreview; expires: number };
 
 const store = new Map<string, CachedImport>();
 
@@ -64,6 +68,38 @@ export function readTimesheets(userId: string, token: string): TimesheetPreview 
   const entry = store.get(token);
   if (!entry) return null;
   if (entry.kind !== 'timesheets') return null;
+  if (entry.userId !== userId) return null;
+  return entry.data;
+}
+
+export function stashBills(userId: string, data: BillsPreview): string {
+  gc();
+  const token = crypto.randomBytes(16).toString('hex');
+  store.set(token, { kind: 'bills', userId, data, expires: Date.now() + TTL_MS });
+  return token;
+}
+
+export function readBills(userId: string, token: string): BillsPreview | null {
+  gc();
+  const entry = store.get(token);
+  if (!entry) return null;
+  if (entry.kind !== 'bills') return null;
+  if (entry.userId !== userId) return null;
+  return entry.data;
+}
+
+export function stashExpenses(userId: string, data: ExpensesPreview): string {
+  gc();
+  const token = crypto.randomBytes(16).toString('hex');
+  store.set(token, { kind: 'expenses', userId, data, expires: Date.now() + TTL_MS });
+  return token;
+}
+
+export function readExpenses(userId: string, token: string): ExpensesPreview | null {
+  gc();
+  const entry = store.get(token);
+  if (!entry) return null;
+  if (entry.kind !== 'expenses') return null;
   if (entry.userId !== userId) return null;
   return entry.data;
 }
