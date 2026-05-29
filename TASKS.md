@@ -919,6 +919,60 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **acceptance:**
 - [ ] `RUNBOOK.md` in repo: secrets rotation, re-auth integrations, failed-agent replay, webhook replay, backup + restore
 
+### TASK-211 — One-off email migration: firstname-only → firstname.lastname
+**status:** todo
+**depends on:** TASK-021
+**acceptance:**
+- [x] Fixtures + seed updated: `prisma/fixtures/team.json`, `foundry-team.jsx`, `prisma/seed.ts` `isStaff` array reflect the new convention (3 partners keep `trung@` / `michael@` / `chris@`, everyone else is `firstname.lastname@`, Rachael explicitly `rachael.spooner@`)
+- [x] Invoice preview footer hardcode `jas@foundry.health` → `jas.navarro@foundry.health`
+- [x] Integration sync comments (navan-sync, uber-sync) reflect the new convention — fallback is now partner-only (`trung.ton@` → `trung@`), not the general rule
+- [ ] Production DB UPDATE statement run against Supabase to rename every Person.email except the three partners — see below for the SQL
+- [ ] M365 / Entra: existing user-principal-names migrated to match (`will@foundry.health` → `will.macdonald@foundry.health`); old addresses kept as aliases until end of FY26 so existing emails in transit still reach the inbox
+- [ ] Xero contact emails updated to match (only relevant for contractors that bill Foundry)
+- [ ] Resend / WhatsApp / DocuSign — any saved templates that hardcode an `@foundry.health` address audited and patched
+- [ ] AuditEvent row written for the bulk rename (one row, `actor=system`, `action=bulk_email_migrate`, `entityType=person`, delta carries the old→new map)
+
+**SQL to run (after a DB backup):**
+```sql
+-- One-off rename. Three partners keep their first-name-only alias.
+UPDATE "Person" SET email = 'will.macdonald@foundry.health'   WHERE email = 'will@foundry.health';
+UPDATE "Person" SET email = 'doug.barnaby@foundry.health'     WHERE email = 'doug@foundry.health';
+UPDATE "Person" SET email = 'kathleen.weaver@foundry.health'  WHERE email = 'kathleen@foundry.health';
+UPDATE "Person" SET email = 'mark.luhovy@foundry.health'      WHERE email = 'mark@foundry.health';
+UPDATE "Person" SET email = 'rachael.spooner@foundry.health'  WHERE email = 'rachael@foundry.health';
+UPDATE "Person" SET email = 'alejandro.rosales@foundry.health' WHERE email = 'alejandro@foundry.health';
+UPDATE "Person" SET email = 'adrian.aurrecoechea@foundry.health' WHERE email = 'adrian@foundry.health';
+UPDATE "Person" SET email = 'matt.byers@foundry.health'       WHERE email = 'matt@foundry.health';
+UPDATE "Person" SET email = 'abbi.linghanathan@foundry.health' WHERE email = 'abbi@foundry.health';
+UPDATE "Person" SET email = 'jas.navarro@foundry.health'      WHERE email = 'jas@foundry.health';
+UPDATE "Person" SET email = 'sohyb.basir@foundry.health'      WHERE email = 'sohyb@foundry.health';
+UPDATE "Person" SET email = 'simone.sandler@foundry.health'   WHERE email = 'simone@foundry.health';
+UPDATE "Person" SET email = 'jackie.rabec@foundry.health'     WHERE email = 'jackie@foundry.health';
+UPDATE "Person" SET email = 'garang.dut@foundry.health'       WHERE email = 'garang@foundry.health';
+UPDATE "Person" SET email = 'bharat.ramakrishna@foundry.health' WHERE email = 'bharat@foundry.health';
+UPDATE "Person" SET email = 'rahul.gandhi@foundry.health'     WHERE email = 'rahul@foundry.health';
+UPDATE "Person" SET email = 'sarah.ravindran@foundry.health'  WHERE email = 'sarah@foundry.health';
+UPDATE "Person" SET email = 'kevin.mao@foundry.health'        WHERE email = 'kevin@foundry.health';
+UPDATE "Person" SET email = 'ingrid.maravilla@foundry.health' WHERE email = 'ingrid@foundry.health';
+UPDATE "Person" SET email = 'haram.hwang@foundry.health'      WHERE email = 'haram@foundry.health';
+UPDATE "Person" SET email = 'julia.maguire@foundry.health'    WHERE email = 'julia@foundry.health';
+UPDATE "Person" SET email = 'akhila.annamreddi@foundry.health' WHERE email = 'akhila@foundry.health';
+UPDATE "Person" SET email = 'sanjay.hettige@foundry.health'   WHERE email = 'sanjay@foundry.health';
+UPDATE "Person" SET email = 'lucas.hu@foundry.health'         WHERE email = 'lucas@foundry.health';
+UPDATE "Person" SET email = 'allen.xiao@foundry.health'       WHERE email = 'allen@foundry.health';
+UPDATE "Person" SET email = 'josh.ting@foundry.health'        WHERE email = 'josh@foundry.health';
+UPDATE "Person" SET email = 'lucas.tan@foundry.health'        WHERE email = 'lucast@foundry.health';
+UPDATE "Person" SET email = 'jacky.chen@foundry.health'       WHERE email = 'jacky@foundry.health';
+UPDATE "Person" SET email = 'esther.lee@foundry.health'       WHERE email = 'esther@foundry.health';
+UPDATE "Person" SET email = 'harry.lee@foundry.health'        WHERE email = 'harry@foundry.health';
+UPDATE "Person" SET email = 'henry.luo@foundry.health'        WHERE email = 'henry@foundry.health';
+UPDATE "Person" SET email = 'angela.pan@foundry.health'       WHERE email = 'angela@foundry.health';
+UPDATE "Person" SET email = 'palash.trivedi@foundry.health'   WHERE email = 'palash@foundry.health';
+UPDATE "Person" SET email = 'xiaohan.qian@foundry.health'     WHERE email = 'xiaohan@foundry.health';
+UPDATE "Person" SET email = 'mark.liu@foundry.health'         WHERE email = 'markliu@foundry.health';
+UPDATE "Person" SET email = 'shea.laws@foundry.health'        WHERE email = 'shea@foundry.health';
+```
+
 ### TASK-210 — Bulk CSV import: personnel + timesheets (office manager self-serve)
 **status:** done
 **depends on:** TASK-021, TASK-023

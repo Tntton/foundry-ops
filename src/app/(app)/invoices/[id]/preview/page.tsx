@@ -370,7 +370,7 @@ export default async function InvoicePreviewPage({
           <div className="mt-6 text-[11px] text-ink-3">
             Please forward remittance receipts to{' '}
             <span className="text-ink">finance@foundry.health</span> cc{' '}
-            <span className="text-ink">jas@foundry.health</span>.
+            <span className="text-ink">jas.navarro@foundry.health</span>.
           </div>
           <div className="mt-1 text-[11px] text-ink-3">
             Questions concerning this invoice — contact{' '}

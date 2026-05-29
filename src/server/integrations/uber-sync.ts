@@ -18,9 +18,10 @@ import {
  * lands them as Foundry **Bill** rows (firm-paid AP), with the
  * rider in `attributedToPersonId` for utilisation reporting. Same
  * pattern as Navan; the rider email matcher (`resolveTravellerByEmail`)
- * is reused so `julia.maguire@foundry.health` (Uber's full-form
- * convention) resolves to the short-alias `julia@foundry.health` in
- * Foundry's Person table.
+ * is reused so the literal `julia.maguire@foundry.health` (the canonical
+ * convention on both sides) hits directly. For the three full partners
+ * who use a first-name-only short alias on the Foundry side, the matcher
+ * falls back to `trung.ton@` → `trung@` before giving up.
  *
  * Idempotency: each Bill's `supplierInvoiceNumber` is set to
  * `uber:trip:<trip_id>` so a re-run is a no-op.

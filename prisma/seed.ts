@@ -183,7 +183,7 @@ async function seedTeam() {
     // track for utilisation. Hard-coded to the founders + lead
     // consultant for now; the user can toggle others via the directory
     // later.
-    const isStaff = ['trung@foundry.health', 'matt@foundry.health', 'sarah@foundry.health'].includes(
+    const isStaff = ['trung@foundry.health', 'matt.byers@foundry.health', 'sarah.ravindran@foundry.health'].includes(
       email.toLowerCase(),
     );
     await prisma.person.create({

@@ -96,14 +96,14 @@ type LandResult = 'imported' | 'skipped' | 'unmatched';
 /**
  * Resolve a Navan-supplied traveller email to a Foundry Person.
  *
- * Navan provisions travellers under the firm's full email convention
- * (`firstname.lastname@foundry.health`) but Foundry's Person table uses
- * the short alias (`firstname@foundry.health`). We try the literal
- * email first; if that misses and the local-part contains a dot, we
- * also try the pre-dot fragment on the same domain. This is the safe
- * direction: short-alias → full-name is ambiguous (two Sarahs), but
- * full-name → short-alias collapses cleanly because the convention is
- * "first name owns the short alias unless explicitly overridden".
+ * Navan + Foundry both use `firstname.lastname@foundry.health` for the
+ * vast majority of staff, so the literal lookup hits directly. The
+ * exception is the three full partners (Trung / Michael / Chris), who
+ * use first-name-only addresses (`trung@`, `michael@`, `chris@`) on the
+ * Foundry side — Navan will send the full-form (`trung.ton@`) for them.
+ * The pre-dot fallback below handles that case: if the literal misses
+ * and the local-part contains a dot, we also try the pre-dot fragment
+ * on the same domain.
  *
  * Exported so the CSV importer (and any future Navan-shaped feed) can
  * share the same resolution path.
@@ -118,10 +118,12 @@ export async function resolveTravellerByEmail(email: string): Promise<{
     select: { id: true },
   });
   if (direct) return direct;
-  // Aliased lookup: strip everything between the first dot and the @
-  // (so `julia.maguire@foundry.health` → `julia@foundry.health`).
-  // Skip when the email doesn't fit the pattern — no dot in local part,
-  // or no @ — to avoid surprising matches on legitimate emails.
+  // Partner-only fallback: strip everything between the first dot and
+  // the @ (so `trung.ton@foundry.health` → `trung@foundry.health`).
+  // Only the three full partners use a short alias on the Foundry side;
+  // everyone else's literal lookup above already hit. Skip when the
+  // email doesn't fit the pattern (no dot in local part, no @) to
+  // avoid surprising matches on legitimate emails.
   const at = lower.indexOf('@');
   if (at <= 0) return null;
   const local = lower.slice(0, at);
