@@ -926,7 +926,8 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [x] Fixtures + seed updated: `prisma/fixtures/team.json`, `foundry-team.jsx`, `prisma/seed.ts` `isStaff` array reflect the new convention (3 partners keep `trung@` / `michael@` / `chris@`, everyone else is `firstname.lastname@`, Rachael explicitly `rachael.spooner@`)
 - [x] Invoice preview footer hardcode `jas@foundry.health` → `jas.navarro@foundry.health`
 - [x] Integration sync comments (navan-sync, uber-sync) reflect the new convention — fallback is now partner-only (`trung.ton@` → `trung@`), not the general rule
-- [ ] Production DB UPDATE statement run against Supabase to rename every Person.email except the three partners — see below for the SQL
+- [x] Migration script shipped at [scripts/migrate_emails.ts](scripts/migrate_emails.ts) with `pnpm migrate:emails` (`--dry` flag for preview). Idempotent, single transaction, writes one `bulk_email_migrate` AuditEvent. Collision-safe (refuses to run if a target email is already taken by a different person).
+- [ ] Run `pnpm migrate:emails --dry` against staging, eyeball the diff, then run without --dry against prod (with DB backup taken first)
 - [ ] M365 / Entra: existing user-principal-names migrated to match (`will@foundry.health` → `will.macdonald@foundry.health`); old addresses kept as aliases until end of FY26 so existing emails in transit still reach the inbox
 - [ ] Xero contact emails updated to match (only relevant for contractors that bill Foundry)
 - [ ] Resend / WhatsApp / DocuSign — any saved templates that hardcode an `@foundry.health` address audited and patched
