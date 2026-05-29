@@ -17,7 +17,7 @@ const RATE_UNITS = [
   { v: 'day' as const, label: 'Daily' },
   { v: 'hour' as const, label: 'Hourly' },
 ];
-const ROLES = ['super_admin', 'admin', 'partner', 'manager', 'staff'] as const;
+const ROLES = ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'] as const;
 
 export function NewPersonForm({
   provisioningOn,

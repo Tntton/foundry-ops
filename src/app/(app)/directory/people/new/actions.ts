@@ -39,7 +39,7 @@ const NewPersonSchema = z.object({
     .max(40)
     .optional()
     .nullable(),
-  band: z.enum(['MP', 'Partner', 'Associate_Partner', 'Expert', 'Consultant', 'Analyst']),
+  band: z.enum(['MP', 'Partner', 'Associate_Partner', 'Expert', 'Consultant', 'Analyst', 'Support_Staff']),
   level: z.string().trim().min(1).max(10),
   employment: z.enum(['ft', 'contractor']),
   fte: z.coerce.number().min(0.1).max(1.0),
@@ -47,7 +47,7 @@ const NewPersonSchema = z.object({
   rateUnit: z.enum(['hour', 'day']),
   rateDollars: z.coerce.number().min(0).max(10_000),
   startDate: z.coerce.date(),
-  roles: z.array(z.enum(['super_admin', 'admin', 'partner', 'manager', 'staff'])),
+  roles: z.array(z.enum(['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'])),
   jobTitle: z.string().trim().max(120).optional().nullable(),
 });
 

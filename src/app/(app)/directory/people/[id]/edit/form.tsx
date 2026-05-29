@@ -20,7 +20,7 @@ const RATE_UNITS: Array<{ value: 'hour' | 'day'; label: string }> = [
   { value: 'hour', label: 'Hourly' },
   { value: 'day', label: 'Daily' },
 ];
-const ROLES: Role[] = ['super_admin', 'admin', 'partner', 'manager', 'staff'];
+const ROLES: Role[] = ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'];
 
 export function PersonEditForm({
   person,

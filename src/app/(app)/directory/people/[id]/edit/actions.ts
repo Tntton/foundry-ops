@@ -23,7 +23,7 @@ const PersonEdit = z
       .max(40)
       .optional()
       .nullable(),
-    band: z.enum(['MP', 'Partner', 'Associate_Partner', 'Expert', 'Consultant', 'Analyst']),
+    band: z.enum(['MP', 'Partner', 'Associate_Partner', 'Expert', 'Consultant', 'Analyst', 'Support_Staff']),
     level: z.string().trim().min(1).max(10),
     employment: z.enum(['ft', 'contractor']),
     // FTE only meaningful for full-time non-partners; contractors + partners
@@ -57,7 +57,7 @@ const PersonEdit = z
       .or(z.literal('').transform(() => null))
       .nullable(),
     roles: z
-      .array(z.enum(['super_admin', 'admin', 'partner', 'manager', 'staff']))
+      .array(z.enum(['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff']))
       .min(1, 'At least one role required'),
   });
 
