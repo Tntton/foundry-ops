@@ -169,6 +169,46 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return true;
         }
 
+        // Short-alias fallback (TASK-211 transition). The firm is mid-migration
+        // from `firstname@foundry.health` → `firstname.lastname@foundry.health`.
+        // M365 UPNs may flip ahead of the DB rename, in which case Entra sends
+        // the new full-form email but the Person row still sits under the short
+        // alias. Try that lookup BEFORE creating a new row so the user lands
+        // on their existing record (with their real roles) instead of a fresh
+        // empty placeholder.
+        //
+        // Only attempts the fallback when:
+        //   - the email contains a dot in the local part (i.e. is the full form), AND
+        //   - the entraUserId matches the candidate row OR the row has no entraUserId yet
+        // so a stranger's `john.smith@foundry.health` can't hijack `john@foundry.health`.
+        const at = email.indexOf('@');
+        const localPart = at > 0 ? email.slice(0, at) : '';
+        const dot = localPart.indexOf('.');
+        if (dot > 0) {
+          const aliased = `${localPart.slice(0, dot)}@${email.slice(at + 1)}`;
+          const aliasedRow = await prisma.person.findUnique({ where: { email: aliased } });
+          if (aliasedRow) {
+            const safeMatch =
+              !aliasedRow.entraUserId || aliasedRow.entraUserId === entraUserId;
+            if (safeMatch) {
+              await prisma.person.update({
+                where: { id: aliasedRow.id },
+                data: {
+                  email,
+                  ...(entraUserId ? { entraUserId } : {}),
+                },
+              });
+              console.info(
+                `[auth/signIn] migrated short-alias Person ${aliased} → ${email}`,
+              );
+              return true;
+            }
+            console.warn(
+              `[auth/signIn] short-alias ${aliased} exists but entraUserId mismatch — not auto-migrating; will create new row`,
+            );
+          }
+        }
+
         // First-time sign-in — create a minimal Person row. Admin refines via
         // Directory wizard (TASK-021/022/023); roles populated by TASK-005 from
         // Entra group membership.
