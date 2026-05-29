@@ -18,6 +18,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { SortablePill } from '@/components/sortable-th';
 
 function formatMoney(cents: number): string {
   if (cents === 0) return '—';
@@ -35,12 +36,28 @@ const STAGE_VARIANT: Record<string, 'amber' | 'green' | 'blue' | 'outline'> = {
   archived: 'outline',
 };
 
-export default async function ContractorsPage() {
+export default async function ContractorsPage({
+  searchParams,
+}: {
+  searchParams: { sort?: string; dir?: string };
+}) {
   const session = await getSession();
   if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
   const canCreate = hasCapability(session, 'person.create');
 
-  const rows = await listContractors();
+  const all = await listContractors();
+  type ContractorSortKey = 'name' | 'hoursLogged' | 'timesheetCostCents' | 'billsPaidCents';
+  const VALID: readonly ContractorSortKey[] = ['name','hoursLogged','timesheetCostCents','billsPaidCents'];
+  const sortKey = VALID.includes(searchParams.sort as ContractorSortKey)
+    ? (searchParams.sort as ContractorSortKey)
+    : null;
+  const dir = searchParams.dir === 'desc' ? -1 : 1;
+  const rows = sortKey
+    ? [...all].sort((a, b) => {
+        if (sortKey === 'name') return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`) * dir;
+        return ((a[sortKey] as number) - (b[sortKey] as number)) * dir;
+      })
+    : all;
   const activeRows = rows.filter((r) => r.active);
   const totals = rows.reduce(
     (acc, r) => ({
@@ -103,6 +120,16 @@ export default async function ContractorsPage() {
             sub="hrs × current rate"
           />
           <TotalCard label="Bills paid" value={formatMoney(totals.billsPaid)} sub="approved / paid" />
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 px-1 text-[11px]">
+          <span className="text-ink-3">Sort:</span>
+          <SortablePill sortKey="name">Name</SortablePill>
+          <SortablePill sortKey="hoursLogged">Hours</SortablePill>
+          <SortablePill sortKey="timesheetCostCents">Timesheet cost</SortablePill>
+          <SortablePill sortKey="billsPaidCents">Bills paid</SortablePill>
         </div>
       )}
 

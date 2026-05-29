@@ -7,6 +7,7 @@ import { listClients } from '@/server/clients';
 import { listClientRoster } from '@/server/client-roster';
 import { ClientRosterSection } from '@/components/client-roster-section';
 import { ClientLogo } from '@/components/client-logo';
+import { SortablePill } from '@/components/sortable-th';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -40,7 +41,7 @@ const STAGE_VARIANT: Record<string, 'amber' | 'green' | 'blue' | 'outline'> = {
 export default async function ClientsPage({
   searchParams,
 }: {
-  searchParams: { q?: string; deleted?: string; archived?: string };
+  searchParams: { q?: string; deleted?: string; archived?: string; sort?: string; dir?: string };
 }) {
   const session = await getSession();
   if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
@@ -49,7 +50,20 @@ export default async function ClientsPage({
   const q = searchParams.q ?? '';
   const deletedFlag = searchParams.deleted === '1';
   const showArchived = searchParams.archived === '1';
-  const rows = await listClients(q, { includeArchived: showArchived });
+  const all = await listClients(q, { includeArchived: showArchived });
+  type ClientSortKey = 'legalName' | 'code' | 'activeProjects' | 'contractValueCents' | 'invoicedCents' | 'paidCents' | 'arOutstandingCents';
+  const VALID: readonly ClientSortKey[] = ['legalName','code','activeProjects','contractValueCents','invoicedCents','paidCents','arOutstandingCents'];
+  const sortKey = VALID.includes(searchParams.sort as ClientSortKey)
+    ? (searchParams.sort as ClientSortKey)
+    : null;
+  const dir = searchParams.dir === 'desc' ? -1 : 1;
+  const rows = sortKey
+    ? [...all].sort((a, b) => {
+        if (sortKey === 'legalName') return a.legalName.localeCompare(b.legalName) * dir;
+        if (sortKey === 'code') return a.code.localeCompare(b.code) * dir;
+        return ((a[sortKey] as number) - (b[sortKey] as number)) * dir;
+      })
+    : all;
   // Active client roster — moved here from /directory (people tab).
   // Source includes BD + project signals over the last 365 days; we
   // filter dormant rows out for this view (operator can flip
@@ -169,6 +183,19 @@ export default async function ClientsPage({
           </Link>
         </div>
       </form>
+
+      {/* Sort strip — mirrors the table column-header sort pattern for
+          card layouts. Click a pill to toggle ascending/descending. */}
+      <div className="flex flex-wrap items-center gap-1.5 px-1 text-[11px]">
+        <span className="text-ink-3">Sort:</span>
+        <SortablePill sortKey="legalName">Name</SortablePill>
+        <SortablePill sortKey="code">Code</SortablePill>
+        <SortablePill sortKey="activeProjects">Active projects</SortablePill>
+        <SortablePill sortKey="contractValueCents">Contract value</SortablePill>
+        <SortablePill sortKey="invoicedCents">Invoiced</SortablePill>
+        <SortablePill sortKey="paidCents">Paid</SortablePill>
+        <SortablePill sortKey="arOutstandingCents">AR open</SortablePill>
+      </div>
 
       {rows.length === 0 ? (
         <Card className="p-12 text-center text-sm text-ink-3">

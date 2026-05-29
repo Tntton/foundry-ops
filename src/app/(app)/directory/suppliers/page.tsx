@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CompanyLogo } from '@/components/company-logo';
+import { SortableTh } from '@/components/sortable-th';
 
 function formatMoney(cents: number): string {
   if (cents === 0) return '—';
@@ -25,11 +26,33 @@ function formatMoney(cents: number): string {
   }).format(cents / 100);
 }
 
-export default async function SuppliersPage() {
+type SuppliersSortKey = 'name' | 'billCount' | 'totalPaidCents' | 'unpaidCents' | 'lastBillDate';
+
+export default async function SuppliersPage({
+  searchParams,
+}: {
+  searchParams: { sort?: string; dir?: string };
+}) {
   const session = await getSession();
   if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
 
-  const rows = await listSuppliers();
+  const all = await listSuppliers();
+  const VALID: readonly SuppliersSortKey[] = ['name','billCount','totalPaidCents','unpaidCents','lastBillDate'];
+  const sortKey = VALID.includes(searchParams.sort as SuppliersSortKey)
+    ? (searchParams.sort as SuppliersSortKey)
+    : null;
+  const dir = searchParams.dir === 'desc' ? -1 : 1;
+  const rows = sortKey
+    ? [...all].sort((a, b) => {
+        if (sortKey === 'name') return a.name.localeCompare(b.name) * dir;
+        if (sortKey === 'lastBillDate') {
+          const av = a.lastBillDate?.getTime() ?? 0;
+          const bv = b.lastBillDate?.getTime() ?? 0;
+          return (av - bv) * dir;
+        }
+        return ((a[sortKey] as number) - (b[sortKey] as number)) * dir;
+      })
+    : all;
   const totals = rows.reduce(
     (acc, s) => ({
       suppliers: acc.suppliers + 1,
@@ -160,12 +183,12 @@ function SupplierSection({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Supplier</TableHead>
+                <SortableTh sortKey="name">Supplier</SortableTh>
                 <TableHead>Categories</TableHead>
-                <TableHead className="text-right">Bills</TableHead>
-                <TableHead className="text-right">Paid</TableHead>
-                <TableHead className="text-right">Unpaid</TableHead>
-                <TableHead>Last bill</TableHead>
+                <SortableTh sortKey="billCount" className="text-right" align="right">Bills</SortableTh>
+                <SortableTh sortKey="totalPaidCents" className="text-right" align="right">Paid</SortableTh>
+                <SortableTh sortKey="unpaidCents" className="text-right" align="right">Unpaid</SortableTh>
+                <SortableTh sortKey="lastBillDate">Last bill</SortableTh>
               </TableRow>
             </TableHeader>
             <TableBody>
