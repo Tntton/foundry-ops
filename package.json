@@ -20,8 +20,8 @@
     "prisma:validate": "DATABASE_URL=postgresql://placeholder:placeholder@localhost:5432/placeholder DIRECT_URL=postgresql://placeholder:placeholder@localhost:5432/placeholder prisma validate --schema=prisma/schema.prisma",
     "db:seed": "tsx prisma/seed.ts",
     "db:reset": "prisma migrate reset --force --schema=prisma/schema.prisma",
-    "migrate:emails": "tsx scripts/migrate_emails.ts",
-    "merge:aliases": "tsx scripts/merge_alias_duplicates.ts",
+    "migrate:emails": "tsx --env-file=.env.local scripts/migrate_emails.ts",
+    "merge:aliases": "tsx --env-file=.env.local scripts/merge_alias_duplicates.ts",
     "postinstall": "prisma generate --schema=prisma/schema.prisma"
   },
   "prisma": {
