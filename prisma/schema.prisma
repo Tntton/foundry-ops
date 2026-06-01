@@ -51,6 +51,61 @@ enum Role {
   staff
 }
 
+// In-app feedback / feature-request / bug-report tickets. Captured
+// from a floating popup available to every signed-in user. Triage
+// happens at /admin/feedback (super_admin + admin) and via Claude
+// in autonomous sessions — open tickets are surfaced for review and
+// any code/UX response runs through TT for approval before action.
+enum FeedbackUrgency {
+  critical   // needs a solution now (blocks pilot users)
+  urgent     // needs a solution in a few days
+  routine    // suggestion / nice-to-have for future updates
+}
+
+enum FeedbackKind {
+  bug
+  feature
+  maintenance
+  other
+}
+
+enum FeedbackStatus {
+  open            // new — not yet triaged by Claude or TT
+  triaged         // Claude has assessed + proposed a path; pending TT approval
+  approved        // TT approved; work to start
+  in_progress     // implementation under way (linked to a commit/PR)
+  resolved        // shipped + verified
+  declined        // TT declined the request
+  duplicate       // merged into another ticket
+}
+
+model FeedbackTicket {
+  id           String          @id @default(cuid())
+  submitterId  String
+  submitter    Person          @relation("FeedbackSubmitter", fields: [submitterId], references: [id])
+  urgency      FeedbackUrgency
+  kind         FeedbackKind    @default(other)
+  title        String
+  body         String          @db.Text
+  // Optional URL the user was on when they submitted — useful
+  // context for triage.
+  contextPath  String?
+  status       FeedbackStatus  @default(open)
+  // Notes from Claude's triage / TT's decision. Append-only via the
+  // admin page; not rendered to submitter.
+  triageNotes  String?         @db.Text
+  // Stamp set when TT approves or declines.
+  decidedAt    DateTime?
+  // Person who approved/declined (super_admin only).
+  decidedById  String?
+  decidedBy    Person?         @relation("FeedbackDecider", fields: [decidedById], references: [id])
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([status, urgency])
+  @@index([submitterId])
+}
+
 enum Band {
   MP
   Partner
@@ -400,6 +455,8 @@ model Person {
   dealsOwned       Deal[]      @relation("DealOwner")
   dealsSecondary   Deal[]      @relation("DealSecondaryOwner")
   auditEvents      AuditEvent[]  @relation("AuditActor")
+  feedbackSubmitted FeedbackTicket[] @relation("FeedbackSubmitter")
+  feedbackDecided   FeedbackTicket[] @relation("FeedbackDecider")
   availabilityEntries AvailabilityForecast[]
   partnerContributions ProjectPartnerContribution[]
   educationEntries  EducationEntry[]

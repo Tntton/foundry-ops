@@ -332,6 +332,14 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         roles: ['super_admin'],
       },
       {
+        // In-app feedback queue. Every signed-in user submits via the
+        // floating widget; super_admin + admin triage here.
+        label: 'Feedback',
+        href: '/admin/feedback',
+        icon: Inbox,
+        roles: ['super_admin', 'admin'],
+      },
+      {
         // At-a-glance health of every integration + core service.
         // Sources from the same SystemHealth helper the /healthz
         // endpoint uses, so monitoring + UI never drift apart.
