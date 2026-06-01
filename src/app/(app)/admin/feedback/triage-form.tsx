@@ -132,7 +132,7 @@ export function TriageForm({
           for all tickets so the analysis is captured early. */}
       <div>
         <label className="mb-0.5 block text-[10px] uppercase tracking-wide text-ink-3">
-          Triage notes (what's the assessment / proposed action)
+          Triage notes (assessment / proposed action)
         </label>
         <textarea
           value={notes}
