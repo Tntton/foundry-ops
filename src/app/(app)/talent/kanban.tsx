@@ -7,6 +7,7 @@ import type { RecruitTargetBand, RecruitStatus } from '@prisma/client';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { moveRecruit, type MoveRecruitState } from './actions';
+import { KanbanQuickAdd, type QuickAddOwner } from './kanban-quick-add';
 
 /**
  * Talent kanban — drag-and-drop column-per-stage view. Mirrors the
@@ -84,9 +85,20 @@ type OptimisticPatch = { id: string; toStage: StageColumn };
 export function TalentKanban({
   cards,
   canMove,
+  canCreate,
+  owners,
+  defaultOwnerId,
 }: {
   cards: TalentKanbanCard[];
   canMove: boolean;
+  /** Whether the viewer can create prospects. Hides the inline
+   *  quick-add when false. */
+  canCreate: boolean;
+  /** Active people available as FH responsible contacts on the
+   *  inline quick-add. Server passes the full active roster. */
+  owners: QuickAddOwner[];
+  /** Default owner pre-selected on the picker — the logged-in admin. */
+  defaultOwnerId: string;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -160,6 +172,13 @@ export function TalentKanban({
             cards={grouped[stage]}
             canMove={canMove}
             onDrop={handleDrop}
+            // Inline quick-add only on Screening — new prospects
+            // always start there.
+            quickAdd={
+              stage === 'screening' && canCreate
+                ? { owners, defaultOwnerId }
+                : null
+            }
           />
         ))}
       </div>
@@ -172,11 +191,13 @@ function KanbanColumn({
   cards,
   canMove,
   onDrop,
+  quickAdd,
 }: {
   stage: StageColumn;
   cards: TalentKanbanCard[];
   canMove: boolean;
   onDrop: (cardId: string, toStage: StageColumn) => void;
+  quickAdd: { owners: QuickAddOwner[]; defaultOwnerId: string } | null;
 }) {
   const [hovering, setHovering] = useState(false);
   const isNixed = stage === 'nixed';
@@ -224,6 +245,12 @@ function KanbanColumn({
         {cards.map((card) => (
           <KanbanCard key={card.id} card={card} canMove={canMove} />
         ))}
+        {quickAdd && (
+          <KanbanQuickAdd
+            owners={quickAdd.owners}
+            defaultOwnerId={quickAdd.defaultOwnerId}
+          />
+        )}
       </div>
     </div>
   );

@@ -132,6 +132,9 @@ const QuickAddSchema = z.object({
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
   targetBand: TARGET_BAND_ENUM,
+  /** Optional override for the FH responsible contact (owner). Falls
+   *  back to the logged-in admin when not provided. */
+  ownerId: z.string().min(1).optional(),
 });
 
 export type QuickAddState =
@@ -162,10 +165,12 @@ export async function createRecruitQuick(
   } catch {
     return { status: 'error', message: 'Not authorized' };
   }
+  const ownerRaw = formData.get('ownerId');
   const parsed = QuickAddSchema.safeParse({
     firstName: formData.get('firstName'),
     lastName: formData.get('lastName'),
     targetBand: formData.get('targetBand'),
+    ownerId: typeof ownerRaw === 'string' && ownerRaw.trim() ? ownerRaw : undefined,
   });
   if (!parsed.success) {
     return {
@@ -173,7 +178,7 @@ export async function createRecruitQuick(
       message: parsed.error.issues[0]?.message ?? 'Invalid name',
     };
   }
-  const { firstName, lastName, targetBand } = parsed.data;
+  const { firstName, lastName, targetBand, ownerId } = parsed.data;
 
   try {
     const recruit = await prisma.$transaction(async (tx) => {
@@ -182,10 +187,10 @@ export async function createRecruitQuick(
           firstName,
           lastName,
           targetBand,
-          // Owner defaults to the logged-in admin; admin can re-
-          // assign via the detail page if a different partner is
-          // driving this prospect.
-          ownerId: session!.person.id,
+          // Owner: caller-supplied (FH responsible contact picked
+          // from the inline picker) or fall back to the logged-in
+          // admin. Admin can still re-assign via the detail page.
+          ownerId: ownerId ?? session!.person.id,
           status: 'active',
         },
       });

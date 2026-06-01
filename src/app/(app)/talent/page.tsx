@@ -9,6 +9,8 @@ import {
 } from '@/server/recruits';
 import { Button } from '@/components/ui/button';
 import { TalentKanban, type TalentKanbanCard } from './kanban';
+import { prisma } from '@/server/db';
+import type { QuickAddOwner } from './kanban-quick-add';
 
 /**
  * Recruitment pipeline — kanban tracker for prospective hires. Super-
@@ -23,7 +25,18 @@ export default async function RecruitsPage() {
   const session = await getSession();
   if (!session || !hasCapability(session, 'recruit.manage')) notFound();
 
-  const board = await getRecruitBoard();
+  const [board, ownersRaw] = await Promise.all([
+    getRecruitBoard(),
+    // FH responsible-contact picklist for the inline quick-add.
+    // Limit to active staff/partners — contractors and ended people
+    // shouldn't be owning prospects in the pipeline.
+    prisma.person.findMany({
+      where: { endDate: null, employment: 'ft' },
+      orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
+      select: { id: true, initials: true, firstName: true, lastName: true },
+    }),
+  ]);
+  const owners: QuickAddOwner[] = ownersRaw;
 
   // Flatten the server-shape (band-grouped + nixed list) into the flat
   // card list the client kanban expects. The client component handles
@@ -70,7 +83,13 @@ export default async function RecruitsPage() {
         </Button>
       </header>
 
-      <TalentKanban cards={cards} canMove={true} />
+      <TalentKanban
+        cards={cards}
+        canMove={true}
+        canCreate={true}
+        owners={owners}
+        defaultOwnerId={session.person.id}
+      />
     </div>
   );
 }
