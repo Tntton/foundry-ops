@@ -15,6 +15,15 @@ const optionalDate = z
 
 const ProjectEditSchema = z
   .object({
+    // Code is editable so a project can be re-coded mid-flight —
+    // e.g. a client engagement that gets pulled becomes an internal
+    // FHP project. Uppercase letters / digits / hyphens, 3–16 chars.
+    code: z
+      .string()
+      .trim()
+      .min(3, 'Code must be 3–16 chars')
+      .max(16, 'Code must be 3–16 chars')
+      .regex(/^[A-Z0-9-]+$/, 'Code must be uppercase letters, digits, hyphens'),
     name: z.string().trim().min(3).max(200),
     description: z.string().trim().max(2000).optional().nullable(),
     stage: z.enum(['kickoff', 'delivery', 'closing', 'archived']),
@@ -67,6 +76,7 @@ export async function updateProject(
   }
 
   const parsed = ProjectEditSchema.safeParse({
+    code: (formData.get('code') as string | null)?.toUpperCase(),
     name: formData.get('name'),
     description: formData.get('description') || null,
     stage: formData.get('stage'),
@@ -97,12 +107,34 @@ export async function updateProject(
     return { status: 'error', message: 'Only project leadership / admin can edit settings.' };
   }
 
+  // Code-change check — uniqueness across all projects. Only super_admin /
+  // admin can rename the code (it's load-bearing for invoices, time entries,
+  // SharePoint folders etc., so we don't want partners renaming under us).
+  const codeChanged = data.code !== existing.code;
+  if (codeChanged) {
+    if (!canAll) {
+      return {
+        status: 'error',
+        message: 'Only super_admin / admin can rename a project code.',
+      };
+    }
+    const collision = await prisma.project.findUnique({ where: { code: data.code } });
+    if (collision && collision.id !== projectId) {
+      return {
+        status: 'error',
+        message: `Code "${data.code}" is already taken by ${collision.name}.`,
+        fieldErrors: { code: 'Already in use' },
+      };
+    }
+  }
+
   const contractValue = Math.round(data.contractValueDollars * 100);
   const actualEndDate = data.actualEndDate instanceof Date ? data.actualEndDate : null;
   const startDate = data.startDate instanceof Date ? data.startDate : null;
   const endDate = data.endDate instanceof Date ? data.endDate : null;
 
   const before = {
+    code: existing.code,
     name: existing.name,
     description: existing.description,
     stage: existing.stage,
@@ -116,6 +148,7 @@ export async function updateProject(
     defaultExpensesRebillable: existing.defaultExpensesRebillable,
   };
   const after = {
+    code: data.code,
     name: data.name,
     description: data.description,
     stage: data.stage,
@@ -134,6 +167,7 @@ export async function updateProject(
       await tx.project.update({
         where: { id: projectId },
         data: {
+          code: data.code,
           name: data.name,
           description: data.description,
           stage: data.stage,
@@ -161,5 +195,6 @@ export async function updateProject(
 
   revalidatePath('/projects');
   revalidatePath(`/projects/${existing.code}`);
-  redirect(`/projects/${existing.code}`);
+  if (codeChanged) revalidatePath(`/projects/${data.code}`);
+  redirect(`/projects/${data.code}`);
 }

@@ -107,8 +107,19 @@ export function ProjectSettingsForm({
       )}
 
       <Section title="Identity">
-        <Field label="Code (read-only)">
-          <Input defaultValue={project.code} disabled className="font-mono" />
+        <Field
+          label="Code"
+          error={errs['code']}
+          hint="Renaming changes URLs + how invoices/timesheets refer to the project. Use cautiously. Admin-only."
+        >
+          <Input
+            name="code"
+            defaultValue={project.code}
+            required
+            pattern="[A-Z0-9-]{3,16}"
+            className="font-mono uppercase"
+            style={{ textTransform: 'uppercase' }}
+          />
         </Field>
         <Field label="Name" error={errs['name']}>
           <Input name="name" defaultValue={project.name} required />
