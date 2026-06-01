@@ -152,6 +152,12 @@ export default async function BdPipelinePage({
         </div>
         <div className="flex items-center gap-2">
           <CommercialsToggle visible={commercialsVisible} path="/bd" />
+          <Link
+            href="/bd/outcomes"
+            className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+          >
+            Outcomes →
+          </Link>
           <a
             href={`/api/reports/deals${buildQs({ q, stage })}`}
             className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"

@@ -912,6 +912,11 @@ model Deal {
   archivedAt         DateTime?
   convertedProjectId String?   @unique
   notes              String?   @db.Text
+  // Strategic takeaway / lessons learned — feeds the BD outcomes
+  // review at /bd/outcomes. For lost deals: why we lost + what to
+  // try next time. For won deals: what worked, key reason we won,
+  // signal to pattern-match on.
+  lessonsLearned     String?   @db.Text
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
