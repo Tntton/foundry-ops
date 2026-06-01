@@ -34,6 +34,8 @@ import { listLeaderPendingActions } from '@/server/leader-actions';
 import { LatestUpdatesCard } from './dashboard/latest-updates-card';
 import { StaffActionStrip } from './dashboard/staff-action-strip';
 import { LeaderActionStrip } from './dashboard/leader-action-strip';
+import { FeedbackPipelineCardView } from './dashboard/feedback-pipeline-card';
+import { getFeedbackPipeline } from '@/server/feedback';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -111,6 +113,7 @@ export default async function DashboardPage({
     leaderPayload,
     myUpdates,
     staffProjects,
+    feedbackPipeline,
   ] = await Promise.all([
     computeManagerDashboard(session, scope),
     canSeeAllFirm ? computeBudgetWatch() : Promise.resolve(null),
@@ -120,6 +123,7 @@ export default async function DashboardPage({
     isLeader ? listLeaderPendingActions(session) : Promise.resolve(null),
     listUserUpdates(session.person.id, 30),
     isLeader ? Promise.resolve([] as ProjectListRow[]) : listProjects(session, { active: true }),
+    isAdmin ? getFeedbackPipeline() : Promise.resolve(null),
   ]) as [
     ManagerDashboard,
     BudgetWatch | null,
@@ -129,6 +133,7 @@ export default async function DashboardPage({
     Awaited<ReturnType<typeof listLeaderPendingActions>> | null,
     Awaited<ReturnType<typeof listUserUpdates>>,
     ProjectListRow[],
+    Awaited<ReturnType<typeof getFeedbackPipeline>> | null,
   ];
   const canDraftInvoices = hasCapability(session, 'invoice.create');
 
@@ -232,6 +237,13 @@ export default async function DashboardPage({
       )}
 
       <LatestUpdatesCard updates={myUpdates} />
+
+      {/* Admin-only: feedback pipeline summary so TT can scan
+          pending decisions + recently shipped tickets without
+          leaving the dashboard. */}
+      {isAdmin && feedbackPipeline && (
+        <FeedbackPipelineCardView pipeline={feedbackPipeline} />
+      )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="space-y-6">
