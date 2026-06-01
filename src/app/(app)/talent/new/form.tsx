@@ -12,6 +12,7 @@ const TARGET_BAND_OPTIONS = [
   { value: 'senior_leader', label: 'Senior Leader (Partner / AP / MP tier)' },
   { value: 'expert', label: 'Expert' },
   { value: 'fellow', label: 'Fellow' },
+  { value: 'manager', label: 'Manager (delivery management — PM / Senior Manager)' },
   { value: 'consultant', label: 'Consultant' },
   { value: 'analyst', label: 'Analyst' },
 ] as const;

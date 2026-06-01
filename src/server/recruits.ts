@@ -17,6 +17,7 @@ export const TARGET_BAND_LABELS: Record<RecruitTargetBand, string> = {
   senior_leader: 'Senior Leaders',
   expert: 'Experts',
   fellow: 'Fellows',
+  manager: 'Managers',
   consultant: 'Consultants',
   analyst: 'Analysts',
 };
@@ -28,6 +29,7 @@ export const TARGET_BAND_ORDER: readonly RecruitTargetBand[] = [
   'senior_leader',
   'expert',
   'fellow',
+  'manager',
   'consultant',
   'analyst',
 ];

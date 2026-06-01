@@ -12,6 +12,7 @@ const TARGET_BAND_ENUM = z.enum([
   'senior_leader',
   'expert',
   'fellow',
+  'manager',
   'consultant',
   'analyst',
 ]);

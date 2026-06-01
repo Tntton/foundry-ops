@@ -1530,6 +1530,7 @@ model BankTransaction {
 enum RecruitTargetBand {
   analyst
   consultant
+  manager       // Delivery management — Project Manager / Senior Manager
   fellow
   expert
   senior_leader // Partner / Associate Partner / MP tier

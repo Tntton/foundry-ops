@@ -15,6 +15,7 @@ const TARGET_BAND_LABELS: Record<RecruitTargetBand, string> = {
   senior_leader: 'Senior Leader',
   expert: 'Expert',
   fellow: 'Fellow',
+  manager: 'Manager',
   consultant: 'Consultant',
   analyst: 'Analyst',
 };
@@ -22,6 +23,7 @@ const TARGET_BAND_ORDER: RecruitTargetBand[] = [
   'senior_leader',
   'expert',
   'fellow',
+  'manager',
   'consultant',
   'analyst',
 ];
