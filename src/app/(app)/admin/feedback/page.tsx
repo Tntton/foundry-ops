@@ -169,6 +169,12 @@ function TicketRow({ t }: { t: Ticket }) {
               <p className="whitespace-pre-wrap">{t.triageNotes}</p>
             </div>
           )}
+          {t.resolutionSummary && (
+            <div className="mt-1 rounded-md border-l-2 border-status-green bg-status-green-soft/20 px-2 py-1 text-[11px] text-ink-2">
+              <div className="mb-0.5 font-semibold text-status-green">Resolution</div>
+              <p className="whitespace-pre-wrap">{t.resolutionSummary}</p>
+            </div>
+          )}
           {t.decidedBy && t.decidedAt && (
             <div className="mt-1 text-[10px] text-ink-4">
               Decided by {t.decidedBy.firstName} {t.decidedBy.lastName} on{' '}
@@ -182,6 +188,7 @@ function TicketRow({ t }: { t: Ticket }) {
           id={t.id}
           currentStatus={t.status}
           currentNotes={t.triageNotes ?? ''}
+          currentResolution={t.resolutionSummary ?? ''}
         />
       </div>
     </div>

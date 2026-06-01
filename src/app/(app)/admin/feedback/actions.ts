@@ -19,6 +19,7 @@ const TriageInput = z.object({
     'duplicate',
   ]),
   triageNotes: z.string().max(4000).optional().nullable(),
+  resolutionSummary: z.string().max(4000).optional().nullable(),
 });
 
 export type TriageState =
@@ -40,6 +41,10 @@ export async function updateFeedbackTriage(
     status: formData.get('status'),
     triageNotes:
       formData.get('triageNotes') === '' ? null : formData.get('triageNotes'),
+    resolutionSummary:
+      formData.get('resolutionSummary') === ''
+        ? null
+        : formData.get('resolutionSummary'),
   });
   if (!parsed.success) {
     return { status: 'error', message: 'Invalid input' };
@@ -60,7 +65,14 @@ export async function updateFeedbackTriage(
         where: { id: parsed.data.id },
         data: {
           status: parsed.data.status,
-          triageNotes: parsed.data.triageNotes ?? existing.triageNotes,
+          triageNotes:
+            parsed.data.triageNotes !== undefined
+              ? parsed.data.triageNotes
+              : existing.triageNotes,
+          resolutionSummary:
+            parsed.data.resolutionSummary !== undefined
+              ? parsed.data.resolutionSummary
+              : existing.resolutionSummary,
           decidedAt: isTerminalNew ? new Date() : existing.decidedAt,
           decidedById: isTerminalNew ? session!.person.id : existing.decidedById,
         },

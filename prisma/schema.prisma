@@ -91,9 +91,13 @@ model FeedbackTicket {
   // context for triage.
   contextPath  String?
   status       FeedbackStatus  @default(open)
-  // Notes from Claude's triage / TT's decision. Append-only via the
-  // admin page; not rendered to submitter.
+  // Triage notes — Claude's assessment + proposed action. Authored
+  // during triage; not rendered to submitter.
   triageNotes  String?         @db.Text
+  // Resolution summary — what was actually done to close the ticket
+  // (or why it was declined). Surfaces prominently in the archive
+  // view so TT can audit what shipped per ticket.
+  resolutionSummary String?    @db.Text
   // Stamp set when TT approves or declines.
   decidedAt    DateTime?
   // Person who approved/declined (super_admin only).
