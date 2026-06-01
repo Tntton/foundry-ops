@@ -15,15 +15,11 @@ const optionalDate = z
 
 const ProjectEditSchema = z
   .object({
-    // Code is editable so a project can be re-coded mid-flight —
-    // e.g. a client engagement that gets pulled becomes an internal
-    // FHP project. Uppercase letters / digits / hyphens, 3–16 chars.
-    code: z
-      .string()
-      .trim()
-      .min(3, 'Code must be 3–16 chars')
-      .max(16, 'Code must be 3–16 chars')
-      .regex(/^[A-Z0-9-]+$/, 'Code must be uppercase letters, digits, hyphens'),
+    // Code is derived from clientId + projectNumber server-side
+    // (clientCode + zero-padded number). Form passes those two
+    // fields and we compute + uniqueness-check the resulting code.
+    clientId: z.string().min(1, 'Pick a client'),
+    projectNumber: z.coerce.number().int().min(1).max(9999),
     name: z.string().trim().min(3).max(200),
     description: z.string().trim().max(2000).optional().nullable(),
     stage: z.enum(['kickoff', 'delivery', 'closing', 'archived']),
@@ -76,7 +72,8 @@ export async function updateProject(
   }
 
   const parsed = ProjectEditSchema.safeParse({
-    code: (formData.get('code') as string | null)?.toUpperCase(),
+    clientId: formData.get('clientId'),
+    projectNumber: formData.get('projectNumber'),
     name: formData.get('name'),
     description: formData.get('description') || null,
     stage: formData.get('stage'),
@@ -107,24 +104,35 @@ export async function updateProject(
     return { status: 'error', message: 'Only project leadership / admin can edit settings.' };
   }
 
-  // Code-change check — uniqueness across all projects. Only super_admin /
-  // admin can rename the code (it's load-bearing for invoices, time entries,
-  // SharePoint folders etc., so we don't want partners renaming under us).
-  const codeChanged = data.code !== existing.code;
-  if (codeChanged) {
+  // Resolve the picked client → derive new code. Uniqueness check
+  // against any other project using that code.
+  const client = await prisma.client.findUnique({ where: { id: data.clientId } });
+  if (!client) {
+    return {
+      status: 'error',
+      message: 'Selected client not found.',
+      fieldErrors: { clientId: 'Invalid client' },
+    };
+  }
+  const newCode = `${client.code}${String(data.projectNumber).padStart(3, '0')}`;
+  const codeChanged = newCode !== existing.code;
+  const clientChanged = data.clientId !== existing.clientId;
+  if (codeChanged || clientChanged) {
     if (!canAll) {
       return {
         status: 'error',
-        message: 'Only super_admin / admin can rename a project code.',
+        message: 'Only super_admin / admin can rename a project code or reassign client.',
       };
     }
-    const collision = await prisma.project.findUnique({ where: { code: data.code } });
-    if (collision && collision.id !== projectId) {
-      return {
-        status: 'error',
-        message: `Code "${data.code}" is already taken by ${collision.name}.`,
-        fieldErrors: { code: 'Already in use' },
-      };
+    if (codeChanged) {
+      const collision = await prisma.project.findUnique({ where: { code: newCode } });
+      if (collision && collision.id !== projectId) {
+        return {
+          status: 'error',
+          message: `Code "${newCode}" is already taken by ${collision.name}.`,
+          fieldErrors: { projectNumber: 'Already in use — pick a different number' },
+        };
+      }
     }
   }
 
@@ -135,6 +143,7 @@ export async function updateProject(
 
   const before = {
     code: existing.code,
+    clientId: existing.clientId,
     name: existing.name,
     description: existing.description,
     stage: existing.stage,
@@ -148,7 +157,8 @@ export async function updateProject(
     defaultExpensesRebillable: existing.defaultExpensesRebillable,
   };
   const after = {
-    code: data.code,
+    code: newCode,
+    clientId: data.clientId,
     name: data.name,
     description: data.description,
     stage: data.stage,
@@ -167,7 +177,8 @@ export async function updateProject(
       await tx.project.update({
         where: { id: projectId },
         data: {
-          code: data.code,
+          code: newCode,
+          clientId: data.clientId,
           name: data.name,
           description: data.description,
           stage: data.stage,
@@ -195,6 +206,6 @@ export async function updateProject(
 
   revalidatePath('/projects');
   revalidatePath(`/projects/${existing.code}`);
-  if (codeChanged) revalidatePath(`/projects/${data.code}`);
-  redirect(`/projects/${data.code}`);
+  if (codeChanged) revalidatePath(`/projects/${newCode}`);
+  redirect(`/projects/${newCode}`);
 }

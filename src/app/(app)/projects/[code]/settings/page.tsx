@@ -20,13 +20,48 @@ export default async function ProjectSettingsPage({ params }: { params: { code: 
     notFound();
   }
 
-  const people = await prisma.person.findMany({
-    where: { endDate: null },
-    orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
-    select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true, band: true },
-  });
+  const [people, clients] = await Promise.all([
+    prisma.person.findMany({
+      where: { endDate: null },
+      orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
+      select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true, band: true },
+    }),
+    // All clients + their existing project codes, so the form can
+    // auto-suggest the next code number per client (CAC001 → CAC002
+    // etc.). Including archived clients so a re-coded project that
+    // points at an old client still resolves.
+    prisma.client.findMany({
+      orderBy: { code: 'asc' },
+      select: {
+        id: true,
+        code: true,
+        legalName: true,
+        projects: { select: { code: true } },
+      },
+    }),
+  ]);
   const partners = people.filter((p) => isLeadershipBand(p.band));
   const managers = people;
+
+  // For each client, figure out the next available sequence number.
+  // Pattern: <code><nnn> e.g. CAC001. Strip the prefix, parse number,
+  // pick max+1. Skips codes that don't match the pattern (e.g. legacy
+  // "IFM001-2" — the suffix breaks parsing; treated as -1 so it
+  // doesn't bump the max). Falls back to 1 when no projects yet.
+  const clientChoices = clients.map((c) => {
+    const used: number[] = [];
+    for (const p of c.projects) {
+      const m = p.code.match(new RegExp(`^${c.code}(\\d+)$`));
+      if (m && m[1]) used.push(parseInt(m[1], 10));
+    }
+    const next = used.length === 0 ? 1 : Math.max(...used) + 1;
+    return {
+      id: c.id,
+      code: c.code,
+      legalName: c.legalName,
+      nextNumber: next,
+    };
+  });
 
   return (
     <div className="space-y-6">
@@ -41,7 +76,12 @@ export default async function ProjectSettingsPage({ params }: { params: { code: 
           Edit lifecycle, commercials, and leadership. Changes are audited.
         </p>
       </header>
-      <ProjectSettingsForm project={project} partners={partners} managers={managers} />
+      <ProjectSettingsForm
+        project={project}
+        partners={partners}
+        managers={managers}
+        clientChoices={clientChoices}
+      />
 
       <section className="space-y-3 rounded-lg border border-line bg-card p-5">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-3">

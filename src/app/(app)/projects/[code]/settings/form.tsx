@@ -19,9 +19,19 @@ const CURRENCIES = [
 
 type PersonOpt = { id: string; initials: string; firstName: string; lastName: string };
 
+export type ClientChoice = {
+  id: string;
+  code: string;
+  legalName: string;
+  /** Next available sequence number for this client (e.g. 5 means
+   *  CAC005 if the client code is CAC). Pre-computed server-side. */
+  nextNumber: number;
+};
+
 type ProjectSnapshot = {
   id: string;
   code: string;
+  clientId: string;
   name: string;
   description: string | null;
   stage: string;
@@ -55,14 +65,46 @@ export function ProjectSettingsForm({
   project,
   partners,
   managers,
+  clientChoices,
 }: {
   project: ProjectSnapshot;
   partners: PersonOpt[];
   managers: PersonOpt[];
+  clientChoices: ClientChoice[];
 }) {
   const bound = updateProject.bind(null, project.id);
   const [state, action] = useFormState<ProjectEditState, FormData>(bound, { status: 'idle' });
   const errs = state.status === 'error' ? state.fieldErrors ?? {} : {};
+
+  // Code is now derived from client + sequence number. State tracks
+  // the current client + number; the visible code preview updates as
+  // either changes. Parse the project's existing code to seed both:
+  //   "CAC001"  → CAC + 1
+  //   "IFM001-2" (legacy with suffix) → IFM + 1, suffix dropped
+  const initialClient =
+    clientChoices.find((c) => c.id === project.clientId) ?? clientChoices[0];
+  const parsedExisting = (() => {
+    if (!initialClient) return { num: 1 };
+    const m = project.code.match(new RegExp(`^${initialClient.code}(\\d+)`));
+    return { num: m && m[1] ? parseInt(m[1], 10) : initialClient.nextNumber };
+  })();
+  const [clientId, setClientId] = useState<string>(initialClient?.id ?? '');
+  const [projectNumber, setProjectNumber] = useState<number>(parsedExisting.num);
+  const selectedClient = clientChoices.find((c) => c.id === clientId) ?? null;
+  const previewCode = selectedClient
+    ? `${selectedClient.code}${String(projectNumber).padStart(3, '0')}`
+    : project.code;
+
+  function onClientChange(newId: string) {
+    setClientId(newId);
+    const c = clientChoices.find((x) => x.id === newId);
+    // Auto-bump to next number when switching to a different client
+    if (c && c.id !== project.clientId) {
+      setProjectNumber(c.nextNumber);
+    } else if (c && c.id === project.clientId) {
+      setProjectNumber(parsedExisting.num);
+    }
+  }
 
   const [startDate, setStartDate] = useState(
     project.startDate ? toIso(project.startDate) : '',
@@ -107,18 +149,59 @@ export function ProjectSettingsForm({
       )}
 
       <Section title="Identity">
+        {/* Client picker + sequence number → code is derived. Admin
+            renames a project by switching the client (auto-suggests
+            next sequence) and tweaking the number. The resulting
+            code is shown as read-only preview below. */}
         <Field
-          label="Code"
-          error={errs['code']}
-          hint="Renaming changes URLs + how invoices/timesheets refer to the project. Use cautiously. Admin-only."
+          label="Client"
+          error={errs['clientId']}
+          hint={
+            clientChoices.length === 0
+              ? 'No clients yet — create one under Directory → Clients first.'
+              : 'Code prefix = client. Switching clients auto-suggests the next available number.'
+          }
+        >
+          <select
+            name="clientId"
+            value={clientId}
+            onChange={(e) => onClientChange(e.target.value)}
+            required
+            className="h-9 w-full rounded-md border border-line bg-surface-elev px-2 text-sm text-ink"
+          >
+            {clientChoices.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.code} · {c.legalName} (next: {c.code}
+                {String(c.nextNumber).padStart(3, '0')})
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field
+          label="Project number"
+          error={errs['projectNumber']}
+          hint={
+            selectedClient
+              ? `Next available for ${selectedClient.code}: ${String(selectedClient.nextNumber).padStart(3, '0')}`
+              : 'Pick a client first.'
+          }
         >
           <Input
-            name="code"
-            defaultValue={project.code}
+            name="projectNumber"
+            type="number"
+            min={1}
+            max={9999}
+            value={projectNumber}
+            onChange={(e) => setProjectNumber(parseInt(e.target.value || '1', 10))}
             required
-            pattern="[A-Z0-9-]{3,16}"
-            className="font-mono uppercase"
-            style={{ textTransform: 'uppercase' }}
+            className="font-mono"
+          />
+        </Field>
+        <Field label="Code (preview)" hint="Generated from client code + number. Audited on save.">
+          <Input
+            value={previewCode}
+            disabled
+            className="font-mono"
           />
         </Field>
         <Field label="Name" error={errs['name']}>
