@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import {
+  getWhatsAppConfig,
   isWhatsAppConfigured,
   sendWhatsAppText,
 } from '@/server/integrations/whatsapp';
@@ -69,5 +70,79 @@ export async function sendWhatsAppTest(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { status: 'error', message: msg };
+  }
+}
+
+const RegisterInput = z.object({
+  pin: z
+    .string()
+    .trim()
+    .regex(/^[0-9]{6}$/u, 'PIN must be exactly 6 digits'),
+});
+
+export type WhatsAppRegisterState =
+  | { status: 'idle' }
+  | { status: 'error'; message: string }
+  | { status: 'success'; message: string };
+
+/**
+ * One-time POST to /{phone-number-id}/register that flips the number's
+ * status from "not registered" to "active". Required after adding a
+ * number to a WABA before the Cloud API will accept sends. Meta error
+ * 133010 ("Account not registered") is the symptom of this not having
+ * been done yet.
+ *
+ * The PIN is the admin's choice — used later as the 2FA step if the
+ * number needs to be re-registered or moved. 6 digits, must be
+ * non-trivial (no 000000, 123456 etc. — Meta validates).
+ */
+export async function registerWhatsAppNumber(
+  _prev: WhatsAppRegisterState,
+  formData: FormData,
+): Promise<WhatsAppRegisterState> {
+  const session = await getSession();
+  if (!hasAnyRole(session, ['super_admin', 'admin'])) {
+    return { status: 'error', message: 'Not authorized' };
+  }
+  const cfg = getWhatsAppConfig();
+  if (!cfg) {
+    return { status: 'error', message: 'WhatsApp env vars not set' };
+  }
+  const parsed = RegisterInput.safeParse({ pin: formData.get('pin') });
+  if (!parsed.success) {
+    return {
+      status: 'error',
+      message: parsed.error.issues[0]?.message ?? 'Invalid PIN',
+    };
+  }
+
+  const url = `https://graph.facebook.com/v22.0/${cfg.phoneNumberId}/register`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${cfg.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        pin: parsed.data.pin,
+      }),
+    });
+    const body = await res.text();
+    if (!res.ok) {
+      return {
+        status: 'error',
+        message: `Meta rejected the register call (${res.status}): ${body}`,
+      };
+    }
+    return {
+      status: 'success',
+      message:
+        'Registered ✓ — try the Send test message above. If the number was already active, Meta returns success too.',
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { status: 'error', message: `Register call failed: ${msg}` };
   }
 }
