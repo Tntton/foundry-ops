@@ -85,9 +85,12 @@ export async function patchIntakeBill(
     projectId: formData.get('projectId') || null,
   });
   if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const path = issue?.path.join('.') ?? 'unknown';
+    const msg = issue?.message ?? 'invalid';
     return {
       status: 'error',
-      message: parsed.error.issues[0]?.message ?? 'Invalid input',
+      message: `Validation failed on "${path}": ${msg}`,
     };
   }
 
