@@ -207,7 +207,7 @@ export function AssistantWidget() {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full border border-brand bg-brand px-3 py-2 text-xs font-medium text-brand-ink shadow-lg transition-all hover:opacity-90"
+          className="fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full border border-brand bg-brand px-3 py-2 text-xs font-medium text-white shadow-lg transition-all hover:opacity-90"
           title="Ask the Foundry Ops assistant"
         >
           <span aria-hidden>✨</span>
@@ -271,8 +271,8 @@ export function AssistantWidget() {
                     <div
                       className={
                         m.role === 'user'
-                          ? 'max-w-[85%] rounded-lg bg-brand px-3 py-2 text-xs text-brand-ink'
-                          : 'max-w-[90%] rounded-lg bg-ink px-3 py-2 text-xs text-white'
+                          ? 'max-w-[85%] rounded-lg bg-brand px-3 py-2 text-xs text-white'
+                          : 'max-w-[90%] rounded-lg bg-surface-elev px-3 py-2 text-xs text-ink'
                       }
                     >
                       {m.content.length > 0 ? (
@@ -310,7 +310,7 @@ export function AssistantWidget() {
             <button
               type="submit"
               disabled={pending || draft.trim().length === 0}
-              className="rounded-md bg-brand px-3 py-2 text-xs font-medium text-brand-ink transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="rounded-md bg-brand px-3 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {pending ? '…' : 'Send'}
             </button>
@@ -323,14 +323,14 @@ export function AssistantWidget() {
 
 function TypingDots() {
   return (
-    <span className="inline-flex items-center gap-1" aria-label="Assistant is typing">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/70" />
+    <span className="inline-flex items-center gap-1 text-ink-3" aria-label="Assistant is typing">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ink-3" />
       <span
-        className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/70"
+        className="h-1.5 w-1.5 animate-pulse rounded-full bg-ink-3"
         style={{ animationDelay: '0.15s' }}
       />
       <span
-        className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/70"
+        className="h-1.5 w-1.5 animate-pulse rounded-full bg-ink-3"
         style={{ animationDelay: '0.3s' }}
       />
     </span>
