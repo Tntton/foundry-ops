@@ -236,7 +236,7 @@ export async function notifyApproversOfNewApproval(
       // Skip the requester themselves.
       id: { not: opts.requestedById },
     },
-    select: { id: true },
+    select: { id: true, whatsappNumber: true },
   });
   if (approverPool.length === 0) return;
   const subjectLabel =
@@ -266,4 +266,34 @@ export async function notifyApproversOfNewApproval(
       entityId: opts.approvalId,
     })),
   });
+
+  // WhatsApp side-channel — DM each approver who has a number on file.
+  // Fire-and-forget: failures here don't roll back the tx (the in-app
+  // update is the source of truth; WA is best-effort notification).
+  // Only attempts when WhatsApp is configured; silent no-op otherwise.
+  // Dynamic import to keep the WhatsApp module out of cold-start paths
+  // for tx flows that don't need it.
+  const targets = approverPool.filter((p) => p.whatsappNumber);
+  if (targets.length > 0) {
+    void (async () => {
+      const { isWhatsAppConfigured, sendWhatsAppText } = await import(
+        '@/server/integrations/whatsapp'
+      );
+      if (!isWhatsAppConfigured()) return;
+      const baseUrl =
+        process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://ops.foundry.health';
+      const message =
+        `Foundry Ops · new ${subjectLabel} awaits your approval` +
+        (opts.summary ? `\n${opts.summary}` : '') +
+        `\nOpen: ${baseUrl}/approvals`;
+      for (const p of targets) {
+        if (!p.whatsappNumber) continue;
+        try {
+          await sendWhatsAppText(p.whatsappNumber, message);
+        } catch (err) {
+          console.error('[whatsapp.approval-notify] failed for', p.id, err);
+        }
+      }
+    })();
+  }
 }
