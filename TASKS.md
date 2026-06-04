@@ -1021,6 +1021,8 @@ UPDATE "Person" SET email = 'shea.laws@foundry.health'        WHERE email = 'she
 > Floating chat widget in the bottom-right of every authed page, mirroring the FeedbackWidget pattern. Powered by Anthropic Claude (existing `ANTHROPIC_API_KEY`). Built in three deployable stages so we can dogfood after each. Per-phase deploy must be confirmed by TT before the next phase starts.
 >
 > **Product north star (TT, 2026-06-05):** the assistant's primary value is **prepopulating forms from natural-language input** — the user says "log 3h on CAC001 yesterday" or "I spent $48 at Officeworks today for the new monitor cable" and the assistant extracts the structured fields, opens the relevant form pre-filled, and lets the user inspect / edit before submitting. One-shot "submit on confirm" flows (TASK-302 `propose_*`) are secondary — the heavier lift in saved time comes from form prefill, not from skipping the form. Every Phase 2/3 tool should be evaluated against "does this make form prepopulation faster or better?"
+>
+> **WhatsApp alignment (TT, 2026-06-05):** the in-app assistant and the WhatsApp agent (the existing `whatsapp-router.ts` + TASK-120/121/122) are **two channels on the same underlying agent**, not two agents. Long-term goal: a user typing "log 4h on CAC001 today" gets the same logical handling regardless of channel — same intent classifier, same structured extractor, same capability checks, same audit trail (`source='agent'`). The *interaction model* differs (web can SPA-navigate the user to a prefilled form; WhatsApp can't, so it sends a one-time signed deep-link to the same prefilled form on `ops.foundry.health` — the user opens it on their phone's browser and submits there). The *shared logic* — intent classification, field extraction, project disambiguation, capability gating — must live in one set of modules under `src/server/agents/` and be imported by both surfaces. Concretely: when TASK-301 ships read tools, the existing WhatsApp flow handlers (`parseTimesheet`, `parseAvailability`) get refactored to consume them. When TASK-302 ships `prefill_*` tools, the WhatsApp router stops auto-writing drafts and starts replying with prefilled-form deep links instead. The unification end-state is TASK-303 below.
 
 ### TASK-300 — Assistant (Phase 1): conversational helper
 **status:** doing
@@ -1060,10 +1062,11 @@ UPDATE "Person" SET email = 'shea.laws@foundry.health'        WHERE email = 'she
   - `get_active_rate_card_for_role(roleCode)` — gated on `ratecard.view`; lets the invoice-drafting flow look up the right bill rate for a role
 - [ ] Each tool is a pure server-side function gated on session; no privilege escalation.
 - [ ] Tool-result loop: assistant receives tool result, formats human answer.
-- [ ] Tool calls audited (`assistant_tool.invoked`, delta = `{ tool, args }`, source=web) so we can see what users are asking for.
-- [ ] Tests: one golden test per tool (fixture session + fixture data → expected JSON).
-- [ ] Commit: `feat(TASK-301): in-app assistant phase 2 — read tools`.
-- [ ] Smoke: TT asks "what's on my plate?" and gets a real answer pulled from the DB. Also: "what's CAC?" returns the right project + ready to be referenced in a follow-up prefill.
+- [ ] Tool calls audited (`assistant_tool.invoked`, delta = `{ tool, args }`, source=agent so it lines up with the WhatsApp router's existing audit attribution — keeps the "agent-mediated changes" filter unified across channels) so we can see what users are asking for.
+- [ ] **WhatsApp parity:** factor the existing per-flow extractors out of `whatsapp-router.ts` into a shared `src/server/agents/intent/` module. Specifically `parseTimesheet`, `parseAvailability`, and the receipt-OCR call become channel-agnostic; the WhatsApp router and the in-app assistant both import them. After this task, adding a new field-extraction prompt should change one file, not two.
+- [ ] Tests: one golden test per tool (fixture session + fixture data → expected JSON). Existing whatsapp-router tests must still pass after the refactor (`pnpm test whatsapp` covers them).
+- [ ] Commit: `feat(TASK-301): in-app assistant phase 2 — read tools + WhatsApp extractor refactor`.
+- [ ] Smoke: TT asks "what's on my plate?" and gets a real answer pulled from the DB. Also: "what's CAC?" returns the right project + ready to be referenced in a follow-up prefill. And: a WhatsApp timesheet log still works end-to-end after the extractor refactor (no behavioural change on that channel yet).
 
 ### TASK-302 — Assistant (Phase 3): form prefill + confirmation-gated quick actions
 **status:** todo
@@ -1092,10 +1095,19 @@ A secondary, smaller surface of `propose_*` tools handles low-field one-shot act
 - [ ] No write occurs without explicit click; proposal payload TTL 15min.
 
 **acceptance — shared (both families):**
-- [ ] Every successful execution writes an `AuditEvent` with `actorType='person'` (user is the actor; the assistant is just a UI), tagging `assistant.proposalId` / `assistant.prefillId` in the delta.
+- [ ] Every successful execution writes an `AuditEvent` with `actorType='person'` (user is the actor; the assistant is just a UI), `source='agent'` (matches the WhatsApp router's attribution), tagging `assistant.proposalId` / `assistant.prefillId` in the delta.
 - [ ] Tests: each prefill tool round-trips through to a form render with the right fields populated; each propose tool's Confirm enforces capability.
 - [ ] **Phase 3 doesn't merge until Phase 2 has been in production for at least a day** per spec.
-- [ ] Commit: `feat(TASK-302): in-app assistant phase 3 — form prefill + quick actions`.
+
+**acceptance — WhatsApp parity (lock-step, not optional):**
+- [ ] For every web `prefill_*` tool, the WhatsApp router gets the same prefill path. Concretely:
+  - Today's WhatsApp timesheet flow auto-writes a `draft` TimesheetEntry and tells the user "review on the web."
+  - After TASK-302: the WhatsApp router calls the same `buildTimesheetPrefill(...)` builder, generates the one-time signed token, and replies with `Tap to review + submit: https://ops.foundry.health/timesheet?prefill=<token>`. Same prefill banner + inspection UX as the web user. *No draft is auto-written* — the form's normal submit creates the row.
+  - Same shape for expense, bill (when WhatsApp gets bills), and any later prefill_* surface.
+- [ ] The legacy "auto-draft" behaviour stays available behind a feature-flag config row (`whatsapp.autoWriteDrafts`) for the rollout window, default off after this task ships. If TT decides phone-first folks prefer the auto-draft round-trip, flip it back on per-flow.
+- [ ] WhatsApp signing: the prefill token in the URL is signed with a server secret (HMAC-SHA256) so a forwarded link can't be used to inject values into anyone else's session. Token also encodes `personId` so the form refuses to render if the opener isn't that person.
+
+- [ ] Commit: `feat(TASK-302): in-app assistant phase 3 — form prefill + WhatsApp parity`.
 
 **Out of scope (defer per spec):** voice/TTS, image upload, cross-user assistants, custom personas, slash-command palette.
 
@@ -1103,6 +1115,23 @@ A secondary, smaller surface of `propose_*` tools handles low-field one-shot act
 - Receipt-attached prefill — drag a receipt onto the assistant pill, OCR extracts fields (reuse `extractIntakeFields`), assistant prefills `/expenses/new` or `/bills/new`. Needs image upload (currently out of scope).
 - Multi-row prefill for the timesheet — "log my standard week" expands the user's `regularDays*` config into 5 prefilled rows.
 - Invoice line synthesis from approved timesheets + rate card — "draft an invoice for CAC001 for May" reads timesheet entries × rate card → prefills lines (this is the boundary with TASK-094 Invoice Drafter agent; the assistant *suggests*, the drafter agent *generates*).
+
+### TASK-303 — Unify in-app assistant + WhatsApp router behind one agent loop
+**status:** todo
+**depends on:** TASK-302
+
+**framing:** end-state for the alignment work started in TASK-301 and TASK-302. Today the WhatsApp router is a hand-coded flow machine: intent classifier → fixed state machine per flow → bespoke extractor per flow. The in-app assistant is a Claude-with-tools chat. After TASK-301 and TASK-302 they share extraction modules, prefill builders, and tool definitions — but the WhatsApp side still has the old flow machinery wrapped around them. This task replaces the flow machinery with the **same Claude-with-tools loop** the web uses: one system prompt (channel-aware), one tool array, one conversation persistence shape. The result is that adding a new capability lights it up on both channels in one PR.
+
+**acceptance:**
+- [ ] `src/server/agents/assistant/loop.ts` — channel-agnostic agent loop. Takes a `Channel` discriminator (`'web' | 'whatsapp'`), session, conversation id, new message; runs the same tool-use loop. Channel shapes the system prompt (web mentions /paths, WhatsApp mentions deep-links + "tap the link"), and the rendering of tool results (web returns structured JSON for the widget, WhatsApp returns plain text + the deep link).
+- [ ] `WhatsAppConversation` storage can replace `AssistantThread` for the WhatsApp side — OR the two get unified into a single `AgentThread` table with a `channel` column. Pick whichever causes less churn at this point.
+- [ ] WhatsApp flow handlers (`handleTimesheet`, `handleAvailability`, `handleExpense`, `handleStatusCheck` in [whatsapp-router.ts](src/server/integrations/whatsapp-router.ts)) deleted — their work is now done by the shared tool implementations. The router file shrinks to: receive message → resolve person → enqueue into the agent loop → write the reply back to WhatsApp.
+- [ ] Intent classifier becomes optional — the Claude-with-tools loop natively reasons about which tool to call, so the haiku-prefilter only stays if it gives a measurable cost win on idle small-talk.
+- [ ] All existing WhatsApp behaviours preserved: ✅ "Logged 4h on PROJ001 today" still works; ✅ receipt photos still create an expense draft (or, post-302, a prefill deep link); ✅ "menu" / "cancel" still behave the same; ✅ unknown senders still refused.
+- [ ] All existing WhatsApp tests still pass; new tests cover the unified loop against fixture web + fixture WhatsApp messages with the same input → same DB outcome.
+- [ ] Commit: `feat(TASK-303): unify assistant + WhatsApp behind one agent loop`.
+
+**Why this is deferred (not for MVP):** TASK-303 is real architectural work — best done after Phase 1 + Phase 2 + Phase 3 have been in real use for at least a week and we have evidence the shared shape actually fits both channels (vs an assumed alignment that breaks when an edge case shows up). Setting it up now would also tangle with TASK-080 (Inngest workflow framework) if that lands first. Keep the alignment principles enforced via TASK-301 + TASK-302 acceptance criteria so we don't drift in the meantime.
 
 ---
 
