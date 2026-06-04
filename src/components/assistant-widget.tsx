@@ -272,7 +272,7 @@ export function AssistantWidget() {
                       className={
                         m.role === 'user'
                           ? 'max-w-[85%] rounded-lg bg-brand px-3 py-2 text-xs text-brand-ink'
-                          : 'max-w-[90%] rounded-lg bg-surface-elev px-3 py-2 text-xs text-ink'
+                          : 'max-w-[90%] rounded-lg bg-ink px-3 py-2 text-xs text-white'
                       }
                     >
                       {m.content.length > 0 ? (
@@ -323,14 +323,14 @@ export function AssistantWidget() {
 
 function TypingDots() {
   return (
-    <span className="inline-flex items-center gap-1 text-ink-3" aria-label="Assistant is typing">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ink-3" />
+    <span className="inline-flex items-center gap-1" aria-label="Assistant is typing">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/70" />
       <span
-        className="h-1.5 w-1.5 animate-pulse rounded-full bg-ink-3"
+        className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/70"
         style={{ animationDelay: '0.15s' }}
       />
       <span
-        className="h-1.5 w-1.5 animate-pulse rounded-full bg-ink-3"
+        className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/70"
         style={{ animationDelay: '0.3s' }}
       />
     </span>
