@@ -1019,6 +1019,8 @@ UPDATE "Person" SET email = 'shea.laws@foundry.health'        WHERE email = 'she
 ## Phase 6 — In-app AI assistant (TT)
 
 > Floating chat widget in the bottom-right of every authed page, mirroring the FeedbackWidget pattern. Powered by Anthropic Claude (existing `ANTHROPIC_API_KEY`). Built in three deployable stages so we can dogfood after each. Per-phase deploy must be confirmed by TT before the next phase starts.
+>
+> **Product north star (TT, 2026-06-05):** the assistant's primary value is **prepopulating forms from natural-language input** — the user says "log 3h on CAC001 yesterday" or "I spent $48 at Officeworks today for the new monitor cable" and the assistant extracts the structured fields, opens the relevant form pre-filled, and lets the user inspect / edit before submitting. One-shot "submit on confirm" flows (TASK-302 `propose_*`) are secondary — the heavier lift in saved time comes from form prefill, not from skipping the form. Every Phase 2/3 tool should be evaluated against "does this make form prepopulation faster or better?"
 
 ### TASK-300 — Assistant (Phase 1): conversational helper
 **status:** doing
@@ -1040,43 +1042,67 @@ UPDATE "Person" SET email = 'shea.laws@foundry.health'        WHERE email = 'she
 
 **Out of scope (lands in TASK-301):** any tool-use / DB lookups.
 
-### TASK-301 — Assistant (Phase 2): read tools
+### TASK-301 — Assistant (Phase 2): read tools (incl. form-prefill foundation)
 **status:** todo
 **depends on:** TASK-300
+
+**framing:** the read tools serve two purposes — (1) answer "what's on my plate" style questions, and (2) **resolve the ambiguous references in natural-language input** so the prefill flow in TASK-302 has clean structured data to work with. e.g. when the user says "log 3h on CAC yesterday", the assistant uses `find_project("CAC")` to disambiguate (CAC001? CAC002?) before opening a prefilled timesheet form. Every find/list tool should return enough metadata (ids, codes, names, dates, status) that downstream prefill tools can reference rows without a second roundtrip.
 
 **acceptance:**
 - [ ] Add Anthropic `tools` array to the chat call. One file per tool under `src/server/agents/assistant/tools/`:
   - `list_my_approvals()` — pending approval rows where `requiredRole ∈ session.roles`
-  - `list_my_projects()` — projects the user is on (team membership) or leads (primary partner / manager)
-  - `get_my_hours_this_week()` — sum + per-project breakdown from `TimesheetEntry`
-  - `find_project(query)` — fuzzy match on code or name
+  - `list_my_projects()` — projects the user is on (team membership) or leads (primary partner / manager); returns id, code, name, clientCode, stage so it's a good prefill index
+  - `get_my_hours_this_week()` — sum + per-project breakdown from `TimesheetEntry` (week-to-date; useful both for "what have I logged" and as anchor data for "log X more on Y")
+  - `find_project(query)` — fuzzy match on code or name; returns top-5 with id/code/name/client for disambiguation
   - `find_person(query)` — fuzzy match on name / initials / email; redacts fields the requester can't see (e.g. rate)
-  - `get_my_expenses_recent(n)` — last N submissions
+  - `get_my_expenses_recent(n)` — last N submissions; includes category + amount so the assistant can pattern-match "another office one like last week's" → prefill category
+  - `list_expense_categories()` — enum values + short labels; lets the assistant pick the right category enum without guessing
+  - `get_active_rate_card_for_role(roleCode)` — gated on `ratecard.view`; lets the invoice-drafting flow look up the right bill rate for a role
 - [ ] Each tool is a pure server-side function gated on session; no privilege escalation.
 - [ ] Tool-result loop: assistant receives tool result, formats human answer.
 - [ ] Tool calls audited (`assistant_tool.invoked`, delta = `{ tool, args }`, source=web) so we can see what users are asking for.
 - [ ] Tests: one golden test per tool (fixture session + fixture data → expected JSON).
 - [ ] Commit: `feat(TASK-301): in-app assistant phase 2 — read tools`.
-- [ ] Smoke: TT asks "what's on my plate?" and gets a real answer pulled from the DB.
+- [ ] Smoke: TT asks "what's on my plate?" and gets a real answer pulled from the DB. Also: "what's CAC?" returns the right project + ready to be referenced in a follow-up prefill.
 
-### TASK-302 — Assistant (Phase 3): confirmation-gated write tools
+### TASK-302 — Assistant (Phase 3): form prefill + confirmation-gated quick actions
 **status:** todo
 **depends on:** TASK-301
-**acceptance:**
-- [ ] Add `propose_*` tools that return a structured "confirmation card" payload (not a write). Widget renders the card inline with Claude's text; nothing happens until user clicks Confirm.
-  - `propose_timesheet_entry({ projectCode, date, hours, notes })`
-  - `propose_expense({ category, amountCents, description, projectCode? })`
-  - `propose_quick_recruit({ firstName, lastName, band, ownerInitials })`
-  - `propose_feedback_ticket({ urgency, kind, title, body })`
-- [ ] Confirmation cards are first-class messages in the thread (rendered alongside text); they carry a stable `proposalId` so the Confirm action POSTs back to a server action that re-validates capability + executes the underlying existing action (no new write code paths).
-- [ ] No write occurs without explicit click; the proposal payload has a TTL (15min) so stale cards can't be confirmed.
-- [ ] Every successful execution writes an `AuditEvent` with `source='agent'` and `actorType='person'` (the user is the actor; the assistant is just a UI), tagging `assistant.proposalId` in the delta.
-- [ ] Capability gating: server action refuses the action if the user lacks the capability for it (e.g. only `expense.submit` can confirm `propose_expense`).
-- [ ] Tests: each `propose_*` tool returns a valid card; each Confirm server action enforces capability + reuses the underlying create action.
+
+**framing:** primary capability is **prefilling existing forms from natural language**, not bypassing forms. The assistant extracts structured fields from chat ("3h on CAC001 yesterday with note 'pricing analysis'") and opens the relevant form (`/timesheet`, `/expenses/new`, `/invoices/new`, etc) with those values already populated — the user inspects / edits / submits via the form's normal flow. The form's existing server action is the only write path; the assistant never writes directly. This pattern has two big wins over a confirmation-card-only model: (a) the user gets to inspect *all* fields, including ones the assistant didn't try to fill, (b) any future schema or validation change on the form Just Works.
+
+A secondary, smaller surface of `propose_*` tools handles low-field one-shot actions (quick recruit, feedback ticket) where there isn't a meaningful "form to inspect."
+
+**acceptance — prefill family (primary):**
+- [ ] `prefill_*` tool family — each returns a structured `{ url, payload, summary }` triple. The widget renders an inline card with the assistant's text summary + a primary button ("Open prefilled timesheet"). Click → SPA-routes to the form with values pre-loaded.
+  - `prefill_timesheet({ entries: [{ projectCode, date, hours, notes? }] })` → opens `/timesheet?week=…&prefill=<token>` with rows pre-populated
+  - `prefill_expense({ date, amountDollars, gstDollars?, category, vendor?, description, projectCode? })` → opens `/expenses/new?prefill=<token>`
+  - `prefill_bill({ supplierName, supplierAbn?, supplierInvoiceNumber, issueDate, dueDate, amountDollars, gstDollars?, category, projectCode? })` → opens `/bills/new?prefill=<token>`
+  - `prefill_invoice({ projectCode, lines: [{ label, amountDollars }] })` → opens `/invoices/new?projectId=…&prefill=<token>`
+- [ ] Prefill payload lives in a short-lived server-side store (new `AssistantPrefill` table OR encrypted/signed token in the URL — TBD; signed-token is simpler unless the payload outgrows ~2KB). 15-min TTL; single-use (consumed on first form render).
+- [ ] Form pages read the `prefill=<token>` query param, fetch + hydrate the payload, surface a one-time "Prefilled by Assistant" banner above the form with an "x" to dismiss + an "undo" that empties the fields. Banner is the user's visual cue that *they* are still the actor.
+- [ ] Validation runs the same as a hand-typed form — the assistant doesn't get to bypass any Zod refinement. If the prefilled values fail validation, the user sees the same inline errors and edits to fix.
+- [ ] Capability gating belongs to the form's existing server action — the assistant can suggest opening a form the user can't submit (e.g. an invoice for a partner who only has `invoice.create` and not `invoice.approve.over_20k`), and the form will refuse the eventual submit cleanly.
+
+**acceptance — propose family (secondary, low-field one-shot):**
+- [ ] `propose_*` tools return a structured "confirmation card" payload (not a write). Widget renders the card inline; nothing happens until user clicks Confirm.
+  - `propose_quick_recruit({ firstName, lastName, band, ownerInitials })` — single-button flow, no form needed
+  - `propose_feedback_ticket({ urgency, kind, title, body })` — confirms the feedback ticket text before logging
+- [ ] Confirmation cards carry a stable `proposalId`; the Confirm POST re-validates capability + executes the underlying existing action.
+- [ ] No write occurs without explicit click; proposal payload TTL 15min.
+
+**acceptance — shared (both families):**
+- [ ] Every successful execution writes an `AuditEvent` with `actorType='person'` (user is the actor; the assistant is just a UI), tagging `assistant.proposalId` / `assistant.prefillId` in the delta.
+- [ ] Tests: each prefill tool round-trips through to a form render with the right fields populated; each propose tool's Confirm enforces capability.
 - [ ] **Phase 3 doesn't merge until Phase 2 has been in production for at least a day** per spec.
-- [ ] Commit: `feat(TASK-302): in-app assistant phase 3 — write tools with confirmation`.
+- [ ] Commit: `feat(TASK-302): in-app assistant phase 3 — form prefill + quick actions`.
 
 **Out of scope (defer per spec):** voice/TTS, image upload, cross-user assistants, custom personas, slash-command palette.
+
+**Future ideas (post-302, capture here so they don't get lost):**
+- Receipt-attached prefill — drag a receipt onto the assistant pill, OCR extracts fields (reuse `extractIntakeFields`), assistant prefills `/expenses/new` or `/bills/new`. Needs image upload (currently out of scope).
+- Multi-row prefill for the timesheet — "log my standard week" expands the user's `regularDays*` config into 5 prefilled rows.
+- Invoice line synthesis from approved timesheets + rate card — "draft an invoice for CAC001 for May" reads timesheet entries × rate card → prefills lines (this is the boundary with TASK-094 Invoice Drafter agent; the assistant *suggests*, the drafter agent *generates*).
 
 ---
 
