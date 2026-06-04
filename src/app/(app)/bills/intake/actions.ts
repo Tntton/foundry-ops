@@ -40,19 +40,20 @@ const optionalDate = z
   .nullable();
 
 const PatchSchema = z.object({
-  supplierName: z.string().trim().max(200).optional().or(z.literal('').transform(() => null)),
-  supplierInvoiceNumber: z
-    .string()
-    .trim()
-    .max(80)
-    .optional()
-    .or(z.literal('').transform(() => null)),
+  // All these string fields can come in as null (the action coerces
+  // empty form values to null with `|| null`). Original schema used
+  // .optional().or(z.literal('').transform(() => null)) which only
+  // accepts undefined-or-string, not null — caused "Validation failed
+  // on projectId: Invalid input" when the OPEX (no-project) option
+  // was selected.
+  supplierName: z.string().trim().max(200).nullable().optional(),
+  supplierInvoiceNumber: z.string().trim().max(80).nullable().optional(),
   issueDate: optionalDate,
   dueDate: optionalDate,
   amountTotalDollars: z.coerce.number().min(0).max(10_000_000).optional(),
   gstDollars: z.coerce.number().min(0).max(1_000_000).optional(),
   category: z.string().trim().max(80),
-  projectId: z.string().trim().max(40).optional().or(z.literal('').transform(() => null)),
+  projectId: z.string().trim().max(40).nullable().optional(),
 });
 
 function ensureCanReview(roles: string[]): boolean {
