@@ -1016,4 +1016,68 @@ UPDATE "Person" SET email = 'shea.laws@foundry.health'        WHERE email = 'she
 
 ---
 
+## Phase 6 — In-app AI assistant (TT)
+
+> Floating chat widget in the bottom-right of every authed page, mirroring the FeedbackWidget pattern. Powered by Anthropic Claude (existing `ANTHROPIC_API_KEY`). Built in three deployable stages so we can dogfood after each. Per-phase deploy must be confirmed by TT before the next phase starts.
+
+### TASK-300 — Assistant (Phase 1): conversational helper
+**status:** doing
+**depends on:** TASK-009
+**acceptance:**
+- [ ] Floating chat icon at bottom-right of `(app)/layout.tsx`; click expands a ~400×600 panel with header (close + reset thread), scrollable message thread (markdown rendered), and an input box (Enter sends, ⌘+Enter newline → no, the other way: ⌘+Enter sends, Enter newline). Distinct colour from the feedback pill so the two widgets don't look like dupes; both visible together (feedback shifted left).
+- [ ] `AssistantThread` + `AssistantMessage` Prisma models + migration. Per-user single-active thread; reset archives the current and creates a new one. Auto-archive after 50 turns.
+- [ ] `/api/assistant/chat` Next.js route handler: POST `{ message }`, streams Claude response via Server-Sent Events. Persists user message + assistant message in same transaction-bounded sequence (user message saved before streaming starts; assistant message saved after stream completes).
+- [ ] System prompt in `src/server/agents/assistant/system-prompt.ts` — knows the user's name + roles + the canonical Foundry surfaces (timesheet / bills intake / expenses / approvals / projects / talent / BD outcomes / feedback / admin imports). Hard-prompts 2-3 sentence answers unless user asks for detail. Surface list filtered against user capabilities so the assistant never suggests something they can't do.
+- [ ] Conversation history capped to last 20 turns for context-window management.
+- [ ] Token cost guardrails: `max_tokens=4000` per turn; thread auto-archives at 50 turns.
+- [ ] Rate limit: 100 messages / hour / user, in-memory Map (single-region Vercel is fine for MVP). 429 returned on breach.
+- [ ] Model: `claude-sonnet-4-5` (matching the rest of the codebase per A4).
+- [ ] Audit event on every `assistant_thread.created` + `assistant_thread.archived` + `assistant_message.created` (actor=person, source=web, so any future audit-log review can see assistant usage volume).
+- [ ] Empty / loading / error states: empty thread shows a "Ask me how to log hours, submit an expense, or where approvals live" placeholder; streaming shows a typing-dot indicator; error shows a retry button + inline message.
+- [ ] Vitest tests: surface-knowledge builder (filters capabilities correctly per role), rate-limit helper, last-20-turn truncation.
+- [ ] Typecheck + lint green; commit: `feat(TASK-300): in-app assistant phase 1 — conversational helper`.
+- [ ] Smoke: TT signs in, opens the widget, asks "how do I log hours?", gets a sensible answer that mentions /timesheet, and a reload preserves the conversation.
+
+**Out of scope (lands in TASK-301):** any tool-use / DB lookups.
+
+### TASK-301 — Assistant (Phase 2): read tools
+**status:** todo
+**depends on:** TASK-300
+
+**acceptance:**
+- [ ] Add Anthropic `tools` array to the chat call. One file per tool under `src/server/agents/assistant/tools/`:
+  - `list_my_approvals()` — pending approval rows where `requiredRole ∈ session.roles`
+  - `list_my_projects()` — projects the user is on (team membership) or leads (primary partner / manager)
+  - `get_my_hours_this_week()` — sum + per-project breakdown from `TimesheetEntry`
+  - `find_project(query)` — fuzzy match on code or name
+  - `find_person(query)` — fuzzy match on name / initials / email; redacts fields the requester can't see (e.g. rate)
+  - `get_my_expenses_recent(n)` — last N submissions
+- [ ] Each tool is a pure server-side function gated on session; no privilege escalation.
+- [ ] Tool-result loop: assistant receives tool result, formats human answer.
+- [ ] Tool calls audited (`assistant_tool.invoked`, delta = `{ tool, args }`, source=web) so we can see what users are asking for.
+- [ ] Tests: one golden test per tool (fixture session + fixture data → expected JSON).
+- [ ] Commit: `feat(TASK-301): in-app assistant phase 2 — read tools`.
+- [ ] Smoke: TT asks "what's on my plate?" and gets a real answer pulled from the DB.
+
+### TASK-302 — Assistant (Phase 3): confirmation-gated write tools
+**status:** todo
+**depends on:** TASK-301
+**acceptance:**
+- [ ] Add `propose_*` tools that return a structured "confirmation card" payload (not a write). Widget renders the card inline with Claude's text; nothing happens until user clicks Confirm.
+  - `propose_timesheet_entry({ projectCode, date, hours, notes })`
+  - `propose_expense({ category, amountCents, description, projectCode? })`
+  - `propose_quick_recruit({ firstName, lastName, band, ownerInitials })`
+  - `propose_feedback_ticket({ urgency, kind, title, body })`
+- [ ] Confirmation cards are first-class messages in the thread (rendered alongside text); they carry a stable `proposalId` so the Confirm action POSTs back to a server action that re-validates capability + executes the underlying existing action (no new write code paths).
+- [ ] No write occurs without explicit click; the proposal payload has a TTL (15min) so stale cards can't be confirmed.
+- [ ] Every successful execution writes an `AuditEvent` with `source='agent'` and `actorType='person'` (the user is the actor; the assistant is just a UI), tagging `assistant.proposalId` in the delta.
+- [ ] Capability gating: server action refuses the action if the user lacks the capability for it (e.g. only `expense.submit` can confirm `propose_expense`).
+- [ ] Tests: each `propose_*` tool returns a valid card; each Confirm server action enforces capability + reuses the underlying create action.
+- [ ] **Phase 3 doesn't merge until Phase 2 has been in production for at least a day** per spec.
+- [ ] Commit: `feat(TASK-302): in-app assistant phase 3 — write tools with confirmation`.
+
+**Out of scope (defer per spec):** voice/TTS, image upload, cross-user assistants, custom personas, slash-command palette.
+
+---
+
 *End of TASKS.md. Start with TASK-001.*

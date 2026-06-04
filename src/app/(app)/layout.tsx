@@ -4,6 +4,7 @@ import { countUnreadUpdates } from '@/server/user-updates';
 import { Sidebar } from '@/components/shell/sidebar';
 import { Topbar } from '@/components/shell/topbar';
 import { FeedbackWidget } from '@/components/feedback-widget';
+import { AssistantWidget } from '@/components/assistant-widget';
 import { PeriodAutoRefresh } from '@/components/shell/period-refresh';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -71,10 +72,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         )}
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
       </div>
-      {/* Floating feedback widget — bottom-right of every authed page.
+      {/* Floating feedback widget — sits just left of the assistant pill.
           Pilot users use it to log bugs / feature requests / maintenance
           gripes; triage happens at /admin/feedback. */}
       <FeedbackWidget />
+      {/* In-app AI assistant — bottom-right primary widget. Phase 1
+          (TASK-300) ships conversational guidance only; read + write
+          tools land in TASK-301 / TASK-302. */}
+      <AssistantWidget />
     </div>
   );
 }

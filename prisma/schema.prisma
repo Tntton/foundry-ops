@@ -484,6 +484,9 @@ model Person {
   // Required FK on the envelope side, so this is the audit-trail
   // back-pointer.
   docusignEnvelopes DocuSignEnvelope[] @relation("DocuSignSender")
+  // In-app assistant — one thread per user concept (only one active at a time).
+  // Reset archives the active thread and creates a new one.
+  assistantThreads  AssistantThread[]
 }
 
 // ─── CV-derived entries (education + work history) ────────────────
@@ -1659,4 +1662,71 @@ model DocuSignEnvelope {
   @@index([subjectType, subjectId])
   @@index([status])
   @@index([senderId])
+}
+
+// ============================================================================
+// IN-APP ASSISTANT
+// ============================================================================
+//
+// Floating chat widget at the bottom-right of every authed page.
+// Phase 1 (TASK-300) — conversational helper only (no tools).
+// Phase 2 (TASK-301) — read tools.
+// Phase 3 (TASK-302) — write tools with confirmation cards.
+//
+// Each Person has one active AssistantThread at a time; "reset" archives
+// the active thread and creates a new one. We keep archived threads for
+// audit / dogfooding so we can see what users asked.
+
+enum AssistantThreadStatus {
+  active
+  archived
+}
+
+enum AssistantMessageRole {
+  user
+  assistant
+  // `tool` rows store the tool-call request + result pair as JSON in
+  // toolInput / toolOutput; rendered specially in the widget (collapsed
+  // by default). Reserved for Phase 2/3 — Phase 1 only writes user +
+  // assistant rows.
+  tool
+}
+
+model AssistantThread {
+  id            String                @id @default(cuid())
+  personId      String
+  status        AssistantThreadStatus @default(active)
+  // Stamp updated whenever a message is appended; cheap to read for
+  // "your conversation has been quiet for N hours" UX later.
+  lastMessageAt DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  person        Person                @relation(fields: [personId], references: [id], onDelete: Cascade)
+  messages      AssistantMessage[]
+
+  // Drives the per-user "find my active thread" lookup. Partial unique
+  // would be cleaner but Prisma doesn't expose it portably; the app
+  // enforces single-active per person in the action layer instead.
+  @@index([personId, status])
+  @@index([personId, lastMessageAt])
+}
+
+model AssistantMessage {
+  id         String               @id @default(cuid())
+  threadId   String
+  role       AssistantMessageRole
+  // Plain text content for user + assistant rows. For tool rows this
+  // can be the human-readable summary; the structured call/result
+  // lives in toolInput / toolOutput.
+  content    String               @db.Text
+  // Phase 2/3 only.
+  toolName   String?
+  toolInput  Json?
+  toolOutput Json?
+  createdAt  DateTime             @default(now())
+
+  thread     AssistantThread      @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
 }

@@ -81,12 +81,13 @@ export function FeedbackWidget() {
 
   return (
     <>
-      {/* Trigger pill — always visible bottom-right when collapsed */}
+      {/* Trigger pill — sits to the left of the AssistantWidget so the two don't overlap.
+          Assistant widget owns the bottom-right corner (primary surface). */}
       {!open && (
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full border border-line bg-card px-3 py-2 text-xs font-medium text-ink-2 shadow-lg transition-all hover:bg-surface-hover hover:text-ink"
+          className="fixed bottom-4 right-[8.5rem] z-40 flex items-center gap-1.5 rounded-full border border-line bg-card px-3 py-2 text-xs font-medium text-ink-2 shadow-lg transition-all hover:bg-surface-hover hover:text-ink"
           title="Submit feedback or request a feature"
         >
           <span aria-hidden>💬</span>
@@ -94,7 +95,8 @@ export function FeedbackWidget() {
         </button>
       )}
 
-      {/* Expanded panel */}
+      {/* Expanded panel — full bottom-right corner is fine when open; the
+          assistant pill is small enough to coexist. */}
       {open && (
         <div className="fixed bottom-4 right-4 z-40 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-line bg-card shadow-xl">
           <header className="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
