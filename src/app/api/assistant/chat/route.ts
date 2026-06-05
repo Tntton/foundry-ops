@@ -11,6 +11,8 @@ import {
   maybeArchiveIfFull,
   ASSISTANT_MAX_TURNS,
 } from '@/server/agents/assistant/threads';
+import { extractIntakeFields } from '@/server/agents/intake-ocr/extract';
+import { writeAudit } from '@/server/audit';
 
 // Streaming responses must not be cached at the edge.
 export const dynamic = 'force-dynamic';
@@ -21,17 +23,46 @@ const BodySchema = z.object({
   message: z.string().trim().min(1, 'Message is empty').max(4000),
 });
 
+// Multipart upload limits (TASK-302e).
+const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10MB hard ceiling
+const OCR_MAX_BYTES = 8 * 1024 * 1024; // 8MB practical ceiling for Claude vision
+const ALLOWED_MIMES = ['application/pdf', 'image/jpeg', 'image/png', 'image/heic', 'image/webp'];
+
+type AttachmentSummary = {
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  /** Human-readable summary line, e.g. "Officeworks $48.50 2026-06-05 (conf 92%)". */
+  summary: string;
+  /** Parsed fields when OCR succeeded; null when extractor returned ok:false. */
+  fields?: {
+    vendor: string | null;
+    amountDollars: number | null;
+    gstDollars: number | null;
+    dateIso: string | null;
+    invoiceNumber: string | null;
+    confidence: number;
+    suggestedCategory: string | null;
+  };
+};
+
 /**
- * POST /api/assistant/chat — accepts a single user message + streams the
- * assistant's reply as Server-Sent Events. Each SSE event is a JSON
- * object: `{ kind: 'text', text }`, `{ kind: 'error', message }`, or
- * `{ kind: 'done', finalText }`. The widget consumes these events and
- * appends text deltas to the rendered message in real time.
+ * POST /api/assistant/chat — accepts either:
  *
- * Persistence model: user message is written before the stream opens
- * (so a reload mid-stream still shows the user's question). Assistant
- * reply is written once the stream finishes, using the `done` chunk's
- * `finalText` so we don't reconstruct on the client.
+ *   - application/json: `{ message }` (legacy path)
+ *   - multipart/form-data: text field `message` + optional file field
+ *     `attachment`. The attachment is OCR'd via extractIntakeFields and
+ *     the extracted fields are inlined into the user message Claude
+ *     sees + streamed back as a dedicated SSE event so the widget can
+ *     show "📎 receipt.pdf · ✓ Officeworks $48.50".
+ *
+ * SSE event shapes streamed back:
+ *   { kind: 'meta', threadId }
+ *   { kind: 'attachment_extracted', filename, mimeType, sizeBytes,
+ *     summary, fields? }
+ *   { kind: 'text', text }
+ *   { kind: 'tool_call' | 'tool_result' | 'prefill_card' | 'error' }
+ *   { kind: 'done', finalText }
  */
 export async function POST(req: Request): Promise<Response> {
   const session = await getSession();
@@ -51,18 +82,77 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'invalid_json' }, { status: 400 });
-  }
-  const parsed = BodySchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: 'invalid_body', message: parsed.error.issues[0]?.message ?? 'Invalid input' },
-      { status: 400 },
-    );
+  // Parse body — multipart for file uploads, JSON otherwise.
+  const contentType = req.headers.get('content-type') ?? '';
+  let userMessage: string;
+  let attachment: { name: string; mimeType: string; size: number; bytes: Buffer } | null = null;
+
+  if (contentType.startsWith('multipart/form-data')) {
+    let form: FormData;
+    try {
+      form = await req.formData();
+    } catch {
+      return NextResponse.json({ error: 'invalid_multipart' }, { status: 400 });
+    }
+    const rawMsg = form.get('message');
+    const messageText =
+      typeof rawMsg === 'string' && rawMsg.trim().length > 0
+        ? rawMsg
+        // Empty message + an attachment is fine — synthesise a placeholder so
+        // the chat loop still has SOMETHING to anchor on.
+        : 'I dropped a receipt — log it for me.';
+    const parsed = BodySchema.safeParse({ message: messageText });
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'invalid_body', message: parsed.error.issues[0]?.message ?? 'Invalid input' },
+        { status: 400 },
+      );
+    }
+    userMessage = parsed.data.message;
+
+    const file = form.get('attachment');
+    if (file instanceof File) {
+      if (file.size > MAX_FILE_BYTES) {
+        return NextResponse.json(
+          {
+            error: 'file_too_large',
+            message: `Files must be ≤ ${Math.round(MAX_FILE_BYTES / 1024 / 1024)}MB.`,
+          },
+          { status: 413 },
+        );
+      }
+      if (!ALLOWED_MIMES.includes(file.type)) {
+        return NextResponse.json(
+          {
+            error: 'unsupported_file_type',
+            message: `Only ${ALLOWED_MIMES.join(', ')} are supported.`,
+          },
+          { status: 415 },
+        );
+      }
+      const ab = await file.arrayBuffer();
+      attachment = {
+        name: file.name || 'attachment',
+        mimeType: file.type,
+        size: file.size,
+        bytes: Buffer.from(ab),
+      };
+    }
+  } else {
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: 'invalid_json' }, { status: 400 });
+    }
+    const parsed = BodySchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'invalid_body', message: parsed.error.issues[0]?.message ?? 'Invalid input' },
+        { status: 400 },
+      );
+    }
+    userMessage = parsed.data.message;
   }
 
   // Active thread + existing history.
@@ -79,31 +169,134 @@ export async function POST(req: Request): Promise<Response> {
 
   const history = await listThreadMessages(thread.id);
 
-  // Persist user message before streaming opens so a refresh mid-stream
-  // still shows the question.
+  // Run OCR on the attachment BEFORE we persist + stream so the
+  // extracted fields can join the user message Claude sees.
+  let attachmentSummary: AttachmentSummary | null = null;
+  let composedUserMessage = userMessage;
+  if (attachment) {
+    if (attachment.size > OCR_MAX_BYTES) {
+      attachmentSummary = {
+        filename: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.size,
+        summary: 'Too large to OCR — skipped extraction.',
+      };
+    } else {
+      const extraction = await extractIntakeFields({
+        base64: attachment.bytes.toString('base64'),
+        mimeType: attachment.mimeType,
+        fileName: attachment.name,
+      });
+      if (extraction.ok) {
+        const e = extraction.data;
+        const parts: string[] = [];
+        if (e.supplierName) parts.push(e.supplierName);
+        if (e.amountTotalDollars !== null)
+          parts.push(`$${e.amountTotalDollars.toFixed(2)}`);
+        if (e.issueDate) parts.push(e.issueDate);
+        parts.push(`conf ${e.confidence.overall}%`);
+        attachmentSummary = {
+          filename: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.size,
+          summary: parts.join(' · '),
+          fields: {
+            vendor: e.supplierName,
+            amountDollars: e.amountTotalDollars,
+            gstDollars: e.gstDollars,
+            dateIso: e.issueDate,
+            invoiceNumber: e.invoiceNumber,
+            confidence: e.confidence.overall,
+            suggestedCategory: e.category,
+          },
+        };
+      } else {
+        attachmentSummary = {
+          filename: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.size,
+          summary: `OCR failed: ${extraction.reason}`,
+        };
+      }
+    }
+    // Inline the extraction so Claude has structured context in the
+    // user message itself (history rehydration on later turns picks
+    // this up too).
+    const fieldsBlock =
+      attachmentSummary.fields
+        ? JSON.stringify(attachmentSummary.fields)
+        : '(extraction failed)';
+    composedUserMessage = `[attached file: ${attachment.name} · ${attachment.mimeType} · ${attachmentSummary.summary}]
+extraction: ${fieldsBlock}
+
+${userMessage}`.trim();
+
+    // Audit the attachment processing — paired with a redemption
+    // event if a prefill tool subsequently fires.
+    const auditAfter: Record<string, unknown> = {
+      filename: attachment.name,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.size,
+      summary: attachmentSummary.summary,
+      confidence: attachmentSummary.fields?.confidence ?? null,
+    };
+    try {
+      await prisma.$transaction(async (tx) => {
+        await writeAudit(tx, {
+          actor: { type: 'person', id: session.person.id },
+          action: 'extracted',
+          entity: {
+            type: 'assistant_attachment',
+            id: `${session.person.id}:${Date.now()}:${attachment.name}`,
+            after: auditAfter,
+          },
+          source: 'agent',
+        });
+      });
+    } catch (err) {
+      console.error('[assistant.chat] attachment audit failed:', err);
+    }
+  }
+
+  // Persist user message before streaming opens.
   await prisma.$transaction(async (tx) => {
     await appendMessage(tx, {
       threadId: thread.id,
       personId: session.person.id,
       role: 'user',
-      content: parsed.data.message,
+      content: composedUserMessage,
     });
   });
 
   const encoder = new TextEncoder();
   const sse = new ReadableStream({
     async start(controller) {
-      // Initial frame carries the thread id so the client can hydrate
-      // its message list with the user message it just sent.
       controller.enqueue(
         encoder.encode(`data: ${JSON.stringify({ kind: 'meta', threadId: thread.id })}\n\n`),
       );
+      // Emit the attachment extraction immediately so the widget can
+      // flip the file chip from "Extracting…" → "✓ <summary>".
+      if (attachmentSummary) {
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              kind: 'attachment_extracted',
+              filename: attachmentSummary.filename,
+              mimeType: attachmentSummary.mimeType,
+              sizeBytes: attachmentSummary.sizeBytes,
+              summary: attachmentSummary.summary,
+              fields: attachmentSummary.fields ?? null,
+            })}\n\n`,
+          ),
+        );
+      }
+
       let finalText = '';
       try {
         for await (const chunk of streamAssistantReply({
           session,
           history,
-          newUserMessage: parsed.data.message,
+          newUserMessage: composedUserMessage,
         })) {
           if (chunk.kind === 'done') {
             finalText = chunk.finalText;
@@ -116,13 +309,12 @@ export async function POST(req: Request): Promise<Response> {
           encoder.encode(
             `data: ${JSON.stringify({
               kind: 'error',
-              message: "Stream failed. Try again.",
+              message: 'Stream failed. Try again.',
             })}\n\n`,
           ),
         );
       } finally {
         controller.close();
-        // Persist the assistant reply after the stream closes.
         if (finalText.trim().length > 0) {
           try {
             await prisma.$transaction(async (tx) => {
@@ -147,7 +339,6 @@ export async function POST(req: Request): Promise<Response> {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
-      // Disable proxy buffering so chunks reach the client immediately.
       'X-Accel-Buffering': 'no',
     },
   });

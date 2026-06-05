@@ -1156,6 +1156,25 @@ A secondary, smaller surface of `propose_*` tools handles low-field one-shot act
 - [ ] Tests: WhatsApp router replies with a deep-link URL when flag is off; auto-drafts when flag is on (back-compat path).
 - [ ] Commit: `feat(TASK-302c): WhatsApp prefill parity — deep-link instead of auto-draft`
 
+### TASK-302e — Drag-drop file attachments (receipt → expense/bill prefill)
+**status:** doing
+**depends on:** TASK-302b
+**acceptance:**
+- [x] Drag a file onto the assistant panel — panel shows full-bleed drop overlay ("Drop receipt or invoice · PDF or image · up to 10MB"). MIME allowlist: PDF + JPEG + PNG + HEIC + WebP. Other types rejected inline.
+- [x] One file per message (MVP). Dropping a second replaces the first.
+- [x] Attachment chip in the composer above the textarea: "📎 receipt.pdf · 1.2MB · application/pdf · [✕]". Click ✕ removes before send.
+- [x] On send, widget POSTs multipart/form-data to `/api/assistant/chat`. Optional text alongside the file ("this is for ARC001").
+- [x] `/api/assistant/chat` extended: detects content-type, parses multipart, validates file (mime + size), runs `extractIntakeFields` (existing OCR pipeline), emits `attachment_extracted` SSE event with the structured extraction, and INLINES the extraction into the user message Claude sees so it has full context.
+- [x] Persisted user message records the attachment + extraction summary so reload preserves replay: `[attached file: receipt.pdf · application/pdf · Officeworks · $48.50 · conf 92%]\nextraction: {...}\n\n<user text>`. Original binary NOT stored (SharePoint sync ships later).
+- [x] Widget renders attachment chips in user bubble: "📎 ⋯ receipt.pdf · uploading" → "📎 ⋯ receipt.pdf · extracting fields…" → "📎 ✓ receipt.pdf · Officeworks · $48.50 · 2026-06-05 · conf 92%". Below it: normal text + tool chips + prefill card flow.
+- [x] System prompt v3.2 — explains the structured-extraction format + heuristics for expense-vs-bill routing + confidence-band advice + "ask if ambiguous" fallback.
+- [x] OCR cost guardrail: files > 8MB skip OCR (still pass through with a "too large to OCR" summary so the user knows). Hard 10MB cap on upload.
+- [x] Audit event `assistant_attachment` action=`extracted` source=`agent`, delta carries filename + mimeType + size + confidence.
+- [ ] Commit: `feat(TASK-302e): assistant — drag-drop receipt → OCR → prefill`.
+- [ ] Smoke: TT drags a real receipt PDF onto the assistant + types "this is for ARC001 reimburse me" → expects extraction chip → expense prefill card → click → `/expenses/new` opens with all fields populated.
+
+**Out of scope (future):** CSV → bulk timesheet attachment (bulk import surface at `/admin/import/timesheets` already handles this — assistant could deep-link there instead). Original binary upload to SharePoint. Multi-file per message. Word doc / Excel parsing.
+
 ### TASK-302d — Propose tools (quick recruit + feedback ticket)
 **status:** todo
 **depends on:** TASK-302a

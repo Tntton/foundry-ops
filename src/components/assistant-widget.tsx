@@ -23,6 +23,15 @@ type PrefillCard = {
   summary: string;
 };
 
+type AttachmentChip = {
+  filename: string;
+  sizeBytes: number;
+  /** 'uploading' while the multipart POST is in flight; 'extracting'
+   *  while the server is OCR'ing; 'done' on success; 'failed' on error. */
+  status: 'uploading' | 'extracting' | 'done' | 'failed';
+  summary?: string;
+};
+
 type Message = {
   id: string;
   role: Role;
@@ -33,7 +42,18 @@ type Message = {
   tools?: ToolInvocation[];
   /** Prefill cards rendered as buttons inline (Phase 3+). */
   prefills?: PrefillCard[];
+  /** Attachments uploaded with this message (Phase 3e+). */
+  attachments?: AttachmentChip[];
 };
+
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const ALLOWED_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/heic', 'image/webp'];
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
 
 const PLACEHOLDER =
   "Hey — I'm the Foundry Ops assistant. Ask me what's on my plate, what you've logged this week, or which screen does X. I keep answers short.";
@@ -70,8 +90,27 @@ export function AssistantWidget() {
   const [hydrated, setHydrated] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  function adoptFile(file: File) {
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      setError(
+        `Unsupported file type: ${file.type || 'unknown'}. Drop a PDF or image.`,
+      );
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError(
+        `Too large: ${formatBytes(file.size)} (max ${formatBytes(MAX_UPLOAD_BYTES)}).`,
+      );
+      return;
+    }
+    setError(null);
+    setPendingFile(file);
+  }
 
   // Hydrate the active thread when the panel first opens.
   useEffect(() => {
@@ -106,16 +145,28 @@ export function AssistantWidget() {
   }, [messages, open]);
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, file: File | null) => {
       const trimmed = text.trim();
-      if (!trimmed || pending) return;
+      // Allow file-only send (empty text + file).
+      if (!file && !trimmed) return;
+      if (pending) return;
       setError(null);
       setDraft('');
+      setPendingFile(null);
+
+      const userAttachment: AttachmentChip | undefined = file
+        ? {
+            filename: file.name,
+            sizeBytes: file.size,
+            status: 'uploading',
+          }
+        : undefined;
 
       const userMsg: Message = {
         id: `local-${Date.now()}-u`,
         role: 'user',
-        content: trimmed,
+        content: trimmed || (file ? `📎 ${file.name}` : ''),
+        attachments: userAttachment ? [userAttachment] : undefined,
       };
       const replyMsg: Message = {
         id: `local-${Date.now()}-a`,
@@ -130,12 +181,41 @@ export function AssistantWidget() {
       abortRef.current = ac;
 
       try {
-        const res = await fetch('/api/assistant/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: trimmed }),
-          signal: ac.signal,
-        });
+        let res: Response;
+        if (file) {
+          const form = new FormData();
+          form.set('message', trimmed);
+          form.set('attachment', file, file.name);
+          res = await fetch('/api/assistant/chat', {
+            method: 'POST',
+            body: form,
+            signal: ac.signal,
+          });
+          // Mark the chip as extracting once the upload completes (we
+          // can't observe finer-grained progress without a custom
+          // uploader; for MVP the "extracting" state shows as soon as
+          // the server starts responding).
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === userMsg.id && m.attachments
+                ? {
+                    ...m,
+                    attachments: m.attachments.map((a) => ({
+                      ...a,
+                      status: 'extracting',
+                    })),
+                  }
+                : m,
+            ),
+          );
+        } else {
+          res = await fetch('/api/assistant/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: trimmed }),
+            signal: ac.signal,
+          });
+        }
 
         if (!res.ok || !res.body) {
           const fallback = await res
@@ -172,6 +252,10 @@ export function AssistantWidget() {
               surface?: string;
               url?: string;
               summary?: string;
+              filename?: string;
+              sizeBytes?: number;
+              mimeType?: string;
+              fields?: unknown;
             };
             try {
               evt = JSON.parse(line);
@@ -195,6 +279,32 @@ export function AssistantWidget() {
                 prev.map((m) =>
                   m.id === replyMsg.id
                     ? { ...m, tools: [...(m.tools ?? []), ti] }
+                    : m,
+                ),
+              );
+            } else if (
+              evt.kind === 'attachment_extracted' &&
+              evt.filename &&
+              evt.summary
+            ) {
+              const filename = evt.filename;
+              const summary = evt.summary;
+              const failed = summary.startsWith('OCR failed') || summary.includes('Too large');
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === userMsg.id && m.attachments
+                    ? {
+                        ...m,
+                        attachments: m.attachments.map((a) =>
+                          a.filename === filename
+                            ? {
+                                ...a,
+                                status: failed ? 'failed' : 'done',
+                                summary,
+                              }
+                            : a,
+                        ),
+                      }
                     : m,
                 ),
               );
@@ -267,15 +377,39 @@ export function AssistantWidget() {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    void sendMessage(draft);
+    void sendMessage(draft, pendingFile);
   }
 
   function handleKey(e: KeyboardEvent<HTMLTextAreaElement>) {
     // Enter sends; Shift+Enter adds a newline. ⌘/Ctrl+Enter also sends.
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      void sendMessage(draft);
+      void sendMessage(draft, pendingFile);
     }
+  }
+
+  function handleDragEnter(e: React.DragEvent) {
+    if (e.dataTransfer.types.includes('Files')) {
+      e.preventDefault();
+      setDragOver(true);
+    }
+  }
+  function handleDragOver(e: React.DragEvent) {
+    if (e.dataTransfer.types.includes('Files')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  }
+  function handleDragLeave(e: React.DragEvent) {
+    // Only un-set drag state when the pointer leaves the panel
+    // entirely (not when it moves over a child element).
+    if (e.currentTarget === e.target) setDragOver(false);
+  }
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) adoptFile(file);
   }
 
   async function handleReset() {
@@ -309,7 +443,22 @@ export function AssistantWidget() {
       )}
 
       {open && (
-        <div className="fixed bottom-4 right-4 z-40 flex h-[600px] w-[400px] max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-line bg-card shadow-2xl">
+        <div
+          className="fixed bottom-4 right-4 z-40 flex h-[600px] w-[400px] max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-line bg-card shadow-2xl"
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {dragOver && (
+            <div className="pointer-events-none absolute inset-0 z-50 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-brand bg-brand/15 backdrop-blur-sm">
+              <span className="text-3xl">📎</span>
+              <div className="text-sm font-medium text-ink">
+                Drop receipt or invoice
+              </div>
+              <div className="text-[11px] text-ink-3">PDF or image · up to 10MB</div>
+            </div>
+          )}
           <header className="flex items-center justify-between gap-2 border-b border-line bg-surface-elev px-4 py-2.5">
             <div>
               <div className="text-sm font-semibold text-ink">
@@ -368,6 +517,9 @@ export function AssistantWidget() {
                           : 'max-w-[90%] rounded-lg bg-surface-elev px-3 py-2 text-xs text-ink'
                       }
                     >
+                      {m.role === 'user' && m.attachments && m.attachments.length > 0 ? (
+                        <AttachmentChips chips={m.attachments} />
+                      ) : null}
                       {m.role === 'assistant' && m.tools && m.tools.length > 0 ? (
                         <ToolChips tools={m.tools} />
                       ) : null}
@@ -393,6 +545,27 @@ export function AssistantWidget() {
             </div>
           )}
 
+          {pendingFile && (
+            <div className="flex items-center justify-between gap-2 border-t border-line bg-surface-elev px-3 py-1.5 text-[11px]">
+              <span className="flex items-center gap-1.5 text-ink-2">
+                <span aria-hidden>📎</span>
+                <span className="font-medium text-ink">{pendingFile.name}</span>
+                <span className="text-ink-3">
+                  · {formatBytes(pendingFile.size)} ·{' '}
+                  {pendingFile.type || 'file'}
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setPendingFile(null)}
+                className="rounded-md p-0.5 text-ink-3 hover:bg-surface-hover hover:text-ink"
+                aria-label="Remove attachment"
+                title="Remove"
+              >
+                ✕
+              </button>
+            </div>
+          )}
           <form
             onSubmit={handleSubmit}
             className="flex items-end gap-2 border-t border-line bg-surface-elev px-3 py-2.5"
@@ -401,7 +574,11 @@ export function AssistantWidget() {
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={handleKey}
-              placeholder="Ask me anything about Foundry Ops…"
+              placeholder={
+                pendingFile
+                  ? 'Add context (optional) — e.g. "this is for ARC001"…'
+                  : 'Ask me anything · drop a receipt to log it…'
+              }
               rows={2}
               maxLength={4000}
               disabled={pending}
@@ -409,7 +586,9 @@ export function AssistantWidget() {
             />
             <button
               type="submit"
-              disabled={pending || draft.trim().length === 0}
+              disabled={
+                pending || (draft.trim().length === 0 && !pendingFile)
+              }
               className="rounded-md bg-brand px-3 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {pending ? '…' : 'Send'}
@@ -418,6 +597,41 @@ export function AssistantWidget() {
         </div>
       )}
     </>
+  );
+}
+
+function AttachmentChips({ chips }: { chips: AttachmentChip[] }) {
+  return (
+    <ul className="mb-1.5 flex flex-col gap-1">
+      {chips.map((a, i) => {
+        const icon =
+          a.status === 'uploading'
+            ? '⋯'
+            : a.status === 'extracting'
+              ? '⋯'
+              : a.status === 'failed'
+                ? '⚠️'
+                : '✓';
+        return (
+          <li
+            key={i}
+            className="flex items-center gap-1.5 text-[11px] text-white/85"
+          >
+            <span aria-hidden>📎</span>
+            <span aria-hidden>{icon}</span>
+            <span className="font-medium">{a.filename}</span>
+            <span className="text-white/65">
+              ·{' '}
+              {a.status === 'uploading'
+                ? 'uploading'
+                : a.status === 'extracting'
+                  ? 'extracting fields…'
+                  : (a.summary ?? formatBytes(a.sizeBytes))}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
