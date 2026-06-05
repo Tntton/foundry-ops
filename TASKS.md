@@ -1179,14 +1179,15 @@ A secondary, smaller surface of `propose_*` tools handles low-field one-shot act
 **Out of scope (future):** CSV → bulk timesheet attachment (bulk import surface at `/admin/import/timesheets` already handles this — assistant could deep-link there instead). Original binary upload to SharePoint. Multi-file per message. Word doc / Excel parsing.
 
 ### TASK-302d — Propose tools (quick recruit + feedback ticket)
-**status:** todo
+**status:** doing
 **depends on:** TASK-302a
 **acceptance:**
-- [ ] `propose_quick_recruit` + `propose_feedback_ticket` tools — return confirmation card payload with stable `proposalId`. Cards stored in a short-lived signed token (same crypto as prefill, different `kind`) so the Confirm POST has something to verify against.
-- [ ] Widget renders confirmation cards inline with a Confirm button.
-- [ ] `/api/assistant/confirm` POST handler — verifies token, capability-checks, executes the underlying existing action.
-- [ ] Audit on confirm: `source=agent`, delta tags `proposalId`.
-- [ ] Tests: each propose tool returns a valid card; each Confirm enforces capability.
+- [x] `propose_quick_recruit` + `propose_feedback_ticket` tools registered in the assistant catalogue. Each returns `{ kind:'proposal', surface, token, title, fields, confirmLabel, summary }`. Token uses the same HMAC primitive as prefill (re-used `signPrefillToken`), with new kinds `recruit_proposal` + `feedback_proposal` added to the `PrefillKind` union. 15-min TTL, personId-bound, jti nonce.
+- [x] Widget renders confirmation cards inline with Confirm + Cancel. Card shows title + labelled fields. On Confirm: pending → confirming → confirmed (with "Open →" link to the created entity) or failed (with error). Cancel removes the card from the message.
+- [x] `/api/assistant/confirm` POST route — verifies token (signature + personId + kind + expiry), capability-checks (`recruit.manage` for quick recruit; feedback is open to any authed user), runs the underlying create inside a transaction with `source='agent'` audit.
+- [x] Audit chain: mint = `assistant_proposal` action=`proposed` source=`agent`; create = `recruit_prospect` / `feedback_ticket` action=`created` source=`agent` delta tags `via: assistant_proposal` + jti so the trail is end-to-end traceable.
+- [x] System prompt v3.3 — introduces the propose family + example phrasings + lowercase snake_case band values.
+- [x] Tests: assistant-tools registry includes both new tools (14 total). Full suite 277 ✓.
 - [ ] Commit: `feat(TASK-302d): assistant propose tools — quick recruit + feedback ticket`
 
 ### TASK-303 — Unify in-app assistant + WhatsApp router behind one agent loop

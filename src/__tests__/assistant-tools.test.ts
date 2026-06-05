@@ -21,7 +21,7 @@ const mkSession = (roles: Role[]): Session => ({
 describe('assistant tool registry', () => {
   it('exposes the expected tools with unique names', () => {
     const names = ALL_TOOLS.map((t) => t.spec.name);
-    // Phase 2 read tools + Phase 3a/3b prefill family.
+    // Phase 2 read tools + Phase 3 prefill + propose families.
     expect(names).toEqual([
       'list_my_approvals',
       'list_my_projects',
@@ -35,6 +35,8 @@ describe('assistant tool registry', () => {
       'prefill_expense',
       'prefill_bill',
       'prefill_invoice',
+      'propose_quick_recruit',
+      'propose_feedback_ticket',
     ]);
     expect(new Set(names).size).toBe(names.length);
   });

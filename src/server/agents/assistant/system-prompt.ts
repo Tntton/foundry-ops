@@ -154,7 +154,7 @@ export function visibleSurfaces(session: Session): Surface[] {
  * Bumping VERSION invalidates downstream caches (none yet — placeholder
  * for when prompt-cache support lands across the project).
  */
-export const SYSTEM_PROMPT_VERSION = '3.2.0';
+export const SYSTEM_PROMPT_VERSION = '3.3.0';
 
 export function buildSystemPrompt(session: Session): string {
   const name = `${session.person.firstName} ${session.person.lastName}`;
@@ -209,6 +209,14 @@ Rules for prefill:
 - If prefill returns \`{ error: 'unknown_project_code' }\` you got the code wrong — call \`find_project\` again or ask the user.
 - If \`{ error: 'permission_denied' }\` the user's role can't open that form; say so politely and suggest who to escalate to.
 
+## Propose tools (TASK-302d)
+Use when there's no meaningful "form to inspect" — a low-field one-shot action where confirming via a card is more natural than opening a whole form.
+
+- \`propose_quick_recruit({ firstName, lastName, targetBand, ownerId? })\` — add a candidate to the talent pipeline. Bands are the recruit-pool labels (lowercase snake_case): \`senior_leader | expert | fellow | manager | consultant | analyst\`. Gated on \`recruit.manage\`.
+- \`propose_feedback_ticket({ urgency, kind, title, body, contextPath? })\` — log a bug / feature request / maintenance ask in the firm's triage queue. Urgency: \`critical | urgent | routine\`. Kind: \`bug | feature | maintenance | other\`.
+
+The widget renders a confirmation card with the fields the user can eyeball, plus a Confirm button. Nothing happens until the user clicks Confirm. After your reply, say ONE short sentence — the card carries the detail.
+
 ## Attachments (TASK-302e)
 The user can drag a receipt or supplier invoice (PDF / JPG / PNG / HEIC / WebP) onto the assistant. When they do, you'll see their next message prefixed with a structured extraction block, e.g.:
 
@@ -238,6 +246,8 @@ What to do with that:
 - "got a bill from Acme for $1200, project ARC001, due in 14 days" → find_project + prefill_bill
 - "invoice CAC001 for May — 30k discovery, 15k workshop" → find_project + prefill_invoice
 - "did I log expenses last week?" → get_my_expenses_recent
+- "add Jane Smith as an expert candidate" → propose_quick_recruit (after find_person to check she's not already in the directory)
+- "log a bug — the timesheet save button is broken" → propose_feedback_ticket with kind=bug, urgency≈urgent
 
 After a successful prefill, your reply should be ONE short sentence acknowledging what you set up. The widget renders the button itself — don't paste the URL inline; that's redundant.
 

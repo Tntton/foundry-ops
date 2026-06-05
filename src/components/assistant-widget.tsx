@@ -23,6 +23,19 @@ type PrefillCard = {
   summary: string;
 };
 
+type ProposalCard = {
+  surface: string;
+  token: string;
+  title: string;
+  fields: Array<{ label: string; value: string }>;
+  confirmLabel: string;
+  summary: string;
+  /** Local UI state — flips when the user clicks Confirm. */
+  status?: 'pending' | 'confirming' | 'confirmed' | 'failed';
+  result?: { entityType: string; entityId: string; link?: string; summary: string };
+  error?: string;
+};
+
 type AttachmentChip = {
   filename: string;
   sizeBytes: number;
@@ -42,6 +55,8 @@ type Message = {
   tools?: ToolInvocation[];
   /** Prefill cards rendered as buttons inline (Phase 3+). */
   prefills?: PrefillCard[];
+  /** Confirmation cards rendered with Confirm/Cancel (Phase 3d+). */
+  proposals?: ProposalCard[];
   /** Attachments uploaded with this message (Phase 3e+). */
   attachments?: AttachmentChip[];
 };
@@ -256,6 +271,9 @@ export function AssistantWidget() {
               sizeBytes?: number;
               mimeType?: string;
               fields?: unknown;
+              token?: string;
+              title?: string;
+              confirmLabel?: string;
             };
             try {
               evt = JSON.parse(line);
@@ -323,6 +341,29 @@ export function AssistantWidget() {
                 prev.map((m) =>
                   m.id === replyMsg.id
                     ? { ...m, prefills: [...(m.prefills ?? []), card] }
+                    : m,
+                ),
+              );
+            } else if (
+              evt.kind === 'proposal_card' &&
+              evt.surface &&
+              evt.token &&
+              evt.title &&
+              Array.isArray(evt.fields)
+            ) {
+              const card: ProposalCard = {
+                surface: evt.surface,
+                token: evt.token,
+                title: evt.title,
+                fields: evt.fields as Array<{ label: string; value: string }>,
+                confirmLabel: evt.confirmLabel ?? 'Confirm',
+                summary: evt.summary ?? '',
+                status: 'pending',
+              };
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === replyMsg.id
+                    ? { ...m, proposals: [...(m.proposals ?? []), card] }
                     : m,
                 ),
               );
@@ -410,6 +451,81 @@ export function AssistantWidget() {
     setDragOver(false);
     const file = e.dataTransfer.files?.[0];
     if (file) adoptFile(file);
+  }
+
+  async function confirmProposal(
+    messageId: string,
+    token: string,
+    kind: string,
+  ) {
+    function patch(updater: (c: ProposalCard) => ProposalCard) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId && m.proposals
+            ? {
+                ...m,
+                proposals: m.proposals.map((p) =>
+                  p.token === token ? updater(p) : p,
+                ),
+              }
+            : m,
+        ),
+      );
+    }
+    patch((p) => ({ ...p, status: 'confirming', error: undefined }));
+    try {
+      const res = await fetch('/api/assistant/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, kind }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        entityType?: string;
+        entityId?: string;
+        link?: string;
+        summary?: string;
+      };
+      if (!res.ok || !data.ok) {
+        patch((p) => ({
+          ...p,
+          status: 'failed',
+          error: data.message ?? data.error ?? 'Confirm failed',
+        }));
+        return;
+      }
+      patch((p) => ({
+        ...p,
+        status: 'confirmed',
+        result: {
+          entityType: data.entityType ?? 'unknown',
+          entityId: data.entityId ?? '',
+          link: data.link,
+          summary: data.summary ?? 'Done.',
+        },
+      }));
+    } catch (err) {
+      patch((p) => ({
+        ...p,
+        status: 'failed',
+        error: err instanceof Error ? err.message : 'Confirm failed',
+      }));
+    }
+  }
+
+  function cancelProposal(messageId: string, token: string) {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId && m.proposals
+          ? {
+              ...m,
+              proposals: m.proposals.filter((p) => p.token !== token),
+            }
+          : m,
+      ),
+    );
   }
 
   async function handleReset() {
@@ -532,6 +648,13 @@ export function AssistantWidget() {
                       {m.role === 'assistant' && m.prefills && m.prefills.length > 0 ? (
                         <PrefillCards cards={m.prefills} onOpen={() => setOpen(false)} />
                       ) : null}
+                      {m.role === 'assistant' && m.proposals && m.proposals.length > 0 ? (
+                        <ProposalCards
+                          cards={m.proposals}
+                          onConfirm={(token, kind) => confirmProposal(m.id, token, kind)}
+                          onCancel={(token) => cancelProposal(m.id, token)}
+                        />
+                      ) : null}
                     </div>
                   </li>
                 ))}
@@ -641,6 +764,81 @@ const PREFILL_LABEL: Record<string, string> = {
   bill: 'Open prefilled bill',
   invoice: 'Open prefilled invoice',
 };
+
+function ProposalCards({
+  cards,
+  onConfirm,
+  onCancel,
+}: {
+  cards: ProposalCard[];
+  onConfirm: (token: string, kind: string) => void;
+  onCancel: (token: string) => void;
+}) {
+  return (
+    <ul className="mt-1.5 flex flex-col gap-1.5">
+      {cards.map((c) => {
+        const kind =
+          c.surface === 'recruit' ? 'recruit_proposal' : 'feedback_proposal';
+        const confirmed = c.status === 'confirmed';
+        const failed = c.status === 'failed';
+        return (
+          <li
+            key={c.token}
+            className="rounded-md border border-brand bg-brand/10 px-2.5 py-2 text-[11px] text-ink"
+          >
+            <div className="mb-1.5 font-semibold text-ink">{c.title}</div>
+            <dl className="mb-2 grid grid-cols-[max-content,1fr] gap-x-2 gap-y-0.5">
+              {c.fields.map((f, i) => (
+                <div key={i} className="contents">
+                  <dt className="text-ink-3">{f.label}</dt>
+                  <dd className="whitespace-pre-wrap break-words text-ink">
+                    {f.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            {failed && c.error ? (
+              <div className="mb-1.5 text-status-red">⚠ {c.error}</div>
+            ) : null}
+            {confirmed && c.result ? (
+              <div className="flex items-center gap-2 text-status-green">
+                <span aria-hidden>✓</span>
+                <span>{c.result.summary}</span>
+                {c.result.link ? (
+                  <a
+                    href={c.result.link}
+                    className="underline hover:opacity-80"
+                  >
+                    Open →
+                  </a>
+                ) : null}
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={c.status === 'confirming'}
+                  onClick={() => onConfirm(c.token, kind)}
+                  className="rounded-md bg-brand px-2.5 py-1 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-60"
+                >
+                  {c.status === 'confirming' ? '…' : c.confirmLabel}
+                </button>
+                <button
+                  type="button"
+                  disabled={c.status === 'confirming'}
+                  onClick={() => onCancel(c.token)}
+                  className="rounded-md border border-line bg-card px-2.5 py-1 text-[11px] font-medium text-ink-2 hover:bg-surface-hover hover:text-ink disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 function PrefillCards({
   cards,

@@ -23,7 +23,18 @@ import { requireEnv } from '@/server/env';
 export const PREFILL_TTL_SECONDS = 15 * 60; // 15 minutes
 const KEY_DOMAIN = 'assistant-prefill-v1';
 
-export type PrefillKind = 'timesheet' | 'expense' | 'bill' | 'invoice';
+export type PrefillKind =
+  // Prefill family (TASK-302a / 302b) — token unlocks a prefilled
+  // form on the web; the user submits via the form's normal flow.
+  | 'timesheet'
+  | 'expense'
+  | 'bill'
+  | 'invoice'
+  // Proposal family (TASK-302d) — token represents a pending
+  // confirmation card. The user clicks Confirm and the server runs
+  // the underlying action directly. No intermediate form.
+  | 'recruit_proposal'
+  | 'feedback_proposal';
 
 export type PrefillTokenPayload<T = unknown> = {
   /** Schema version — bump if the wire shape changes incompatibly. */

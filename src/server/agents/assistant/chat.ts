@@ -29,6 +29,18 @@ export type StreamChunk =
    *  card payload. Widget renders this as an inline "Open prefilled
    *  form" button alongside the streaming text. */
   | { kind: 'prefill_card'; surface: string; url: string; summary: string }
+  /** Phase 3d (TASK-302d) — emitted when a `propose_*` tool returns
+   *  a confirmation card. Widget renders the fields + Confirm /
+   *  Cancel buttons; Confirm POSTs to /api/assistant/confirm. */
+  | {
+      kind: 'proposal_card';
+      surface: string;
+      token: string;
+      title: string;
+      fields: Array<{ label: string; value: string }>;
+      confirmLabel: string;
+      summary: string;
+    }
   | { kind: 'error'; message: string }
   | { kind: 'done'; finalText: string };
 
@@ -200,6 +212,37 @@ export async function* streamAssistantReply(input: {
               kind: 'prefill_card',
               surface: p.surface,
               url: p.url,
+              summary: p.summary,
+            };
+          }
+        }
+        // Phase 3d propose tools return `{ kind: 'proposal', surface, token, title, fields, confirmLabel, summary }`.
+        if (
+          ok &&
+          out &&
+          typeof out === 'object' &&
+          (out as Record<string, unknown>)['kind'] === 'proposal'
+        ) {
+          const p = out as {
+            surface: string;
+            token: string;
+            title: string;
+            fields: Array<{ label: string; value: string }>;
+            confirmLabel: string;
+            summary: string;
+          };
+          if (
+            typeof p.token === 'string' &&
+            typeof p.title === 'string' &&
+            Array.isArray(p.fields)
+          ) {
+            yield {
+              kind: 'proposal_card',
+              surface: p.surface,
+              token: p.token,
+              title: p.title,
+              fields: p.fields,
+              confirmLabel: p.confirmLabel,
               summary: p.summary,
             };
           }

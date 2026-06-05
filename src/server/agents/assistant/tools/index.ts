@@ -15,6 +15,8 @@ import { prefillTimesheet } from './prefill-timesheet';
 import { prefillExpense } from './prefill-expense';
 import { prefillBill } from './prefill-bill';
 import { prefillInvoice } from './prefill-invoice';
+import { proposeQuickRecruit } from './propose-quick-recruit';
+import { proposeFeedbackTicket } from './propose-feedback-ticket';
 
 /**
  * Ordered registry of every assistant tool. Order in this array drives
@@ -38,6 +40,10 @@ const ALL_TOOLS: readonly ToolDefinition[] = [
   prefillExpense,
   prefillBill,
   prefillInvoice,
+  // Phase 3d — propose family. Confirmation cards for actions
+  // without a meaningful "form to inspect" (low-field one-shots).
+  proposeQuickRecruit,
+  proposeFeedbackTicket,
 ];
 
 /** Anthropic tool specs ready to pass to `client.messages.stream({ tools })`. */
