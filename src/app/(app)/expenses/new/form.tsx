@@ -15,15 +15,32 @@ const CATEGORIES = EXPENSE_CATEGORIES.map((c) => ({
 
 type ProjectOpt = { id: string; code: string; name: string };
 
-export function NewExpenseForm({ projects }: { projects: ProjectOpt[] }) {
+export type ExpenseFormInitialValues = {
+  date?: string;
+  category?: string;
+  projectId?: string | null;
+  amountDollars?: string;
+  gstDollars?: string;
+  vendor?: string;
+  description?: string;
+};
+
+export function NewExpenseForm({
+  projects,
+  initialValues,
+}: {
+  projects: ProjectOpt[];
+  initialValues?: ExpenseFormInitialValues;
+}) {
   const [state, action] = useFormState<NewExpenseState, FormData>(submitExpense, {
     status: 'idle',
   });
-  const [amount, setAmount] = useState('0.00');
+  const [amount, setAmount] = useState(initialValues?.amountDollars ?? '0.00');
   const errs = state.status === 'error' ? state.fieldErrors ?? {} : {};
 
   const today = new Date().toISOString().slice(0, 10);
   const autoGst = (Number(amount) / 11).toFixed(2);
+  const gstDefault = initialValues?.gstDollars ?? autoGst;
 
   return (
     <form action={action} className="space-y-6">
@@ -40,7 +57,12 @@ export function NewExpenseForm({ projects }: { projects: ProjectOpt[] }) {
       <Section title="Details">
         <FieldRow>
           <Field label="Date" error={errs['date']} required>
-            <Input name="date" type="date" required defaultValue={today} />
+            <Input
+              name="date"
+              type="date"
+              required
+              defaultValue={initialValues?.date ?? today}
+            />
           </Field>
           <Field
             label="Category"
@@ -48,7 +70,11 @@ export function NewExpenseForm({ projects }: { projects: ProjectOpt[] }) {
             required
             hint="Maps to a Xero account; ATO deductibility groups baked in."
           >
-            <Select name="category" required defaultValue="travel">
+            <Select
+              name="category"
+              required
+              defaultValue={initialValues?.category ?? 'travel'}
+            >
               {CATEGORIES.map((c) => (
                 <option key={c.v} value={c.v} title={c.hint}>
                   {c.label}
@@ -57,7 +83,7 @@ export function NewExpenseForm({ projects }: { projects: ProjectOpt[] }) {
             </Select>
           </Field>
           <Field label="Project (optional)" hint="Leave blank for OPEX" error={errs['projectId']}>
-            <Select name="projectId">
+            <Select name="projectId" defaultValue={initialValues?.projectId ?? ''}>
               <option value="">— OPEX —</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -95,8 +121,8 @@ export function NewExpenseForm({ projects }: { projects: ProjectOpt[] }) {
               min="0"
               step="0.01"
               required
-              defaultValue={autoGst}
-              key={autoGst /* reset when total changes */}
+              defaultValue={gstDefault}
+              key={gstDefault /* reset when total changes */}
               className="max-w-[180px]"
             />
           </Field>
@@ -106,7 +132,11 @@ export function NewExpenseForm({ projects }: { projects: ProjectOpt[] }) {
       <Section title="Optional">
         <FieldRow>
           <Field label="Vendor" error={errs['vendor']}>
-            <Input name="vendor" placeholder="Qantas, Uber, Officeworks…" />
+            <Input
+              name="vendor"
+              placeholder="Qantas, Uber, Officeworks…"
+              defaultValue={initialValues?.vendor ?? ''}
+            />
           </Field>
         </FieldRow>
         <Field label="Description" error={errs['description']}>
@@ -115,6 +145,7 @@ export function NewExpenseForm({ projects }: { projects: ProjectOpt[] }) {
             rows={3}
             className="w-full rounded-md border border-line bg-surface-elev px-3 py-2 text-sm text-ink shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
             placeholder="Client meeting, flight to Melbourne, etc."
+            defaultValue={initialValues?.description ?? ''}
           />
         </Field>
       </Section>

@@ -16,16 +16,30 @@ const CATEGORIES = EXPENSE_CATEGORIES.map((c) => ({
 type ProjectOpt = { id: string; code: string; name: string };
 type PersonOpt = { id: string; initials: string; firstName: string; lastName: string };
 
+export type BillFormInitialValues = {
+  supplierName?: string;
+  supplierInvoiceNumber?: string;
+  issueDate?: string;
+  dueDate?: string;
+  category?: string;
+  amountDollars?: string;
+  gstDollars?: string;
+  projectId?: string | null;
+};
+
 export function NewBillForm({
   projects,
   contractors,
+  initialValues,
 }: {
   projects: ProjectOpt[];
   contractors: PersonOpt[];
+  initialValues?: BillFormInitialValues;
 }) {
   const [state, action] = useFormState<NewBillState, FormData>(createBill, { status: 'idle' });
-  const [amount, setAmount] = useState('0.00');
+  const [amount, setAmount] = useState(initialValues?.amountDollars ?? '0.00');
   const autoGst = (Number(amount) / 11 || 0).toFixed(2);
+  const gstDefault = initialValues?.gstDollars ?? autoGst;
   const today = new Date().toISOString().slice(0, 10);
   const in30 = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
@@ -44,13 +58,22 @@ export function NewBillForm({
       <Section title="Supplier">
         <FieldRow>
           <Field label="Supplier name" required>
-            <Input name="supplierName" required placeholder="Vercel Inc., Linear B.V., …" />
+            <Input
+              name="supplierName"
+              required
+              placeholder="Vercel Inc., Linear B.V., …"
+              defaultValue={initialValues?.supplierName ?? ''}
+            />
           </Field>
           <Field
             label="Supplier invoice number"
             hint="Their ref on the bill, not yours"
           >
-            <Input name="supplierInvoiceNumber" placeholder="INV-12345" />
+            <Input
+              name="supplierInvoiceNumber"
+              placeholder="INV-12345"
+              defaultValue={initialValues?.supplierInvoiceNumber ?? ''}
+            />
           </Field>
         </FieldRow>
         <Field label="Contractor (optional)" hint="If supplier is a Person on payroll/AP">
@@ -71,16 +94,26 @@ export function NewBillForm({
       <Section title="Amount + classification">
         <FieldRow>
           <Field label="Issue date" required>
-            <Input name="issueDate" type="date" required defaultValue={today} />
+            <Input
+              name="issueDate"
+              type="date"
+              required
+              defaultValue={initialValues?.issueDate ?? today}
+            />
           </Field>
           <Field label="Due date" required>
-            <Input name="dueDate" type="date" required defaultValue={in30} />
+            <Input
+              name="dueDate"
+              type="date"
+              required
+              defaultValue={initialValues?.dueDate ?? in30}
+            />
           </Field>
           <Field label="Category" required>
             <select
               name="category"
               required
-              defaultValue="software_subscriptions"
+              defaultValue={initialValues?.category ?? 'software_subscriptions'}
               className="flex h-9 w-full rounded-md border border-line bg-surface-elev px-2 text-sm text-ink"
             >
               {CATEGORIES.map((c) => (
@@ -111,8 +144,8 @@ export function NewBillForm({
               min="0"
               step="0.01"
               required
-              defaultValue={autoGst}
-              key={autoGst}
+              defaultValue={gstDefault}
+              key={gstDefault}
               className="max-w-[200px]"
             />
           </Field>
@@ -121,6 +154,7 @@ export function NewBillForm({
           <Field label="Project (optional)" hint="OPEX if blank">
             <select
               name="projectId"
+              defaultValue={initialValues?.projectId ?? ''}
               className="flex h-9 w-full rounded-md border border-line bg-surface-elev px-2 text-sm text-ink"
             >
               <option value="">— OPEX —</option>

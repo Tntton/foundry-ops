@@ -12,6 +12,9 @@ import { getMyExpensesRecent } from './get-my-expenses-recent';
 import { listExpenseCategories } from './list-expense-categories';
 import { getActiveRateCardForRole } from './get-active-rate-card-for-role';
 import { prefillTimesheet } from './prefill-timesheet';
+import { prefillExpense } from './prefill-expense';
+import { prefillBill } from './prefill-bill';
+import { prefillInvoice } from './prefill-invoice';
 
 /**
  * Ordered registry of every assistant tool. Order in this array drives
@@ -32,6 +35,9 @@ const ALL_TOOLS: readonly ToolDefinition[] = [
   // widget renders as a card; the form's existing action handles the
   // write. The assistant never bypasses form validation.
   prefillTimesheet,
+  prefillExpense,
+  prefillBill,
+  prefillInvoice,
 ];
 
 /** Anthropic tool specs ready to pass to `client.messages.stream({ tools })`. */

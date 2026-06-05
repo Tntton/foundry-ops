@@ -1135,15 +1135,15 @@ A secondary, smaller surface of `propose_*` tools handles low-field one-shot act
 - [ ] Smoke: TT says "log 3h on CAC001 today" → assistant calls find_project, then prefill_timesheet, then renders a button; click → `/timesheet?week=…&prefill=…` opens with that row pre-populated and the banner visible.
 
 ### TASK-302b — Prefill the other money forms (expense, bill, invoice)
-**status:** todo
+**status:** doing
 **depends on:** TASK-302a
 **acceptance:**
-- [ ] `prefill_expense` tool + `/expenses/new` reads + hydrates from token
-- [ ] `prefill_bill` tool + `/bills/new` reads + hydrates from token
-- [ ] `prefill_invoice` tool + `/invoices/new` reads + hydrates from token (lines)
-- [ ] Reuses the token + banner infra from 302a — no schema or signing changes
-- [ ] System prompt: add the three new tools to the guidance block + give examples ("I spent $48 at Officeworks", "Bill from Acme for $1200", "Invoice CAC001 May milestones")
-- [ ] Tests: one round-trip per surface
+- [x] `prefill_expense` tool + `/expenses/new` hydrates from token + banner + audit redeem. Category cross-checked against canonical enum; project code checked when supplied; OPEX fallback when blank.
+- [x] `prefill_bill` tool + `/bills/new` hydrates from token + banner + audit redeem. Gated on `bill.create` capability.
+- [x] `prefill_invoice` tool + `/invoices/new` hydrates from token + banner + audit redeem. Gated on `invoice.create`. Project code resolved → projectId; lines passed as initialValues for the controlled lines state.
+- [x] Reuses token + banner infra from 302a — no schema or signing changes.
+- [x] System prompt v3.1: introduces all four prefill tools + example phrasings + when-to-call rules.
+- [x] Tests: payload schema accepts valid + rejects malformed per surface (15 tests); assistant-tools registry test updated to include all 4 prefill tools. 277 ✓ (was 262).
 - [ ] Commit: `feat(TASK-302b): assistant prefill — expense + bill + invoice`
 
 ### TASK-302c — WhatsApp prefill parity

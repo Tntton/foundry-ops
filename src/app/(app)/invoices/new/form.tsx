@@ -16,18 +16,31 @@ type ProjectOption = {
 
 type Line = { label: string; amountDollars: string };
 
+export type InvoiceFormInitialValues = {
+  projectId?: string;
+  lines?: Line[];
+};
+
 export function NewInvoiceForm({
   projects,
   defaultProjectId,
+  initialValues,
 }: {
   projects: ProjectOption[];
   defaultProjectId?: string;
+  initialValues?: InvoiceFormInitialValues;
 }) {
   const [state, action] = useFormState<NewInvoiceState, FormData>(createInvoice, {
     status: 'idle',
   });
-  const [projectId, setProjectId] = useState(defaultProjectId ?? '');
-  const [lines, setLines] = useState<Line[]>([{ label: '', amountDollars: '0' }]);
+  const [projectId, setProjectId] = useState(
+    initialValues?.projectId ?? defaultProjectId ?? '',
+  );
+  const [lines, setLines] = useState<Line[]>(
+    initialValues?.lines && initialValues.lines.length > 0
+      ? initialValues.lines
+      : [{ label: '', amountDollars: '0' }],
+  );
 
   const project = projects.find((p) => p.id === projectId);
 
