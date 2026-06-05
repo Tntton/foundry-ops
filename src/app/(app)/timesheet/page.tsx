@@ -21,10 +21,15 @@ import {
   weekDates as weekDatesFn,
 } from '@/lib/week';
 import { PersonAvatar } from '@/components/person-avatar';
+import { PrefillBanner } from '@/components/prefill-banner';
 import { Button } from '@/components/ui/button';
 import { TimesheetGrid } from './grid';
 import { TimesheetPersonPicker } from './person-picker';
 import { TimesheetSubmittedOverview } from './submitted-overview';
+import { verifyPrefillToken } from '@/server/agents/assistant/prefill/token';
+import { TimesheetPrefillSchema } from '@/server/agents/assistant/prefill/schemas';
+import { applyTimesheetPrefill } from '@/server/agents/assistant/prefill/apply-timesheet';
+import { writeAudit } from '@/server/audit';
 
 // Availability forecasting moved to its own surface at /availability —
 // keep this page focused on the day-to-day "log my hours" workflow.
@@ -32,7 +37,7 @@ import { TimesheetSubmittedOverview } from './submitted-overview';
 export default async function TimesheetPage({
   searchParams,
 }: {
-  searchParams: { week?: string; view?: string; personId?: string };
+  searchParams: { week?: string; view?: string; personId?: string; prefill?: string };
 }) {
   const session = await getSession();
   if (!session || !hasCapability(session, 'timesheet.submit')) notFound();
@@ -199,6 +204,86 @@ export default async function TimesheetPage({
     : 0;
   const isInactive = targetPerson?.inactiveAt !== null && targetPerson?.inactiveAt !== undefined;
 
+  // ─── Assistant prefill (TASK-302a) ──────────────────────────────────
+  // The assistant signs a one-time token containing rows to populate.
+  // Decode + verify here on the server; merge into `rows` BEFORE
+  // passing to the client grid so the user lands on a fully-formed
+  // sheet. Failures are silent (the page still renders normally) +
+  // surface a small notice via prefillNotice.
+  let prefillSummary: string | null = null;
+  let prefillIgnored:
+    | ReadonlyArray<{ projectCode: string; dateIso: string; reason: string }>
+    | undefined;
+  let prefillNotice: string | null = null;
+  let enrichedRows = rows;
+  if (searchParams.prefill && target.id === session.person.id) {
+    const verify = verifyPrefillToken(searchParams.prefill, {
+      personId: session.person.id,
+      kind: 'timesheet',
+    });
+    if (verify.ok) {
+      const payloadCheck = TimesheetPrefillSchema.safeParse(verify.payload.payload);
+      if (payloadCheck.success) {
+        const result = applyTimesheetPrefill(
+          rows,
+          payloadCheck.data,
+          cells,
+          allProjects,
+        );
+        enrichedRows = result.rows;
+        prefillIgnored = result.ignored.length > 0 ? result.ignored : undefined;
+        const appliedSummary = result.applied
+          .map((a) => `${a.hours}h on ${a.projectCode} ${a.dateIso}`)
+          .join('; ');
+        prefillSummary =
+          result.applied.length > 0
+            ? appliedSummary
+            : 'Nothing to populate — the prefill rows fell outside this week or referenced unknown projects.';
+        // Audit the redemption so we can pair it with the mint event
+        // and see end-to-end usage.
+        try {
+          await prisma.$transaction(async (tx) => {
+            await writeAudit(tx, {
+              actor: { type: 'person', id: session.person.id },
+              action: 'redeemed',
+              entity: {
+                type: 'assistant_prefill',
+                id: `${session.person.id}:${formatIsoDate(blockStart)}`,
+                after: {
+                  kind: 'timesheet',
+                  applied: result.applied,
+                  ignored: result.ignored,
+                  jti: verify.payload.jti,
+                },
+              },
+              source: 'agent',
+            });
+          });
+        } catch (err) {
+          console.error('[timesheet.prefill] audit redeem failed:', err);
+        }
+      } else {
+        prefillNotice = 'Prefill payload malformed — opened the form without changes.';
+      }
+    } else if (verify.reason === 'expired') {
+      prefillNotice = 'Prefill link expired (15-min TTL). Ask the assistant for a fresh one.';
+    } else if (verify.reason === 'wrong_person') {
+      prefillNotice = "That prefill link wasn't minted for your account.";
+    } else {
+      prefillNotice = 'Prefill link invalid — opened the form without changes.';
+    }
+  }
+
+  // URL the banner's "Undo" navigates to — same view + week, no prefill.
+  const cleanUrl = (() => {
+    const params = new URLSearchParams();
+    if (view === 'week') params.set('view', 'week');
+    if (searchParams.week) params.set('week', searchParams.week);
+    if (actingOnBehalf) params.set('personId', target.id);
+    const qs = params.toString();
+    return `/timesheet${qs ? `?${qs}` : ''}`;
+  })();
+
   const currentWeekStart = startOfWeek(new Date());
   const [hourlyUtilisation, approvalHistory] = await Promise.all([
     getHourlyUtilisationForWeek(target.id, currentWeekStart),
@@ -340,20 +425,34 @@ export default async function TimesheetPage({
           )}
         </div>
       ) : (
-        <TimesheetGrid
-          rangeStart={formatIsoDate(blockStart)}
-          initialRows={rows}
-          cells={cells}
-          allProjects={allProjects.map((p) => ({
-            ...p,
-            isTeamMember: teamProjectIds.has(p.id),
-          }))}
-          view={view}
-          targetPersonId={target.id}
-          actingOnBehalf={actingOnBehalf}
-          isSuperAdmin={isSuperAdmin}
-          hourlyRateCents={hourlyRateCents}
-        />
+        <>
+          {prefillSummary && (
+            <PrefillBanner
+              summary={prefillSummary}
+              cleanUrl={cleanUrl}
+              ignored={prefillIgnored}
+            />
+          )}
+          {prefillNotice && !prefillSummary && (
+            <div className="rounded-md border border-status-amber bg-status-amber-soft px-3 py-2 text-xs text-status-amber">
+              {prefillNotice}
+            </div>
+          )}
+          <TimesheetGrid
+            rangeStart={formatIsoDate(blockStart)}
+            initialRows={enrichedRows}
+            cells={cells}
+            allProjects={allProjects.map((p) => ({
+              ...p,
+              isTeamMember: teamProjectIds.has(p.id),
+            }))}
+            view={view}
+            targetPersonId={target.id}
+            actingOnBehalf={actingOnBehalf}
+            isSuperAdmin={isSuperAdmin}
+            hourlyRateCents={hourlyRateCents}
+          />
+        </>
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

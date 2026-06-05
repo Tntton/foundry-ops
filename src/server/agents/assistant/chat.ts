@@ -25,6 +25,10 @@ export type StreamChunk =
   | { kind: 'text'; text: string }
   | { kind: 'tool_call'; id: string; name: string; input: unknown }
   | { kind: 'tool_result'; id: string; name: string; ok: boolean }
+  /** Phase 3 (TASK-302a+) — emitted when a `prefill_*` tool returns a
+   *  card payload. Widget renders this as an inline "Open prefilled
+   *  form" button alongside the streaming text. */
+  | { kind: 'prefill_card'; surface: string; url: string; summary: string }
   | { kind: 'error'; message: string }
   | { kind: 'done'; finalText: string };
 
@@ -182,6 +186,24 @@ export async function* streamAssistantReply(input: {
           typeof out === 'object' &&
           !('error' in (out as Record<string, unknown>));
         yield { kind: 'tool_result', id: tu.id, name: tu.name, ok };
+        // Phase 3 prefill tools return a structured `{ kind: 'prefill', surface, url, summary }`
+        // payload. Emit a dedicated SSE event so the widget can render the card.
+        if (
+          ok &&
+          out &&
+          typeof out === 'object' &&
+          (out as Record<string, unknown>)['kind'] === 'prefill'
+        ) {
+          const p = out as { surface: string; url: string; summary: string };
+          if (typeof p.url === 'string' && typeof p.summary === 'string') {
+            yield {
+              kind: 'prefill_card',
+              surface: p.surface,
+              url: p.url,
+              summary: p.summary,
+            };
+          }
+        }
         toolResults.push({
           type: 'tool_result',
           tool_use_id: tu.id,

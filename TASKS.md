@@ -1071,7 +1071,7 @@ UPDATE "Person" SET email = 'shea.laws@foundry.health'        WHERE email = 'she
 - [ ] Smoke: TT asks "what's on my plate?" and gets a real answer pulled from the DB. Also: "what's CAC?" returns the right project + ready to be referenced in a follow-up prefill. And: a WhatsApp timesheet log still works end-to-end after the extractor refactor (no behavioural change on that channel yet).
 
 ### TASK-302 — Assistant (Phase 3): form prefill + confirmation-gated quick actions
-**status:** todo
+**status:** in-progress (split into 302a / 302b / 302c / 302d below)
 **depends on:** TASK-301
 
 **framing:** primary capability is **prefilling existing forms from natural language**, not bypassing forms. The assistant extracts structured fields from chat ("3h on CAC001 yesterday with note 'pricing analysis'") and opens the relevant form (`/timesheet`, `/expenses/new`, `/invoices/new`, etc) with those values already populated — the user inspects / edits / submits via the form's normal flow. The form's existing server action is the only write path; the assistant never writes directly. This pattern has two big wins over a confirmation-card-only model: (a) the user gets to inspect *all* fields, including ones the assistant didn't try to fill, (b) any future schema or validation change on the form Just Works.
@@ -1117,6 +1117,55 @@ A secondary, smaller surface of `propose_*` tools handles low-field one-shot act
 - Receipt-attached prefill — drag a receipt onto the assistant pill, OCR extracts fields (reuse `extractIntakeFields`), assistant prefills `/expenses/new` or `/bills/new`. Needs image upload (currently out of scope).
 - Multi-row prefill for the timesheet — "log my standard week" expands the user's `regularDays*` config into 5 prefilled rows.
 - Invoice line synthesis from approved timesheets + rate card — "draft an invoice for CAC001 for May" reads timesheet entries × rate card → prefills lines (this is the boundary with TASK-094 Invoice Drafter agent; the assistant *suggests*, the drafter agent *generates*).
+
+### TASK-302a — Phase 3 foundation + timesheet prefill
+**status:** doing
+**depends on:** TASK-301
+**acceptance:**
+- [x] `src/server/agents/assistant/prefill/token.ts` — HMAC-SHA256 signed tokens carrying `{ v, kind, personId, payload, iat, exp, jti }`. Signing key derived from `AUTH_SECRET` via domain-separated HMAC; no new env var. 15-min TTL. `verifyPrefillToken(token, { personId, kind })` rejects on signature mismatch, expiry, personId mismatch, or wrong kind.
+- [x] Payload schemas under `src/server/agents/assistant/prefill/schemas.ts` — Zod per surface. Timesheet first (`{ entries: [{ projectCode, dateIso, hours, notes? }] }`); expense / bill / invoice schemas pre-declared for TASK-302b.
+- [x] `prefill_timesheet` tool — registered in the assistant tool registry. Cross-checks codes exist + aren't archived BEFORE returning a URL (catches hallucinated codes early). Picks `week=` from earliest entry. Returns `{ kind: 'prefill', surface: 'timesheet', url, summary, entryCount, weekIso }`.
+- [x] `/timesheet` page reads `?prefill=<token>`, verifies signature + binds to current session's personId, merges entries via `applyTimesheetPrefill`. Stacks hours when row already present; appends a new row when not. Invalid / expired / wrong-person tokens render the page as normal with a small notice.
+- [x] `PrefillBanner` component above the grid: "Prefilled by Assistant · <summary> · [Undo] [Dismiss]". Undo navigates to the same URL without the prefill param. Skipped rows surface inline.
+- [x] Widget renders new SSE event kind `prefill_card` as an inline card with summary + "Open prefilled timesheet" button. Sits in the streaming message bubble alongside text + tool chips.
+- [x] Audit on mint (`assistant_prefill` action=`minted` source=`agent`) AND on redemption (action=`redeemed` source=`agent`) — pair gives full traceability.
+- [x] Tests: token sign + verify round-trip, rejected on wrong person / wrong kind / expired / tampered / malformed (8 tests). `applyTimesheetPrefill` golden tests covering merge, stacking, locked row refusal, out-of-range, unknown code, immutability (8 tests). Updated assistant-tools registry test to include `prefill_timesheet`. Full suite 262 ✓.
+- [x] System prompt v3: introduces the prefill family; spells out the "find_project → prefill" pattern; tells the model NOT to paste URLs inline (widget renders the button).
+- [ ] Commit: `feat(TASK-302a): assistant phase 3a — prefill foundation + timesheet`.
+- [ ] Smoke: TT says "log 3h on CAC001 today" → assistant calls find_project, then prefill_timesheet, then renders a button; click → `/timesheet?week=…&prefill=…` opens with that row pre-populated and the banner visible.
+
+### TASK-302b — Prefill the other money forms (expense, bill, invoice)
+**status:** todo
+**depends on:** TASK-302a
+**acceptance:**
+- [ ] `prefill_expense` tool + `/expenses/new` reads + hydrates from token
+- [ ] `prefill_bill` tool + `/bills/new` reads + hydrates from token
+- [ ] `prefill_invoice` tool + `/invoices/new` reads + hydrates from token (lines)
+- [ ] Reuses the token + banner infra from 302a — no schema or signing changes
+- [ ] System prompt: add the three new tools to the guidance block + give examples ("I spent $48 at Officeworks", "Bill from Acme for $1200", "Invoice CAC001 May milestones")
+- [ ] Tests: one round-trip per surface
+- [ ] Commit: `feat(TASK-302b): assistant prefill — expense + bill + invoice`
+
+### TASK-302c — WhatsApp prefill parity
+**status:** todo
+**depends on:** TASK-302a, TASK-302b
+**acceptance:**
+- [ ] WhatsApp timesheet flow stops auto-writing a draft TimesheetEntry. Instead: parses the user's text via the same `parseTimesheetText` extractor, builds a prefill token via the same `buildTimesheetPrefill`, replies with `Tap to review + submit: https://ops.foundry.health/timesheet?week=…&prefill=<token>`.
+- [ ] Same swap for `expense` if it lands in WhatsApp (currently the WhatsApp expense flow goes via OCR + drafts; revisit whether that should change to a prefill link too).
+- [ ] Legacy auto-draft behaviour stays available behind `FeatureFlag` row `whatsapp.autoWriteDrafts` (default off). If TT decides phone-first folks prefer the auto-draft round-trip, flip it back on per-flow.
+- [ ] Tests: WhatsApp router replies with a deep-link URL when flag is off; auto-drafts when flag is on (back-compat path).
+- [ ] Commit: `feat(TASK-302c): WhatsApp prefill parity — deep-link instead of auto-draft`
+
+### TASK-302d — Propose tools (quick recruit + feedback ticket)
+**status:** todo
+**depends on:** TASK-302a
+**acceptance:**
+- [ ] `propose_quick_recruit` + `propose_feedback_ticket` tools — return confirmation card payload with stable `proposalId`. Cards stored in a short-lived signed token (same crypto as prefill, different `kind`) so the Confirm POST has something to verify against.
+- [ ] Widget renders confirmation cards inline with a Confirm button.
+- [ ] `/api/assistant/confirm` POST handler — verifies token, capability-checks, executes the underlying existing action.
+- [ ] Audit on confirm: `source=agent`, delta tags `proposalId`.
+- [ ] Tests: each propose tool returns a valid card; each Confirm enforces capability.
+- [ ] Commit: `feat(TASK-302d): assistant propose tools — quick recruit + feedback ticket`
 
 ### TASK-303 — Unify in-app assistant + WhatsApp router behind one agent loop
 **status:** todo

@@ -19,8 +19,9 @@ const mkSession = (roles: Role[]): Session => ({
 });
 
 describe('assistant tool registry', () => {
-  it('exposes all 8 read tools with unique names', () => {
+  it('exposes the expected tools with unique names', () => {
     const names = ALL_TOOLS.map((t) => t.spec.name);
+    // Phase 2 read tools + Phase 3a prefill_timesheet.
     expect(names).toEqual([
       'list_my_approvals',
       'list_my_projects',
@@ -30,6 +31,7 @@ describe('assistant tool registry', () => {
       'get_my_expenses_recent',
       'list_expense_categories',
       'get_active_rate_card_for_role',
+      'prefill_timesheet',
     ]);
     expect(new Set(names).size).toBe(names.length);
   });

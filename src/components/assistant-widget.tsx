@@ -17,6 +17,12 @@ type ToolInvocation = {
   status: 'running' | 'ok' | 'failed';
 };
 
+type PrefillCard = {
+  surface: string;
+  url: string;
+  summary: string;
+};
+
 type Message = {
   id: string;
   role: Role;
@@ -25,6 +31,8 @@ type Message = {
   streaming?: boolean;
   /** Tool calls fired while building this assistant turn (Phase 2+). */
   tools?: ToolInvocation[];
+  /** Prefill cards rendered as buttons inline (Phase 3+). */
+  prefills?: PrefillCard[];
 };
 
 const PLACEHOLDER =
@@ -161,6 +169,9 @@ export function AssistantWidget() {
               name?: string;
               ok?: boolean;
               input?: unknown;
+              surface?: string;
+              url?: string;
+              summary?: string;
             };
             try {
               evt = JSON.parse(line);
@@ -184,6 +195,24 @@ export function AssistantWidget() {
                 prev.map((m) =>
                   m.id === replyMsg.id
                     ? { ...m, tools: [...(m.tools ?? []), ti] }
+                    : m,
+                ),
+              );
+            } else if (
+              evt.kind === 'prefill_card' &&
+              evt.surface &&
+              evt.url &&
+              evt.summary
+            ) {
+              const card: PrefillCard = {
+                surface: evt.surface,
+                url: evt.url,
+                summary: evt.summary,
+              };
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === replyMsg.id
+                    ? { ...m, prefills: [...(m.prefills ?? []), card] }
                     : m,
                 ),
               );
@@ -348,6 +377,9 @@ export function AssistantWidget() {
                         (!m.tools || m.tools.every((t) => t.status !== 'running')) ? (
                         <TypingDots />
                       ) : null}
+                      {m.role === 'assistant' && m.prefills && m.prefills.length > 0 ? (
+                        <PrefillCards cards={m.prefills} onOpen={() => setOpen(false)} />
+                      ) : null}
                     </div>
                   </li>
                 ))}
@@ -386,6 +418,43 @@ export function AssistantWidget() {
         </div>
       )}
     </>
+  );
+}
+
+const PREFILL_LABEL: Record<string, string> = {
+  timesheet: 'Open prefilled timesheet',
+  expense: 'Open prefilled expense',
+  bill: 'Open prefilled bill',
+  invoice: 'Open prefilled invoice',
+};
+
+function PrefillCards({
+  cards,
+  onOpen,
+}: {
+  cards: PrefillCard[];
+  onOpen: () => void;
+}) {
+  return (
+    <ul className="mt-1.5 flex flex-col gap-1.5">
+      {cards.map((c, i) => (
+        <li
+          key={i}
+          className="rounded-md border border-brand bg-brand/10 px-2.5 py-2 text-[11px] text-ink"
+        >
+          <div className="mb-1.5 leading-snug">{c.summary}</div>
+          <a
+            href={c.url}
+            onClick={onOpen}
+            className="inline-flex items-center gap-1 rounded-md bg-brand px-2.5 py-1 text-[11px] font-medium text-white hover:opacity-90"
+          >
+            <span aria-hidden>✨</span>
+            <span>{PREFILL_LABEL[c.surface] ?? `Open prefilled ${c.surface}`}</span>
+            <span aria-hidden>→</span>
+          </a>
+        </li>
+      ))}
+    </ul>
   );
 }
 

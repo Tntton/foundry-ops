@@ -11,6 +11,7 @@ import { findPerson } from './find-person';
 import { getMyExpensesRecent } from './get-my-expenses-recent';
 import { listExpenseCategories } from './list-expense-categories';
 import { getActiveRateCardForRole } from './get-active-rate-card-for-role';
+import { prefillTimesheet } from './prefill-timesheet';
 
 /**
  * Ordered registry of every assistant tool. Order in this array drives
@@ -27,6 +28,10 @@ const ALL_TOOLS: readonly ToolDefinition[] = [
   getMyExpensesRecent,
   listExpenseCategories,
   getActiveRateCardForRole,
+  // Phase 3 — prefill family. Each tool returns a deep-link URL the
+  // widget renders as a card; the form's existing action handles the
+  // write. The assistant never bypasses form validation.
+  prefillTimesheet,
 ];
 
 /** Anthropic tool specs ready to pass to `client.messages.stream({ tools })`. */
