@@ -45,7 +45,10 @@ export function Sidebar({
       <aside
         className={cn(
           // Default desktop layout — inline aside in the flex row.
-          'flex h-screen w-[240px] shrink-0 flex-col gap-6 border-r border-line bg-surface-subtle px-3 py-4',
+          // h-dvh (dynamic viewport) instead of h-screen so iOS Safari's
+          // URL-bar transitions don't push the bottom of the sidebar
+          // below the visible area.
+          'flex h-dvh w-[240px] shrink-0 flex-col gap-6 border-r border-line bg-surface-subtle px-3 py-4',
           // Mobile: a fixed-position drawer that slides in from the left.
           // Hidden by default; visible when open. Wider tap targets on a
           // phone so 240px is fine.

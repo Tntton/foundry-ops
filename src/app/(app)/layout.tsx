@@ -37,7 +37,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <MobileNavProvider>
-      <div className="flex h-screen bg-surface">
+      {/* h-dvh (dynamic viewport height) instead of h-screen — on iOS
+           Safari, 100vh measures the full viewport including the URL
+           bar's area, so a 100vh container is taller than what's
+           visible while the bar is showing, and the overflow-y-auto
+           main below is sized too tall → content at the bottom can't
+           scroll into view. 100dvh is the dynamic value that updates
+           with the chrome state, so the container fits the visible
+           area and inner scrolling works correctly. Tailwind 3.4+. */}
+      <div className="flex h-dvh bg-surface">
         {/* Calendar / date-driven views use server `new Date()` so they
              naturally roll forward each request. This keeps a tab open
              across Sunday → Monday in step by triggering a soft
@@ -72,7 +80,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               <span className="text-[11px]">Exit via the user menu →</span>
             </div>
           )}
-          <main className="flex-1 overflow-y-auto p-3 md:p-6">{children}</main>
+          {/* Bottom padding clears the floating Assistant + Feedback
+               pills (bottom-4 + ~32px pills = needs ~52px clearance).
+               pb-24 gives a comfortable buffer on mobile; pb-6 on
+               desktop where the pills sit over empty space anyway. */}
+          <main className="flex-1 overflow-y-auto p-3 pb-24 md:p-6 md:pb-6">
+            {children}
+          </main>
         </div>
         {/* Floating feedback widget — sits just left of the assistant pill.
             Pilot users use it to log bugs / feature requests / maintenance
