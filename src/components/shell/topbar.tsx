@@ -2,6 +2,7 @@ import type { Role } from '@prisma/client';
 import { Breadcrumb } from '@/components/shell/breadcrumb';
 import { CommandPaletteTrigger } from '@/components/shell/command-palette-trigger';
 import { UserMenu } from '@/components/shell/user-menu';
+import { MobileNavTrigger } from '@/components/shell/mobile-nav-trigger';
 
 export function Topbar({
   initials,
@@ -27,10 +28,19 @@ export function Topbar({
   viewAsRoles: Role[] | null;
 }) {
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-line bg-surface-elev px-6">
-      <Breadcrumb />
+    <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-line bg-surface-elev px-3 md:gap-4 md:px-6">
+      <div className="flex min-w-0 items-center gap-2">
+        {/* Mobile hamburger — opens the sidebar drawer. md:hidden so the
+            desktop layout doesn't render it. */}
+        <MobileNavTrigger />
+        {/* Breadcrumb hides on tiny viewports — ⌘K + UserMenu have
+            absolute priority on a phone. Still visible on `sm` and up. */}
+        <div className="hidden min-w-0 sm:block">
+          <Breadcrumb />
+        </div>
+      </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 md:gap-3">
         <CommandPaletteTrigger />
         <UserMenu
           initials={initials}

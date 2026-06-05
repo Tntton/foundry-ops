@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { Role, Band } from '@prisma/client';
 import { filterNavForRoles } from '@/components/shell/nav-config';
+import { useMobileNav } from '@/components/shell/mobile-nav';
 import { cn } from '@/lib/utils';
 
 export function Sidebar({
@@ -27,9 +28,31 @@ export function Sidebar({
   // set without middleware, so the highlight got stuck on Dashboard).
   const pathname = usePathname() ?? '/';
   const groups = filterNavForRoles(roles, band);
+  const { open, setOpen } = useMobileNav();
 
   return (
-    <aside className="flex h-screen w-[240px] shrink-0 flex-col gap-6 border-r border-line bg-surface-subtle px-3 py-4">
+    <>
+      {/* Mobile-only backdrop — dismisses the drawer when tapped. Lives
+          OUTSIDE the aside so a tap that grazes the aside doesn't dismiss. */}
+      {open && (
+        <button
+          type="button"
+          aria-label="Close menu"
+          onClick={() => setOpen(false)}
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+        />
+      )}
+      <aside
+        className={cn(
+          // Default desktop layout — inline aside in the flex row.
+          'flex h-screen w-[240px] shrink-0 flex-col gap-6 border-r border-line bg-surface-subtle px-3 py-4',
+          // Mobile: a fixed-position drawer that slides in from the left.
+          // Hidden by default; visible when open. Wider tap targets on a
+          // phone so 240px is fine.
+          'fixed inset-y-0 left-0 z-50 transition-transform md:static md:translate-x-0',
+          open ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
+        )}
+      >
       <div className="px-3">
         <Link
           href="/"
@@ -113,5 +136,6 @@ export function Sidebar({
         <span className="font-mono">foundry.health</span>
       </div>
     </aside>
+    </>
   );
 }

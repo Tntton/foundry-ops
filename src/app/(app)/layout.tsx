@@ -3,6 +3,7 @@ import { getSession } from '@/server/session';
 import { countUnreadUpdates } from '@/server/user-updates';
 import { Sidebar } from '@/components/shell/sidebar';
 import { Topbar } from '@/components/shell/topbar';
+import { MobileNavProvider } from '@/components/shell/mobile-nav';
 import { FeedbackWidget } from '@/components/feedback-widget';
 import { AssistantWidget } from '@/components/assistant-widget';
 import { PeriodAutoRefresh } from '@/components/shell/period-refresh';
@@ -35,51 +36,51 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const viewAsLabel = isViewing ? activeOverlayRoles!.join(' + ') : null;
 
   return (
-    <div className="flex h-screen bg-surface">
-      {/* Calendar / date-driven views use server `new Date()` so they
-           naturally roll forward each request. This keeps a tab open
-           across Sunday → Monday in step by triggering a soft
-           `router.refresh()` at the boundary. */}
-      <PeriodAutoRefresh />
-      <Sidebar
-        roles={session.person.roles}
-        band={session.person.band}
-        badges={{ '/': unreadUpdates }}
-      />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar
-          initials={session.person.initials}
-          displayName={displayName}
-          email={session.person.email}
-          headshotUrl={session.person.headshotUrl}
+    <MobileNavProvider>
+      <div className="flex h-screen bg-surface">
+        {/* Calendar / date-driven views use server `new Date()` so they
+             naturally roll forward each request. This keeps a tab open
+             across Sunday → Monday in step by triggering a soft
+             `router.refresh()` at the boundary. */}
+        <PeriodAutoRefresh />
+        <Sidebar
           roles={session.person.roles}
-          isRealSuperAdmin={session.isRealSuperAdmin}
-          viewAsRoles={session.viewAsRoles}
+          band={session.person.band}
+          badges={{ '/': unreadUpdates }}
         />
-        {/* Persistent view-as banner — always visible while the overlay
-             is active so the super-admin can't forget they're not
-             seeing their own permissions. Click "Exit" via the user
-             menu to drop the overlay. */}
-        {isViewing && (
-          <div className="flex items-center justify-between gap-2 border-b border-status-amber bg-status-amber-soft px-6 py-1.5 text-xs text-status-amber">
-            <span>
-              <strong>View-as mode</strong> · permissions overlaid as{' '}
-              <span className="font-mono">{viewAsLabel}</span>. Audit
-              attribution still points at your real account.
-            </span>
-            <span className="text-[11px]">Exit via the user menu →</span>
-          </div>
-        )}
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Topbar
+            initials={session.person.initials}
+            displayName={displayName}
+            email={session.person.email}
+            headshotUrl={session.person.headshotUrl}
+            roles={session.person.roles}
+            isRealSuperAdmin={session.isRealSuperAdmin}
+            viewAsRoles={session.viewAsRoles}
+          />
+          {/* Persistent view-as banner — always visible while the overlay
+               is active so the super-admin can't forget they're not
+               seeing their own permissions. Click "Exit" via the user
+               menu to drop the overlay. */}
+          {isViewing && (
+            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-status-amber bg-status-amber-soft px-3 py-1.5 text-xs text-status-amber md:px-6">
+              <span>
+                <strong>View-as mode</strong> · permissions overlaid as{' '}
+                <span className="font-mono">{viewAsLabel}</span>. Audit
+                attribution still points at your real account.
+              </span>
+              <span className="text-[11px]">Exit via the user menu →</span>
+            </div>
+          )}
+          <main className="flex-1 overflow-y-auto p-3 md:p-6">{children}</main>
+        </div>
+        {/* Floating feedback widget — sits just left of the assistant pill.
+            Pilot users use it to log bugs / feature requests / maintenance
+            gripes; triage happens at /admin/feedback. */}
+        <FeedbackWidget />
+        {/* In-app AI assistant — bottom-right primary widget. */}
+        <AssistantWidget />
       </div>
-      {/* Floating feedback widget — sits just left of the assistant pill.
-          Pilot users use it to log bugs / feature requests / maintenance
-          gripes; triage happens at /admin/feedback. */}
-      <FeedbackWidget />
-      {/* In-app AI assistant — bottom-right primary widget. Phase 1
-          (TASK-300) ships conversational guidance only; read + write
-          tools land in TASK-301 / TASK-302. */}
-      <AssistantWidget />
-    </div>
+    </MobileNavProvider>
   );
 }

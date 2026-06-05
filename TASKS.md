@@ -919,6 +919,25 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **acceptance:**
 - [ ] `RUNBOOK.md` in repo: secrets rotation, re-auth integrations, failed-agent replay, webhook replay, backup + restore
 
+### TASK-220 — Mobile-responsive shell + content polish
+**status:** doing
+**depends on:** TASK-009
+**framing:** the platform was built desktop-first and looks broken on a phone — sidebar takes ~240px of a 400px viewport, dashboard cards get truncated mid-letter. The pilot is desktop-first by design, but TT opens the platform on a phone often enough that this matters. Ship the shell first (biggest single fix), follow up with surface-by-surface polish if needed.
+
+**acceptance — shell (this task):**
+- [x] Sidebar hidden on `<md` viewports by default. Hamburger button in the topbar (also `<md` only) opens it as a fixed drawer overlay with a backdrop. Click backdrop OR navigate via the nav → auto-close.
+- [x] Topbar's breadcrumb hides on `<sm` (cramped) but ⌘K + user menu stay visible. Hamburger button on the left only renders on `<md`.
+- [x] Main content padding tightens: `p-3` on mobile, `p-6` on desktop. Side-by-side flex layout still works on desktop; on mobile it's a single column.
+- [x] View-as banner reflows on narrow widths (text wraps instead of overflowing).
+- [x] Floating widgets (Feedback + Assistant pills) already handle small screens via `max-w-[calc(100vw-2rem)]`; no further changes needed for this task.
+- [x] MobileNavProvider context owns the open state; usePathname effect auto-closes the drawer after navigation.
+- [x] Typecheck + lint green; commit.
+
+**Follow-ups (deferred — separate tasks if/when needed):**
+- Dashboard card grid stacks cleaner on `<sm` (cards currently shrink rather than wrap when very narrow).
+- Tables across the app — horizontal scroll or stacked-row layout on mobile.
+- Forms — single-column layout on `<md` (currently `md:grid-cols-3` on most field rows).
+
 ### TASK-211 — One-off email migration: firstname-only → firstname.lastname
 **status:** todo
 **depends on:** TASK-021
