@@ -11,6 +11,7 @@ import {
   type DocuSignConfig,
 } from '@/server/integrations/docusign';
 import { getUberIntegration, uberConfigured } from '@/server/integrations/uber';
+import { isWhatsAppConfigured } from '@/server/integrations/whatsapp';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
@@ -195,9 +196,14 @@ export default async function IntegrationsIndexPage() {
           }
         />
         <IntegrationCard
+          href="/admin/integrations/whatsapp"
           title="WhatsApp Business"
-          blurb="Inbound receipts, outbound approval nudges."
-          status={{ label: 'Later', variant: 'outline' }}
+          blurb="Outbound approval pings + test sends. Test number available now; Boost number registers once Meta Business Verification clears."
+          status={
+            isWhatsAppConfigured()
+              ? { label: 'Configured · test sandbox', variant: 'amber' }
+              : { label: 'Env vars missing', variant: 'outline' }
+          }
         />
       </div>
     </div>
