@@ -10,24 +10,51 @@ import {
 } from 'react';
 
 type Role = 'user' | 'assistant' | 'tool';
+
+type ToolInvocation = {
+  id: string;
+  name: string;
+  status: 'running' | 'ok' | 'failed';
+};
+
 type Message = {
   id: string;
   role: Role;
   content: string;
   /** True while a streaming response is still being appended. */
   streaming?: boolean;
+  /** Tool calls fired while building this assistant turn (Phase 2+). */
+  tools?: ToolInvocation[];
 };
 
 const PLACEHOLDER =
-  "Hey — I'm the Foundry Ops assistant. Ask me how to log hours, where approvals live, or which screen does X. I keep answers short.";
+  "Hey — I'm the Foundry Ops assistant. Ask me what's on my plate, what you've logged this week, or which screen does X. I keep answers short.";
 
 /**
  * Floating in-app assistant. Lives at the bottom-right of every authed
  * page (mounted from `(app)/layout.tsx`). Click the pill → expanded
  * panel. Powered by Claude via `/api/assistant/chat`, streamed via SSE.
  *
- * Phase 1 (TASK-300) — conversational helper only, no tools / writes.
+ * Phase 2 (TASK-301) — adds read tools (list_my_approvals, find_project,
+ * etc) via Anthropic's tool-use API. Tool invocations stream as chips
+ * above the final text.
  */
+
+const TOOL_LABEL: Record<string, string> = {
+  list_my_approvals: 'Checking your approvals',
+  list_my_projects: 'Listing your projects',
+  get_my_hours_this_week: 'Reading this week’s timesheet',
+  find_project: 'Searching projects',
+  find_person: 'Searching people',
+  get_my_expenses_recent: 'Reading your recent expenses',
+  list_expense_categories: 'Loading expense categories',
+  get_active_rate_card_for_role: 'Looking up rate card',
+};
+
+function toolLabel(name: string): string {
+  return TOOL_LABEL[name] ?? `Running ${name}`;
+}
+
 export function AssistantWidget() {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -125,7 +152,16 @@ export function AssistantWidget() {
           for (const frame of frames) {
             const line = frame.startsWith('data: ') ? frame.slice(6) : null;
             if (!line) continue;
-            let evt: { kind: string; text?: string; finalText?: string; message?: string };
+            let evt: {
+              kind: string;
+              text?: string;
+              finalText?: string;
+              message?: string;
+              id?: string;
+              name?: string;
+              ok?: boolean;
+              input?: unknown;
+            };
             try {
               evt = JSON.parse(line);
             } catch {
@@ -136,6 +172,34 @@ export function AssistantWidget() {
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === replyMsg.id ? { ...m, content: m.content + delta } : m,
+                ),
+              );
+            } else if (evt.kind === 'tool_call' && evt.id && evt.name) {
+              const ti: ToolInvocation = {
+                id: evt.id,
+                name: evt.name,
+                status: 'running',
+              };
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === replyMsg.id
+                    ? { ...m, tools: [...(m.tools ?? []), ti] }
+                    : m,
+                ),
+              );
+            } else if (evt.kind === 'tool_result' && evt.id) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === replyMsg.id
+                    ? {
+                        ...m,
+                        tools: (m.tools ?? []).map((t) =>
+                          t.id === evt.id
+                            ? { ...t, status: evt.ok ? 'ok' : 'failed' }
+                            : t,
+                        ),
+                      }
+                    : m,
                 ),
               );
             } else if (evt.kind === 'error' && evt.message) {
@@ -275,9 +339,13 @@ export function AssistantWidget() {
                           : 'max-w-[90%] rounded-lg bg-surface-elev px-3 py-2 text-xs text-ink'
                       }
                     >
+                      {m.role === 'assistant' && m.tools && m.tools.length > 0 ? (
+                        <ToolChips tools={m.tools} />
+                      ) : null}
                       {m.content.length > 0 ? (
                         <AssistantMarkdown text={m.content} />
-                      ) : m.streaming ? (
+                      ) : m.streaming &&
+                        (!m.tools || m.tools.every((t) => t.status !== 'running')) ? (
                         <TypingDots />
                       ) : null}
                     </div>
@@ -318,6 +386,32 @@ export function AssistantWidget() {
         </div>
       )}
     </>
+  );
+}
+
+function ToolChips({ tools }: { tools: ToolInvocation[] }) {
+  return (
+    <ul className="mb-1.5 flex flex-col gap-1">
+      {tools.map((t) => {
+        const icon =
+          t.status === 'running' ? '⋯' : t.status === 'ok' ? '✓' : '⚠️';
+        const tone =
+          t.status === 'failed'
+            ? 'text-status-red'
+            : t.status === 'ok'
+              ? 'text-ink-3'
+              : 'text-ink-3';
+        return (
+          <li
+            key={t.id}
+            className={`flex items-center gap-1.5 text-[11px] italic ${tone}`}
+          >
+            <span aria-hidden>{icon}</span>
+            <span>{toolLabel(t.name)}</span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

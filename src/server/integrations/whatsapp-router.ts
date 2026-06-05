@@ -4,11 +4,12 @@ import type {
   WhatsAppFlow,
 } from '@prisma/client';
 import { Prisma } from '@prisma/client';
-import Anthropic from '@anthropic-ai/sdk';
-import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { writeAudit } from '@/server/audit';
 import { extractIntakeFields } from '@/server/agents/intake-ocr/extract';
+import { classifyIntent } from '@/server/agents/intent/classify';
+import { parseTimesheetText } from '@/server/agents/intent/timesheet';
+import { parseAvailabilityText } from '@/server/agents/intent/availability';
 import { startOfWeek } from '@/lib/week';
 import { downloadWhatsAppMedia, sendWhatsAppText } from './whatsapp';
 
@@ -48,75 +49,10 @@ export type IncomingMessage = {
   mediaMimeType: string | null;
 };
 
-const ROUTER_PROMPT = `You are a routing classifier for a WhatsApp bot serving a consulting firm's staff.
-
-Classify the user's message into ONE of these intents:
-  - "timesheet"      — anything about logging hours / project time
-  - "availability"   — declaring hours they expect to work in coming days
-  - "expense"        — submitting an expense / receipt
-  - "status_check"   — asking about their current hours, available time, etc.
-  - "menu"           — asking what they can do, listing options
-  - "cancel"         — wanting to abort the current flow
-  - "unknown"        — none of the above
-
-Return ONLY the intent string, nothing else. Just one word.`;
-
-async function classifyIntent(
-  text: string,
-): Promise<
-  | 'timesheet'
-  | 'availability'
-  | 'expense'
-  | 'status_check'
-  | 'menu'
-  | 'cancel'
-  | 'unknown'
-> {
-  const apiKey = process.env['ANTHROPIC_API_KEY'];
-  if (!apiKey) {
-    // Fallback to keyword matching when LLM not configured.
-    const lc = text.toLowerCase();
-    if (/\b(timesheet|hours|log|logged)\b/.test(lc)) return 'timesheet';
-    if (/\b(availab|forecast|next week)\b/.test(lc)) return 'availability';
-    if (/\b(expense|receipt|reimburs)\b/.test(lc)) return 'expense';
-    if (/\b(status|how many|this week)\b/.test(lc)) return 'status_check';
-    if (/\b(menu|help|options)\b/.test(lc)) return 'menu';
-    if (/\b(cancel|stop|abort)\b/.test(lc)) return 'cancel';
-    return 'unknown';
-  }
-  const client = new Anthropic({ apiKey });
-  const res = await client.messages.create({
-    // claude-haiku-4-5 is the cheap routing model — single-word output.
-    model: 'claude-haiku-4-5',
-    max_tokens: 32,
-    system: ROUTER_PROMPT,
-    messages: [{ role: 'user', content: text }],
-  });
-  const block = res.content.find((c) => c.type === 'text');
-  const out =
-    block && 'text' in block ? block.text.trim().toLowerCase() : 'unknown';
-  if (
-    [
-      'timesheet',
-      'availability',
-      'expense',
-      'status_check',
-      'menu',
-      'cancel',
-      'unknown',
-    ].includes(out)
-  ) {
-    return out as
-      | 'timesheet'
-      | 'availability'
-      | 'expense'
-      | 'status_check'
-      | 'menu'
-      | 'cancel'
-      | 'unknown';
-  }
-  return 'unknown';
-}
+// Intent classification + timesheet/availability extraction live in
+// src/server/agents/intent/ so the in-app assistant (TASK-301) and this
+// WhatsApp router share the same extractors. See classify.ts /
+// timesheet.ts / availability.ts.
 
 const HELP_TEXT = `Hi! I can help with:
 • *Timesheet* — say "log 4 hours on PROJ001 today"
@@ -233,71 +169,6 @@ async function reply(
 
 // ─── Flow handlers ────────────────────────────────────────────────────
 
-/**
- * Timesheet flow — single-shot LLM parse of the user's text. Asks for
- * a project + hours + date and creates a TimesheetEntry in `draft`
- * status (the staff member can then approve via the web UI).
- *
- * Free-form examples it should handle:
- *   "Log 4h on PROJ001 today"
- *   "8 hours yesterday for project ALPHA"
- *   "Logged 3.5 hrs Friday on PROJ002 — discovery review"
- */
-const TimesheetSchema = z.object({
-  projectCode: z.string().trim().min(2).max(20),
-  hours: z.coerce.number().min(0).max(24),
-  // ISO date — we parse "today" / "yesterday" / "monday" via the
-  // model's resolution, defaulting to today when unclear.
-  dateIso: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  description: z.string().trim().max(500).nullable().optional(),
-});
-
-async function parseTimesheet(
-  text: string,
-  todayIso: string,
-): Promise<z.infer<typeof TimesheetSchema> | { error: string }> {
-  const apiKey = process.env['ANTHROPIC_API_KEY'];
-  if (!apiKey) {
-    return { error: 'Timesheet parsing requires LLM access — please use the web app for now.' };
-  }
-  const client = new Anthropic({ apiKey });
-  const res = await client.messages.create({
-    model: 'claude-sonnet-4-5',
-    max_tokens: 256,
-    system: `Extract a timesheet entry from the user's message. Return ONLY JSON in this shape:
-{
-  "projectCode": "string (e.g. PROJ001)",
-  "hours": number 0..24,
-  "dateIso": "YYYY-MM-DD (today=${todayIso}; resolve 'yesterday', weekdays etc.)",
-  "description": "string or null"
-}
-If the message doesn't contain a parseable timesheet entry, return {"error": "short reason"}.`,
-    messages: [{ role: 'user', content: text }],
-  });
-  const block = res.content.find((c) => c.type === 'text');
-  const raw = block && 'text' in block ? block.text : '';
-  const cleaned = raw
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .trim();
-  try {
-    const parsed = JSON.parse(cleaned);
-    if (parsed && typeof parsed === 'object' && 'error' in parsed) {
-      return { error: String(parsed.error) };
-    }
-    const validated = TimesheetSchema.safeParse(parsed);
-    if (!validated.success) {
-      return {
-        error:
-          'Couldn\'t parse the timesheet bits — try "log 4 hours on PROJ001 today".',
-      };
-    }
-    return validated.data;
-  } catch {
-    return { error: 'Try "log 4 hours on PROJ001 today".' };
-  }
-}
-
 async function handleTimesheet(
   person: Person,
   conversation: WhatsAppConversation,
@@ -305,11 +176,12 @@ async function handleTimesheet(
 ): Promise<void> {
   const text = message.text ?? '';
   const todayIso = new Date().toISOString().slice(0, 10);
-  const parsed = await parseTimesheet(text, todayIso);
-  if ('error' in parsed) {
-    await reply(conversation.id, message.fromPhone, parsed.error);
+  const result = await parseTimesheetText(text, todayIso);
+  if (!result.ok) {
+    await reply(conversation.id, message.fromPhone, result.error);
     return;
   }
+  const parsed = result.data;
   // Resolve the project by code.
   const project = await prisma.project.findUnique({
     where: { code: parsed.projectCode.toUpperCase() },
@@ -372,72 +244,6 @@ async function handleTimesheet(
   );
 }
 
-/**
- * Availability flow — accept a sentence like "I'm available 8h Mon-Fri
- * next week" and write per-day rows for the next Monday-Sunday week.
- */
-const AvailabilitySchema = z.object({
-  weekStartIso: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  hoursByDow: z.object({
-    mon: z.coerce.number().min(0).max(24).optional().default(0),
-    tue: z.coerce.number().min(0).max(24).optional().default(0),
-    wed: z.coerce.number().min(0).max(24).optional().default(0),
-    thu: z.coerce.number().min(0).max(24).optional().default(0),
-    fri: z.coerce.number().min(0).max(24).optional().default(0),
-    sat: z.coerce.number().min(0).max(24).optional().default(0),
-    sun: z.coerce.number().min(0).max(24).optional().default(0),
-  }),
-  notes: z.string().trim().max(200).nullable().optional(),
-});
-
-async function parseAvailability(
-  text: string,
-  thisMondayIso: string,
-  nextMondayIso: string,
-): Promise<z.infer<typeof AvailabilitySchema> | { error: string }> {
-  const apiKey = process.env['ANTHROPIC_API_KEY'];
-  if (!apiKey)
-    return {
-      error:
-        'Availability parsing needs LLM access — please use the web app for now.',
-    };
-  const client = new Anthropic({ apiKey });
-  const res = await client.messages.create({
-    model: 'claude-sonnet-4-5',
-    max_tokens: 512,
-    system: `Extract the user's weekly availability from their message. Return ONLY JSON:
-{
-  "weekStartIso": "YYYY-MM-DD (Monday). 'this week'=${thisMondayIso}, 'next week'=${nextMondayIso}",
-  "hoursByDow": { "mon": 0, "tue": 0, "wed": 0, "thu": 0, "fri": 0, "sat": 0, "sun": 0 },
-  "notes": "string or null"
-}
-Default to next week when ambiguous. Use 0 for unmentioned days.
-If unparseable, return {"error":"short reason"}.`,
-    messages: [{ role: 'user', content: text }],
-  });
-  const block = res.content.find((c) => c.type === 'text');
-  const raw = block && 'text' in block ? block.text : '';
-  const cleaned = raw
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .trim();
-  try {
-    const parsed = JSON.parse(cleaned);
-    if (parsed && typeof parsed === 'object' && 'error' in parsed) {
-      return { error: String(parsed.error) };
-    }
-    const validated = AvailabilitySchema.safeParse(parsed);
-    if (!validated.success) {
-      return {
-        error: 'Try "I\'m available 8h Mon-Fri next week".',
-      };
-    }
-    return validated.data;
-  } catch {
-    return { error: 'Try "I\'m available 8h Mon-Fri next week".' };
-  }
-}
-
 async function handleAvailability(
   person: Person,
   conversation: WhatsAppConversation,
@@ -447,15 +253,16 @@ async function handleAvailability(
   const today = new Date();
   const thisMonday = startOfWeek(today);
   const nextMonday = new Date(thisMonday.getTime() + 7 * 24 * 3600 * 1000);
-  const parsed = await parseAvailability(
+  const result = await parseAvailabilityText(
     text,
     thisMonday.toISOString().slice(0, 10),
     nextMonday.toISOString().slice(0, 10),
   );
-  if ('error' in parsed) {
-    await reply(conversation.id, message.fromPhone, parsed.error);
+  if (!result.ok) {
+    await reply(conversation.id, message.fromPhone, result.error);
     return;
   }
+  const parsed = result.data;
   const dows: Array<{ key: keyof typeof parsed.hoursByDow; offset: number }> = [
     { key: 'mon', offset: 0 },
     { key: 'tue', offset: 1 },

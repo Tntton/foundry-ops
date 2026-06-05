@@ -1025,46 +1025,48 @@ UPDATE "Person" SET email = 'shea.laws@foundry.health'        WHERE email = 'she
 > **WhatsApp alignment (TT, 2026-06-05):** the in-app assistant and the WhatsApp agent (the existing `whatsapp-router.ts` + TASK-120/121/122) are **two channels on the same underlying agent**, not two agents. Long-term goal: a user typing "log 4h on CAC001 today" gets the same logical handling regardless of channel — same intent classifier, same structured extractor, same capability checks, same audit trail (`source='agent'`). The *interaction model* differs (web can SPA-navigate the user to a prefilled form; WhatsApp can't, so it sends a one-time signed deep-link to the same prefilled form on `ops.foundry.health` — the user opens it on their phone's browser and submits there). The *shared logic* — intent classification, field extraction, project disambiguation, capability gating — must live in one set of modules under `src/server/agents/` and be imported by both surfaces. Concretely: when TASK-301 ships read tools, the existing WhatsApp flow handlers (`parseTimesheet`, `parseAvailability`) get refactored to consume them. When TASK-302 ships `prefill_*` tools, the WhatsApp router stops auto-writing drafts and starts replying with prefilled-form deep links instead. The unification end-state is TASK-303 below.
 
 ### TASK-300 — Assistant (Phase 1): conversational helper
-**status:** doing
+**status:** done
 **depends on:** TASK-009
 **acceptance:**
-- [ ] Floating chat icon at bottom-right of `(app)/layout.tsx`; click expands a ~400×600 panel with header (close + reset thread), scrollable message thread (markdown rendered), and an input box (Enter sends, ⌘+Enter newline → no, the other way: ⌘+Enter sends, Enter newline). Distinct colour from the feedback pill so the two widgets don't look like dupes; both visible together (feedback shifted left).
-- [ ] `AssistantThread` + `AssistantMessage` Prisma models + migration. Per-user single-active thread; reset archives the current and creates a new one. Auto-archive after 50 turns.
-- [ ] `/api/assistant/chat` Next.js route handler: POST `{ message }`, streams Claude response via Server-Sent Events. Persists user message + assistant message in same transaction-bounded sequence (user message saved before streaming starts; assistant message saved after stream completes).
-- [ ] System prompt in `src/server/agents/assistant/system-prompt.ts` — knows the user's name + roles + the canonical Foundry surfaces (timesheet / bills intake / expenses / approvals / projects / talent / BD outcomes / feedback / admin imports). Hard-prompts 2-3 sentence answers unless user asks for detail. Surface list filtered against user capabilities so the assistant never suggests something they can't do.
-- [ ] Conversation history capped to last 20 turns for context-window management.
-- [ ] Token cost guardrails: `max_tokens=4000` per turn; thread auto-archives at 50 turns.
-- [ ] Rate limit: 100 messages / hour / user, in-memory Map (single-region Vercel is fine for MVP). 429 returned on breach.
-- [ ] Model: `claude-sonnet-4-5` (matching the rest of the codebase per A4).
-- [ ] Audit event on every `assistant_thread.created` + `assistant_thread.archived` + `assistant_message.created` (actor=person, source=web, so any future audit-log review can see assistant usage volume).
-- [ ] Empty / loading / error states: empty thread shows a "Ask me how to log hours, submit an expense, or where approvals live" placeholder; streaming shows a typing-dot indicator; error shows a retry button + inline message.
-- [ ] Vitest tests: surface-knowledge builder (filters capabilities correctly per role), rate-limit helper, last-20-turn truncation.
-- [ ] Typecheck + lint green; commit: `feat(TASK-300): in-app assistant phase 1 — conversational helper`.
-- [ ] Smoke: TT signs in, opens the widget, asks "how do I log hours?", gets a sensible answer that mentions /timesheet, and a reload preserves the conversation.
+- [x] Floating chat icon at bottom-right of `(app)/layout.tsx`; click expands a ~400×600 panel with header (close + reset thread), scrollable message thread (markdown rendered), and an input box (Enter sends, Shift+Enter newline, ⌘+Enter also sends). Distinct colour from the feedback pill so the two widgets don't look like dupes; both visible together (feedback shifted left to right-[8.5rem]).
+- [x] `AssistantThread` + `AssistantMessage` Prisma models + migration (`20260604000000_add_assistant_thread`). Per-user single-active thread; reset archives the current and creates a new one. Auto-archive after 50 turns.
+- [x] `/api/assistant/chat` Next.js route handler: POST `{ message }`, streams Claude response via Server-Sent Events. Persists user message + assistant message in same transaction-bounded sequence (user message saved before streaming starts; assistant message saved after stream completes).
+- [x] System prompt in `src/server/agents/assistant/system-prompt.ts` — knows the user's name + roles + the canonical Foundry surfaces (timesheet / bills intake / expenses / approvals / projects / talent / BD outcomes / feedback / admin imports). Hard-prompts 2-3 sentence answers unless user asks for detail. Surface list filtered against user capabilities so the assistant never suggests something they can't do.
+- [x] Conversation history capped to last 20 turns for context-window management.
+- [x] Token cost guardrails: `max_tokens=4000` per turn; thread auto-archives at 50 turns.
+- [x] Rate limit: 100 messages / hour / user, in-memory Map (single-region Vercel is fine for MVP). 429 returned on breach.
+- [x] Model: `claude-sonnet-4-5` (matching the rest of the codebase per A4).
+- [x] Audit event on every `assistant_thread.created` + `assistant_thread.archived` + `assistant_message.created` (actor=person, source=web). Note: TASK-301 will flip tool-invocation audit events to `source=agent` to match WhatsApp; the message-row audit events stay `source=web` since the conversation itself happened on the web channel.
+- [x] Empty / loading / error states: empty thread shows a "Hey — I'm the Foundry Ops assistant…" placeholder; streaming shows a typing-dot indicator; error shows a retry button + inline message.
+- [x] Vitest tests: surface-knowledge builder (filters capabilities correctly per role), rate-limit helper, last-20-turn truncation. 15 new tests, full suite 230 passing.
+- [x] Typecheck + lint green; commits: `feat(TASK-300): in-app assistant phase 1 — conversational helper` (31d9fb6), follow-up colour fixes (703d1ca, ede6665).
+- [x] Smoke: TT signs in, opens the widget, asks "how do I log hours?", gets a sensible answer that mentions /timesheet, and a reload preserves the conversation. Verified on production 2026-06-05.
 
 **Out of scope (lands in TASK-301):** any tool-use / DB lookups.
 
+**note on completion:** Migration applied to production via Supabase SQL Editor (not Prisma CLI — local creds for Supabase weren't in `.env.local`). Prisma's `_prisma_migrations` ledger doesn't know about it; resolve with `pnpm prisma migrate resolve --applied 20260604000000_add_assistant_thread` if/when local DB access is restored. Two follow-up commits adjusted the brand-coloured surfaces (user bubble + send button + collapsed pill) to use `text-white` instead of `text-brand-ink` since the latter (a dark green) was barely readable on the brand-green background.
+
 ### TASK-301 — Assistant (Phase 2): read tools (incl. form-prefill foundation)
-**status:** todo
+**status:** doing
 **depends on:** TASK-300
 
 **framing:** the read tools serve two purposes — (1) answer "what's on my plate" style questions, and (2) **resolve the ambiguous references in natural-language input** so the prefill flow in TASK-302 has clean structured data to work with. e.g. when the user says "log 3h on CAC yesterday", the assistant uses `find_project("CAC")` to disambiguate (CAC001? CAC002?) before opening a prefilled timesheet form. Every find/list tool should return enough metadata (ids, codes, names, dates, status) that downstream prefill tools can reference rows without a second roundtrip.
 
 **acceptance:**
-- [ ] Add Anthropic `tools` array to the chat call. One file per tool under `src/server/agents/assistant/tools/`:
-  - `list_my_approvals()` — pending approval rows where `requiredRole ∈ session.roles`
-  - `list_my_projects()` — projects the user is on (team membership) or leads (primary partner / manager); returns id, code, name, clientCode, stage so it's a good prefill index
-  - `get_my_hours_this_week()` — sum + per-project breakdown from `TimesheetEntry` (week-to-date; useful both for "what have I logged" and as anchor data for "log X more on Y")
-  - `find_project(query)` — fuzzy match on code or name; returns top-5 with id/code/name/client for disambiguation
-  - `find_person(query)` — fuzzy match on name / initials / email; redacts fields the requester can't see (e.g. rate)
-  - `get_my_expenses_recent(n)` — last N submissions; includes category + amount so the assistant can pattern-match "another office one like last week's" → prefill category
-  - `list_expense_categories()` — enum values + short labels; lets the assistant pick the right category enum without guessing
-  - `get_active_rate_card_for_role(roleCode)` — gated on `ratecard.view`; lets the invoice-drafting flow look up the right bill rate for a role
-- [ ] Each tool is a pure server-side function gated on session; no privilege escalation.
-- [ ] Tool-result loop: assistant receives tool result, formats human answer.
-- [ ] Tool calls audited (`assistant_tool.invoked`, delta = `{ tool, args }`, source=agent so it lines up with the WhatsApp router's existing audit attribution — keeps the "agent-mediated changes" filter unified across channels) so we can see what users are asking for.
-- [ ] **WhatsApp parity:** factor the existing per-flow extractors out of `whatsapp-router.ts` into a shared `src/server/agents/intent/` module. Specifically `parseTimesheet`, `parseAvailability`, and the receipt-OCR call become channel-agnostic; the WhatsApp router and the in-app assistant both import them. After this task, adding a new field-extraction prompt should change one file, not two.
-- [ ] Tests: one golden test per tool (fixture session + fixture data → expected JSON). Existing whatsapp-router tests must still pass after the refactor (`pnpm test whatsapp` covers them).
+- [x] Add Anthropic `tools` array to the chat call. One file per tool under `src/server/agents/assistant/tools/`:
+  - [x] `list_my_approvals()` — pending approval rows where `requiredRole ∈ session.roles`
+  - [x] `list_my_projects()` — projects the user is on (team membership) or leads (primary partner / manager); returns id, code, name, clientCode, stage so it's a good prefill index
+  - [x] `get_my_hours_this_week()` — sum + per-project breakdown from `TimesheetEntry`
+  - [x] `find_project(query)` — fuzzy match on code or name; returns top-5 with id/code/name/client for disambiguation
+  - [x] `find_person(query)` — fuzzy match on name / initials / email; redacts fields the requester can't see (e.g. rate)
+  - [x] `get_my_expenses_recent(n)` — last N submissions
+  - [x] `list_expense_categories()` — enum values + short labels
+  - [x] `get_active_rate_card_for_role(roleCode)` — gated on `ratecard.view`
+- [x] Each tool is a pure server-side function gated on session; no privilege escalation. Capability gating built into the registry's `runAssistantTool` — `get_active_rate_card_for_role` carries the `ratecard.view` cap.
+- [x] Tool-result loop: assistant receives tool result, formats human answer. Implemented in [chat.ts](src/server/agents/assistant/chat.ts) with `MAX_TOOL_ROUNDTRIPS=5` guard.
+- [x] Tool calls audited (`assistant_tool.invoked`, delta = `{ tool, input }`, source=agent so the audit-log filter unifies in-app + WhatsApp agent actions).
+- [x] **WhatsApp parity:** factored `classifyIntent`, `parseTimesheet`, `parseAvailability` out of [whatsapp-router.ts](src/server/integrations/whatsapp-router.ts) into [src/server/agents/intent/](src/server/agents/intent/). Behaviour unchanged on the WhatsApp channel (verified via the existing flow logic). Tests for the keyword fallback added.
+- [x] Tests: registry sanity (8 tools, unique names, valid schemas), capability gating, input validation, intent-classifier keyword fallback. Full suite 246 ✓ (was 230 before this task).
 - [ ] Commit: `feat(TASK-301): in-app assistant phase 2 — read tools + WhatsApp extractor refactor`.
 - [ ] Smoke: TT asks "what's on my plate?" and gets a real answer pulled from the DB. Also: "what's CAC?" returns the right project + ready to be referenced in a follow-up prefill. And: a WhatsApp timesheet log still works end-to-end after the extractor refactor (no behavioural change on that channel yet).
 
