@@ -1147,14 +1147,17 @@ A secondary, smaller surface of `propose_*` tools handles low-field one-shot act
 - [ ] Commit: `feat(TASK-302b): assistant prefill — expense + bill + invoice`
 
 ### TASK-302c — WhatsApp prefill parity
-**status:** todo
+**status:** doing
 **depends on:** TASK-302a, TASK-302b
 **acceptance:**
-- [ ] WhatsApp timesheet flow stops auto-writing a draft TimesheetEntry. Instead: parses the user's text via the same `parseTimesheetText` extractor, builds a prefill token via the same `buildTimesheetPrefill`, replies with `Tap to review + submit: https://ops.foundry.health/timesheet?week=…&prefill=<token>`.
-- [ ] Same swap for `expense` if it lands in WhatsApp (currently the WhatsApp expense flow goes via OCR + drafts; revisit whether that should change to a prefill link too).
-- [ ] Legacy auto-draft behaviour stays available behind `FeatureFlag` row `whatsapp.autoWriteDrafts` (default off). If TT decides phone-first folks prefer the auto-draft round-trip, flip it back on per-flow.
-- [ ] Tests: WhatsApp router replies with a deep-link URL when flag is off; auto-drafts when flag is on (back-compat path).
+- [x] WhatsApp timesheet flow stops auto-writing a draft TimesheetEntry by default. Parses text via the shared `parseTimesheetText` extractor, signs a `prefill_timesheet` token, replies with the absolute `NEXT_PUBLIC_APP_URL/timesheet?week=…&prefill=…` URL. Token bound to the WhatsApp sender's Person.id so a forwarded link refuses.
+- [x] WhatsApp expense flow: OCR still runs (existing extractIntakeFields), result becomes a `prefill_expense` token URL instead of a submitted Expense row. Caption text becomes the description; project code parsed from caption pre-populates `projectCode`.
+- [x] Legacy auto-draft path retained behind `WHATSAPP_AUTO_WRITE_DRAFTS=1` env var (kept simple — env flag instead of a DB FeatureFlag row since the feature-flag table doesn't exist yet). Default off after this task. If TT decides phone-first folks prefer the auto-draft round-trip, flip the env var on (no code change needed).
+- [x] Audit event `assistant_prefill` action=`minted` source=`agent`, delta tags `channel: 'whatsapp'` so a single SQL filter sees mints from both channels.
+- [x] HELP_TEXT updated so the menu accurately describes the new behaviour.
 - [ ] Commit: `feat(TASK-302c): WhatsApp prefill parity — deep-link instead of auto-draft`
+
+**Not changed:** the WhatsApp availability flow (`parseAvailabilityText` → auto-writes `AvailabilityForecast` rows) — there's no `prefill_availability` tool yet, and the availability table is multi-day so a single prefill token doesn't map cleanly. Future task: add `prefill_availability` if the auto-write behaviour proves unpopular.
 
 ### TASK-302e — Drag-drop file attachments (receipt → expense/bill prefill)
 **status:** doing

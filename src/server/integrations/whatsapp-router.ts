@@ -10,8 +10,32 @@ import { extractIntakeFields } from '@/server/agents/intake-ocr/extract';
 import { classifyIntent } from '@/server/agents/intent/classify';
 import { parseTimesheetText } from '@/server/agents/intent/timesheet';
 import { parseAvailabilityText } from '@/server/agents/intent/availability';
-import { startOfWeek } from '@/lib/week';
+import { signPrefillToken } from '@/server/agents/assistant/prefill/token';
+import { startOfWeek, formatIsoDate } from '@/lib/week';
+import { optionalEnv } from '@/server/env';
 import { downloadWhatsAppMedia, sendWhatsAppText } from './whatsapp';
+
+/**
+ * WhatsApp prefill parity (TASK-302c).
+ *
+ * After 302c, the timesheet / expense flows reply with a one-time
+ * signed deep-link to the prefilled web form instead of auto-writing
+ * a draft DB row. The user taps the link on their phone's browser,
+ * reviews the populated form, and submits via the form's normal flow
+ * (capability checks + validation live there).
+ *
+ * The legacy auto-draft behaviour stays available behind the
+ * `WHATSAPP_AUTO_WRITE_DRAFTS=1` env var. If TT decides phone-first
+ * folks prefer the auto-draft round-trip, flip it back on per-flow.
+ * Default off after this task.
+ */
+function legacyAutoDraftEnabled(): boolean {
+  return optionalEnv('WHATSAPP_AUTO_WRITE_DRAFTS') === '1';
+}
+
+function publicAppUrl(): string {
+  return optionalEnv('NEXT_PUBLIC_APP_URL') ?? 'https://ops.foundry.health';
+}
 
 /**
  * WhatsApp conversation router.
@@ -55,11 +79,11 @@ export type IncomingMessage = {
 // timesheet.ts / availability.ts.
 
 const HELP_TEXT = `Hi! I can help with:
-• *Timesheet* — say "log 4 hours on PROJ001 today"
+• *Timesheet* — say "log 4 hours on PROJ001 today" → I send a 1-tap link to a prefilled timesheet
 • *Availability* — say "I'm available 8h Mon–Fri next week"
-• *Expense* — send a receipt photo + the project code
+• *Expense* — send a receipt photo + (optional) project code → I OCR it and send a prefilled expense link
 • *Status* — ask "how many hours this week"
-Type *cancel* anytime to abort.`;
+Tap-to-submit links last 15 minutes. Type *cancel* anytime to abort.`;
 
 /**
  * Resolve the inbound phone to a Person. Strips spaces / dashes and
@@ -205,26 +229,81 @@ async function handleTimesheet(
   }
 
   const date = new Date(`${parsed.dateIso}T00:00:00.000Z`);
-  const created = await prisma.$transaction(async (tx) => {
-    const entry = await tx.timesheetEntry.create({
-      data: {
-        personId: person.id,
-        projectId: project.id,
-        date,
-        hours: new Prisma.Decimal(parsed.hours),
-        description: parsed.description ?? null,
-        status: 'draft',
-      },
-      select: { id: true },
+
+  if (legacyAutoDraftEnabled()) {
+    // ─── Legacy path — auto-write the draft entry (pre-302c) ──────
+    const created = await prisma.$transaction(async (tx) => {
+      const entry = await tx.timesheetEntry.create({
+        data: {
+          personId: person.id,
+          projectId: project.id,
+          date,
+          hours: new Prisma.Decimal(parsed.hours),
+          description: parsed.description ?? null,
+          status: 'draft',
+        },
+        select: { id: true },
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: person.id },
+        action: 'created',
+        entity: {
+          type: 'timesheet_entry',
+          id: entry.id,
+          after: {
+            via: 'whatsapp',
+            projectCode: project.code,
+            hours: parsed.hours,
+            dateIso: parsed.dateIso,
+          },
+        },
+        source: 'agent',
+      });
+      return entry;
     });
+    await setFlow(conversation.id, 'idle', null);
+    await reply(
+      conversation.id,
+      message.fromPhone,
+      `✅ Logged *${parsed.hours}h* on *${project.code}* for ${parsed.dateIso} (draft). Review and submit on the web when ready.`,
+      'timesheet_entry',
+      created.id,
+    );
+    return;
+  }
+
+  // ─── Prefill path (default after TASK-302c) ──────────────────────
+  // Build a signed prefill token + reply with a deep-link to the
+  // form. The user taps the link, lands on /timesheet with the row
+  // populated and the "Prefilled by Assistant" banner, and submits
+  // via the form's normal flow. No DB row is written here.
+  const token = signPrefillToken({
+    kind: 'timesheet',
+    personId: person.id,
+    payload: {
+      entries: [
+        {
+          projectCode: project.code,
+          dateIso: parsed.dateIso,
+          hours: parsed.hours,
+          notes: parsed.description ?? null,
+        },
+      ],
+    },
+  });
+  const weekIso = formatIsoDate(startOfWeek(date));
+  const url = `${publicAppUrl()}/timesheet?week=${weekIso}&prefill=${encodeURIComponent(token)}`;
+
+  await prisma.$transaction(async (tx) => {
     await writeAudit(tx, {
       actor: { type: 'person', id: person.id },
-      action: 'created',
+      action: 'minted',
       entity: {
-        type: 'timesheet_entry',
-        id: entry.id,
+        type: 'assistant_prefill',
+        id: `${person.id}:whatsapp-timesheet:${parsed.dateIso}`,
         after: {
-          via: 'whatsapp',
+          channel: 'whatsapp',
+          kind: 'timesheet',
           projectCode: project.code,
           hours: parsed.hours,
           dateIso: parsed.dateIso,
@@ -232,15 +311,16 @@ async function handleTimesheet(
       },
       source: 'agent',
     });
-    return entry;
   });
   await setFlow(conversation.id, 'idle', null);
   await reply(
     conversation.id,
     message.fromPhone,
-    `✅ Logged *${parsed.hours}h* on *${project.code}* for ${parsed.dateIso} (draft). Review and submit on the web when ready.`,
-    'timesheet_entry',
-    created.id,
+    `📝 Prepped *${parsed.hours}h* on *${project.code}* for ${parsed.dateIso}.
+Tap to review + submit (15-min link):
+${url}`,
+    'assistant_prefill',
+    null,
   );
 }
 
@@ -379,54 +459,130 @@ async function handleExpense(
     extracted.ok && extracted.data.issueDate
       ? extracted.data.issueDate
       : new Date().toISOString().slice(0, 10);
-  const expense = await prisma.$transaction(async (tx) => {
-    const e = await tx.expense.create({
-      data: {
-        personId: person.id,
-        projectId,
-        date: new Date(`${dateIso}T00:00:00.000Z`),
-        vendor: vendor || 'Unknown vendor',
-        category: 'other',
-        amount: Math.round(totalDollars * 100),
-        gst: Math.round(gstDollars * 100),
-        description: message.text ?? null,
-        status: 'submitted',
-      },
-      select: { id: true },
+
+  if (legacyAutoDraftEnabled()) {
+    // ─── Legacy path — auto-write a submitted Expense (pre-302c) ──
+    const expense = await prisma.$transaction(async (tx) => {
+      const e = await tx.expense.create({
+        data: {
+          personId: person.id,
+          projectId,
+          date: new Date(`${dateIso}T00:00:00.000Z`),
+          vendor: vendor || 'Unknown vendor',
+          category: 'other',
+          amount: Math.round(totalDollars * 100),
+          gst: Math.round(gstDollars * 100),
+          description: message.text ?? null,
+          status: 'submitted',
+        },
+        select: { id: true },
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: person.id },
+        action: 'created',
+        entity: {
+          type: 'expense',
+          id: e.id,
+          after: {
+            via: 'whatsapp',
+            mediaId: message.mediaId,
+            ocrConfigured: extracted.ok,
+            extracted: extracted.ok ? extracted.data : null,
+            projectCode,
+          },
+        },
+        source: 'agent',
+      });
+      return e;
     });
+    await setFlow(conversation.id, 'idle', null);
+    const ocrSuffix = extracted.ok
+      ? `Detected vendor *${vendor || '—'}*, total *$${totalDollars.toFixed(2)}* on *${dateIso}*.`
+      : 'OCR not configured — I\'ve saved the receipt for manual review.';
+    const projectLine = projectCode
+      ? `Tagged to project *${projectCode}*.`
+      : 'No project code detected — attach one via the web app.';
+    await reply(
+      conversation.id,
+      message.fromPhone,
+      `📸 Receipt logged → expense pending review.
+${ocrSuffix}
+${projectLine}`,
+      'expense',
+      expense.id,
+    );
+    return;
+  }
+
+  // ─── Prefill path (default after TASK-302c) ──────────────────────
+  if (!extracted.ok) {
+    // No structured data to put in a prefill — let the user know
+    // and ask them to try /expenses/new manually.
+    await setFlow(conversation.id, 'idle', null);
+    await reply(
+      conversation.id,
+      message.fromPhone,
+      `📸 Got the receipt but couldn't read it (${extracted.reason}). Try logging it manually at ${publicAppUrl()}/expenses/new.`,
+    );
+    return;
+  }
+
+  // Build a prefill_expense token from the OCR result. Description
+  // falls back to the user's caption when present, otherwise a
+  // placeholder so the form's required-description rule is satisfied.
+  const description =
+    message.text && message.text.trim().length > 0
+      ? message.text.trim()
+      : `Receipt · ${vendor || 'unknown vendor'} · ${dateIso}`;
+  const token = signPrefillToken({
+    kind: 'expense',
+    personId: person.id,
+    payload: {
+      dateIso,
+      amountDollars: totalDollars,
+      gstDollars: gstDollars > 0 ? gstDollars : null,
+      // The intake-ocr extractor uses the same canonical category enum
+      // as the form — pass through when the model returned one;
+      // otherwise default to 'other' (user can re-pick on the form).
+      category: extracted.data.category ?? 'other',
+      vendor: vendor || null,
+      description,
+      projectCode: projectCode ?? null,
+    },
+  });
+  const url = `${publicAppUrl()}/expenses/new?prefill=${encodeURIComponent(token)}`;
+
+  await prisma.$transaction(async (tx) => {
     await writeAudit(tx, {
       actor: { type: 'person', id: person.id },
-      action: 'created',
+      action: 'minted',
       entity: {
-        type: 'expense',
-        id: e.id,
+        type: 'assistant_prefill',
+        id: `${person.id}:whatsapp-expense:${dateIso}`,
         after: {
-          via: 'whatsapp',
-          mediaId: message.mediaId,
-          ocrConfigured: extracted.ok,
-          extracted: extracted.ok ? extracted.data : null,
+          channel: 'whatsapp',
+          kind: 'expense',
+          ocrConfidence: extracted.data.confidence.overall,
           projectCode,
+          vendor,
+          totalDollars,
         },
       },
       source: 'agent',
     });
-    return e;
   });
   await setFlow(conversation.id, 'idle', null);
-  const ocrSuffix = extracted.ok
-    ? `Detected vendor *${vendor || '—'}*, total *$${totalDollars.toFixed(2)}* on *${dateIso}*.`
-    : 'OCR not configured — I\'ve saved the receipt for manual review.';
   const projectLine = projectCode
-    ? `Tagged to project *${projectCode}*.`
-    : 'No project code detected — attach one via the web app.';
+    ? `· Tagged to project *${projectCode}*`
+    : '· OPEX (no project)';
   await reply(
     conversation.id,
     message.fromPhone,
-    `📸 Receipt logged → expense pending review.
-${ocrSuffix}
-${projectLine}`,
-    'expense',
-    expense.id,
+    `📸 Read *${vendor || 'receipt'}* · *$${totalDollars.toFixed(2)}* on ${dateIso} ${projectLine}.
+Tap to review + submit (15-min link):
+${url}`,
+    'assistant_prefill',
+    null,
   );
 }
 
