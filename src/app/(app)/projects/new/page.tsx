@@ -24,11 +24,12 @@ export default async function NewProjectPage({
   const partners = people.filter((p) => isLeadershipBand(p.band));
 
   // Internal-project bootstrapping: resolve the firm's internal client
-  // (`FH`) so we can auto-pin newly-created internal projects to it
-  // without making the operator pick from the dropdown, and pick the
-  // next free FHP code so the form can suggest e.g. "FHP007".
+  // (`FHP` — Foundry Health · Projects (internal)) so we can auto-pin
+  // newly-created internal projects to it without making the operator
+  // pick from the dropdown. Pick the next free FHP code so the form
+  // can suggest e.g. "FHP007".
   const fhInternalClient = await prisma.client.findUnique({
-    where: { code: 'FH' },
+    where: { code: 'FHP' },
     select: { id: true, legalName: true },
   });
   const lastFhp = await prisma.project.findFirst({

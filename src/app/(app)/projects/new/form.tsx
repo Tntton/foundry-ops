@@ -112,7 +112,7 @@ export function NewProjectForm({
               internalClient
                 ? 'No client revenue. Track against an internal budget. ' +
                   'Standing or episodic — start/end dates optional.'
-                : 'Run scripts/seed-house-projects.ts to create the FH internal client first.'
+                : 'Create the FHP internal client first (Directory → Clients → New, code FHP).'
             }
           />
         </div>
