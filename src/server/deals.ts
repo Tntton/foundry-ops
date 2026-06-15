@@ -29,6 +29,10 @@ export type DealListRow = {
   primaryContact: { name: string; role: string | null } | null;
   convertedProjectId: string | null;
   convertedProject: { code: string; name: string } | null;
+  // Within-column priority rank on the BD kanban (1..N). 0 = unranked
+  // / freshly created; the kanban sorts those to the bottom of the
+  // column. See `reorderDealsInStage`.
+  sortOrder: number;
   createdAt: Date;
 };
 
@@ -136,6 +140,7 @@ export async function listDeals(filter: DealFilter = {}): Promise<DealListRow[]>
       convertedProject: d.convertedProjectId
         ? projectById.get(d.convertedProjectId) ?? null
         : null,
+      sortOrder: d.sortOrder,
       createdAt: d.createdAt,
     };
   });

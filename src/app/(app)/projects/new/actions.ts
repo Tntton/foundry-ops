@@ -146,18 +146,20 @@ export async function createProject(
   // an orphaned project.
   let resolvedClientId = data.clientId ?? null;
   if (data.kind === 'internal') {
-    const fh = await prisma.client.findUnique({
-      where: { code: 'FH' },
+    // FHP = Foundry Health · Projects (internal). Created via SQL on
+    // 2026-05-29 alongside FHO + FHX. Replaces the old FH client.
+    const fhp = await prisma.client.findUnique({
+      where: { code: 'FHP' },
       select: { id: true },
     });
-    if (!fh) {
+    if (!fhp) {
       return {
         status: 'error',
         message:
-          'The FH internal client doesn’t exist yet. Run scripts/seed-house-projects.ts and try again.',
+          'The FHP internal client doesn’t exist yet. Create it via Directory → Clients → New (code FHP) and try again.',
       };
     }
-    resolvedClientId = fh.id;
+    resolvedClientId = fhp.id;
   }
   if (!resolvedClientId) {
     return {

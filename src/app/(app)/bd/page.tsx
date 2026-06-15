@@ -298,6 +298,7 @@ export default async function BdPipelinePage({
               lastName: d.owner.lastName,
               headshotUrl: d.owner.headshotUrl,
             },
+            sortOrder: d.sortOrder,
           }))}
           canCreate={canCreate}
           canMove={hasCapability(session, 'deal.edit')}

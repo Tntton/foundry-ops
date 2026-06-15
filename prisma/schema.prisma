@@ -674,6 +674,11 @@ model Project {
   workOrderDraftText         String?      @db.Text
   workOrderGeneratedAt       DateTime?
   workOrderSignedAt          DateTime?
+  // Within-column rank on the projects kanban. Renumbered 1..N inside
+  // each stage by `reorderProjectsInStage`. Default 0 means "newly
+  // created, not yet ranked" — surfaced at the bottom of the column
+  // so a fresh card doesn't elbow ahead of ranked work.
+  sortOrder                  Int          @default(0)
   createdAt                  DateTime     @default(now())
   updatedAt                  DateTime     @updatedAt
 
@@ -920,6 +925,11 @@ model Deal {
   // try next time. For won deals: what worked, key reason we won,
   // signal to pattern-match on.
   lessonsLearned     String?   @db.Text
+  // Within-column rank on the BD kanban. Renumbered 1..N inside each
+  // stage by `reorderDealsInStage`. Default 0 means "newly created,
+  // not yet ranked" so fresh deals land at the bottom rather than
+  // jumping ahead of partner-ranked priorities.
+  sortOrder          Int       @default(0)
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 

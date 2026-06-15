@@ -530,6 +530,7 @@ function projectToKanbanCard(
     progressPct,
     qcStatus: r.qcStatus,
     paid: paidByProject.get(r.id) ?? false,
+    sortOrder: r.sortOrder,
   };
 }
 

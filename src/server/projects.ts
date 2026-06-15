@@ -33,6 +33,10 @@ export type ProjectListRow = {
   startDate: Date | null;
   endDate: Date | null;
   actualEndDate: Date | null;
+  // Within-column priority rank on the kanban (1..N). 0 = unranked /
+  // freshly created; kanban surfaces sort those to the bottom of the
+  // column. See `reorderProjectsInStage`.
+  sortOrder: number;
   // QC traffic-light derived from open risks (high → red, any → amber, none → green)
   qcStatus: 'green' | 'amber' | 'red';
 };
@@ -140,6 +144,7 @@ export async function listProjects(
       name: true,
       stage: true,
       contractValue: true,
+      sortOrder: true,
       startDate: true,
       endDate: true,
       actualEndDate: true,
@@ -185,6 +190,7 @@ export async function listProjects(
       manager: r.manager,
       team: Array.from(teamMap.values()),
       contractValueCents: r.contractValue,
+      sortOrder: r.sortOrder,
       startDate: r.startDate,
       endDate: r.endDate,
       actualEndDate: r.actualEndDate,

@@ -5,8 +5,36 @@ import { useRouter } from 'next/navigation';
 import { useOptimistic, useState, useTransition, useCallback } from 'react';
 import type { ProjectStage } from '@prisma/client';
 import { PersonAvatar } from '@/components/person-avatar';
-import { moveProject, type MoveProjectState } from './actions';
+import {
+  moveProject,
+  reorderProjectsInStage,
+  type MoveProjectState,
+  type ReorderState,
+} from './actions';
 import { CardAddMember, type CardPersonOption } from './card-add-member';
+
+// Lanes where within-column priority ranking is intentionally disabled.
+// Archived projects are history — they don't need an order. (Internal
+// FHP lanes standing/benched ARE rankable so they're not listed here.)
+const REORDER_DISABLED_STAGES: ReadonlySet<ProjectStage> = new Set<ProjectStage>([
+  'archived',
+]);
+
+// Stable comparator for in-column display order. Ranked cards
+// (sortOrder ≥ 1) appear in ascending order; unranked cards (the
+// default 0 a freshly-created project carries) fall to the bottom,
+// tie-broken by code so the layout is deterministic.
+function compareForColumn(
+  a: { sortOrder: number; code: string },
+  b: { sortOrder: number; code: string },
+): number {
+  const aRanked = a.sortOrder > 0;
+  const bRanked = b.sortOrder > 0;
+  if (aRanked && bRanked) return a.sortOrder - b.sortOrder;
+  if (aRanked) return -1;
+  if (bRanked) return 1;
+  return a.code.localeCompare(b.code);
+}
 
 type KanbanProject = {
   id: string;
@@ -30,7 +58,12 @@ type KanbanProject = {
   progressPct: number;
   qcStatus: 'green' | 'amber' | 'red';
   paid: boolean;
+  sortOrder: number;
 };
+
+type OptimisticAction =
+  | { type: 'move'; id: string; toStage: ProjectStage }
+  | { type: 'reorder'; stage: ProjectStage; orderedIds: string[] };
 
 const STAGE_LABEL: Record<ProjectStage, string> = {
   kickoff: 'Setup',
@@ -96,15 +129,25 @@ export function ProjectsKanban({
   // Closed column is collapsed by default — leadership doesn't need it
   // visible on every page-load. Click to reveal when reviewing.
   const [closedHidden, setClosedHidden] = useState(true);
-  // Optimistic state — we move the card immediately, then revert on server error.
+  // Optimistic state — covers both cross-column moves (stage change)
+  // and within-column reorders (sortOrder renumber). Server truth wins
+  // on refresh either way.
   const [optimisticProjects, dispatch] = useOptimistic<
     KanbanProject[],
-    { id: string; toStage: ProjectStage }
-  >(projects, (current, action) =>
-    current.map((p) =>
-      p.id === action.id ? { ...p, stage: action.toStage } : p,
-    ),
-  );
+    OptimisticAction
+  >(projects, (current, action) => {
+    if (action.type === 'move') {
+      return current.map((p) =>
+        p.id === action.id ? { ...p, stage: action.toStage } : p,
+      );
+    }
+    // Reorder: assign sortOrder 1..N to the cards in the column in
+    // the supplied order; leave other columns alone.
+    const indexById = new Map(action.orderedIds.map((id, i) => [id, i + 1]));
+    return current.map((p) =>
+      indexById.has(p.id) ? { ...p, sortOrder: indexById.get(p.id)! } : p,
+    );
+  });
 
   const handleDrop = useCallback(
     (projectId: string, toStage: ProjectStage) => {
@@ -115,7 +158,7 @@ export function ProjectsKanban({
       fd.set('projectId', projectId);
       fd.set('toStage', toStage);
       startTransition(async () => {
-        dispatch({ id: projectId, toStage });
+        dispatch({ type: 'move', id: projectId, toStage });
         const result = (await moveProject({ status: 'idle' }, fd)) as MoveProjectState;
         if (result.status === 'error') {
           setError(result.message);
@@ -129,6 +172,29 @@ export function ProjectsKanban({
       });
     },
     [projects, dispatch, router],
+  );
+
+  const handleReorder = useCallback(
+    (stage: ProjectStage, orderedIds: string[]) => {
+      if (orderedIds.length === 0) return;
+      if (REORDER_DISABLED_STAGES.has(stage)) return;
+      setError(null);
+      const fd = new FormData();
+      fd.set('stage', stage);
+      fd.set('orderedIds', orderedIds.join(','));
+      startTransition(async () => {
+        dispatch({ type: 'reorder', stage, orderedIds });
+        const result = (await reorderProjectsInStage(
+          { status: 'idle' },
+          fd,
+        )) as ReorderState;
+        if (result.status === 'error') {
+          setError(result.message);
+        }
+        router.refresh();
+      });
+    },
+    [dispatch, router],
   );
 
   // Two bands: client engagements on top, internal FH initiatives
@@ -152,6 +218,9 @@ export function ProjectsKanban({
       benched: [],
     };
     for (const p of cards) g[p.stage].push(p);
+    for (const stage of Object.keys(g) as ProjectStage[]) {
+      g[stage].sort(compareForColumn);
+    }
     return g;
   };
 
@@ -183,6 +252,7 @@ export function ProjectsKanban({
         canAddTeam={canAddTeam}
         allPeople={allPeople}
         onDrop={handleDrop}
+        onReorder={handleReorder}
         newProjectHref="/projects/new"
         closedToggle={{
           hidden: closedHidden,
@@ -206,6 +276,7 @@ export function ProjectsKanban({
         canAddTeam={canAddTeam}
         allPeople={allPeople}
         onDrop={handleDrop}
+        onReorder={handleReorder}
         newProjectHref="/projects/new?kind=internal"
         emptyHint={
           canCreate
@@ -235,6 +306,7 @@ function KanbanBand({
   canAddTeam,
   allPeople,
   onDrop,
+  onReorder,
   emptyHint,
   newProjectHref,
   closedToggle,
@@ -256,6 +328,7 @@ function KanbanBand({
   canAddTeam: boolean;
   allPeople: CardPersonOption[];
   onDrop: (projectId: string, toStage: ProjectStage) => void;
+  onReorder: (stage: ProjectStage, orderedIds: string[]) => void;
   /** Where the "+ New project code" affordance points. Internal band
    *  pre-selects the internal kind via `?kind=internal`. */
   newProjectHref: string;
@@ -317,6 +390,7 @@ function KanbanBand({
               canAddTeam={canAddTeam}
               allPeople={allPeople}
               onDrop={onDrop}
+              onReorder={onReorder}
               newProjectHref={newProjectHref}
             />
           ))}

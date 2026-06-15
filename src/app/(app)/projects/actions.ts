@@ -10,6 +10,13 @@ import { writeAudit } from '@/server/audit';
 import { isInternalProject, hasFixedWindow } from '@/lib/project-kind';
 import { emitUserUpdateMany, notifyAdminPool } from '@/server/user-updates';
 
+const REORDER_LIMIT = 200;
+
+// Reorder is disabled on the read-only "Closed" lane — historical
+// projects don't carry priority. Internal-only history lanes don't
+// exist (FHP projects use standing/benched which ARE rankable).
+const PROJECT_REORDER_FORBIDDEN: ProjectStage[] = ['archived'];
+
 export type MoveProjectState =
   | { status: 'idle' }
   | { status: 'error'; message: string }
@@ -211,4 +218,116 @@ export async function moveProject(
     from: project.stage,
     to: toStage,
   };
+}
+
+// ─── Within-column priority ranking ────────────────────────────────
+//
+// `reorderProjectsInStage` accepts the full ordered list of project IDs
+// in a single column and renumbers `sortOrder` 1..N for all of them.
+// Volume is small (≤30 cards per column at firm scale) so renumbering
+// every reorder is cheaper than maintaining fractional gaps.
+
+export type ReorderState =
+  | { status: 'idle' }
+  | { status: 'error'; message: string }
+  | { status: 'success' };
+
+const ReorderProjectsSchema = z.object({
+  stage: z.enum([
+    'kickoff',
+    'delivery',
+    'closing',
+    'archived',
+    'standing',
+    'benched',
+  ]),
+  orderedIds: z.array(z.string().min(1)).min(1).max(REORDER_LIMIT),
+});
+
+export async function reorderProjectsInStage(
+  _prev: ReorderState,
+  formData: FormData,
+): Promise<ReorderState> {
+  const session = await getSession();
+  if (!session) return { status: 'error', message: 'Not signed in' };
+
+  const orderedIdsRaw = formData.get('orderedIds');
+  const parsed = ReorderProjectsSchema.safeParse({
+    stage: formData.get('stage'),
+    orderedIds:
+      typeof orderedIdsRaw === 'string' && orderedIdsRaw.length > 0
+        ? orderedIdsRaw.split(',')
+        : [],
+  });
+  if (!parsed.success) {
+    return { status: 'error', message: 'Invalid reorder' };
+  }
+  const { stage, orderedIds } = parsed.data;
+
+  if (PROJECT_REORDER_FORBIDDEN.includes(stage)) {
+    return {
+      status: 'error',
+      message: `${stage} is read-only history — priority ranking is disabled.`,
+    };
+  }
+
+  if (!hasAnyRole(session, ['super_admin', 'admin', 'partner', 'manager'])) {
+    return {
+      status: 'error',
+      message: 'Not authorized to reorder the projects board.',
+    };
+  }
+
+  // Pull current rows so we can (a) validate every id is real + in the
+  // claimed stage, and (b) compute before/after for the audit delta.
+  const existing = await prisma.project.findMany({
+    where: { id: { in: orderedIds }, stage },
+    select: { id: true, code: true, sortOrder: true },
+  });
+  if (existing.length !== orderedIds.length) {
+    return {
+      status: 'error',
+      message: 'Card list out of sync — refresh and try again.',
+    };
+  }
+  const existingById = new Map(existing.map((p) => [p.id, p]));
+  const before = orderedIds.map((id) => {
+    const row = existingById.get(id);
+    return { id, code: row?.code ?? null, sortOrder: row?.sortOrder ?? null };
+  });
+
+  // Renumber 1..N in a single transaction so concurrent reorders can't
+  // interleave to produce duplicate ranks.
+  try {
+    await prisma.$transaction(async (tx) => {
+      for (let i = 0; i < orderedIds.length; i += 1) {
+        await tx.project.update({
+          where: { id: orderedIds[i]! },
+          data: { sortOrder: i + 1 },
+        });
+      }
+      const after = orderedIds.map((id, i) => ({
+        id,
+        code: existingById.get(id)?.code ?? null,
+        sortOrder: i + 1,
+      }));
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'reordered',
+        entity: {
+          type: 'project_kanban',
+          id: `stage:${stage}`,
+          before: { stage, order: before },
+          after: { stage, order: after },
+        },
+        source: 'web',
+      });
+    });
+  } catch (err) {
+    console.error('[project.reorder] failed:', err);
+    return { status: 'error', message: 'Reorder failed — try again.' };
+  }
+
+  revalidatePath('/projects');
+  return { status: 'success' };
 }

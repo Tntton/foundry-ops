@@ -17,6 +17,12 @@ const STAGE_VALUES = [
   'lost',
 ] as const;
 
+const REORDER_LIMIT = 200;
+
+// Reorder is disabled on closed lanes — won/lost are history columns,
+// not priority queues.
+const DEAL_REORDER_FORBIDDEN: DealStage[] = ['won', 'lost'];
+
 export type MoveDealState =
   | { status: 'idle' }
   | { status: 'error'; message: string }
@@ -253,4 +259,108 @@ export async function quickCreateDeal(
 
   revalidatePath('/bd');
   return { status: 'success', dealId: newId };
+}
+
+// ─── Within-column priority ranking ────────────────────────────────
+//
+// `reorderDealsInStage` accepts the full ordered list of deal IDs in a
+// single column and renumbers `sortOrder` 1..N for all of them. Same
+// shape as `reorderProjectsInStage`; volume per column is small enough
+// (≤30 deals at firm scale) that renumber-on-every-reorder beats the
+// complexity of fractional ranks.
+
+export type ReorderDealsState =
+  | { status: 'idle' }
+  | { status: 'error'; message: string }
+  | { status: 'success' };
+
+const ReorderDealsSchema = z.object({
+  stage: z.enum(STAGE_VALUES),
+  orderedIds: z.array(z.string().min(1)).min(1).max(REORDER_LIMIT),
+});
+
+export async function reorderDealsInStage(
+  _prev: ReorderDealsState,
+  formData: FormData,
+): Promise<ReorderDealsState> {
+  const session = await getSession();
+  if (!session) return { status: 'error', message: 'Not signed in' };
+  if (!hasCapability(session, 'deal.edit')) {
+    return { status: 'error', message: 'Not authorized' };
+  }
+
+  const orderedIdsRaw = formData.get('orderedIds');
+  const parsed = ReorderDealsSchema.safeParse({
+    stage: formData.get('stage'),
+    orderedIds:
+      typeof orderedIdsRaw === 'string' && orderedIdsRaw.length > 0
+        ? orderedIdsRaw.split(',')
+        : [],
+  });
+  if (!parsed.success) {
+    return { status: 'error', message: 'Invalid reorder' };
+  }
+  const { stage, orderedIds } = parsed.data;
+
+  if (DEAL_REORDER_FORBIDDEN.includes(stage as DealStage)) {
+    return {
+      status: 'error',
+      message: `${stage} is a closed lane — priority ranking is disabled.`,
+    };
+  }
+
+  // Validate every id is real, in the claimed stage, AND not archived
+  // (archived deals are read-only — `moveDeal` rejects them too).
+  const existing = await prisma.deal.findMany({
+    where: {
+      id: { in: orderedIds },
+      stage: stage as DealStage,
+      archivedAt: null,
+    },
+    select: { id: true, code: true, sortOrder: true },
+  });
+  if (existing.length !== orderedIds.length) {
+    return {
+      status: 'error',
+      message: 'Card list out of sync — refresh and try again.',
+    };
+  }
+  const existingById = new Map(existing.map((d) => [d.id, d]));
+  const before = orderedIds.map((id) => {
+    const row = existingById.get(id);
+    return { id, code: row?.code ?? null, sortOrder: row?.sortOrder ?? null };
+  });
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      for (let i = 0; i < orderedIds.length; i += 1) {
+        await tx.deal.update({
+          where: { id: orderedIds[i]! },
+          data: { sortOrder: i + 1 },
+        });
+      }
+      const after = orderedIds.map((id, i) => ({
+        id,
+        code: existingById.get(id)?.code ?? null,
+        sortOrder: i + 1,
+      }));
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'reordered',
+        entity: {
+          type: 'deal_kanban',
+          id: `stage:${stage}`,
+          before: { stage, order: before },
+          after: { stage, order: after },
+        },
+        source: 'web',
+      });
+    });
+  } catch (err) {
+    console.error('[bd.reorder] failed:', err);
+    return { status: 'error', message: 'Reorder failed — try again.' };
+  }
+
+  revalidatePath('/bd');
+  return { status: 'success' };
 }
