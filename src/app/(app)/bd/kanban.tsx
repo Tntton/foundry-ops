@@ -8,9 +8,35 @@ import { PersonAvatar } from '@/components/person-avatar';
 import {
   moveDeal,
   quickCreateDeal,
+  reorderDealsInStage,
   type MoveDealState,
   type QuickCreateState,
+  type ReorderDealsState,
 } from './actions';
+
+// Closed lanes — drag still works for stage change INTO them (closing
+// out a deal), but in-column ranking is disabled because won/lost
+// columns are history, not a priority queue.
+const REORDER_DISABLED_STAGES: ReadonlySet<DealStage> = new Set<DealStage>([
+  'won',
+  'lost',
+]);
+
+// Stable comparator for in-column display order. Ranked deals
+// (sortOrder ≥ 1) appear in ascending order; unranked deals (the
+// default 0 a freshly-created deal carries) fall to the bottom, with
+// `code` as a deterministic tie-breaker.
+function compareForColumn(
+  a: { sortOrder: number; code: string },
+  b: { sortOrder: number; code: string },
+): number {
+  const aRanked = a.sortOrder > 0;
+  const bRanked = b.sortOrder > 0;
+  if (aRanked && bRanked) return a.sortOrder - b.sortOrder;
+  if (aRanked) return -1;
+  if (bRanked) return 1;
+  return a.code.localeCompare(b.code);
+}
 
 export type QuickCreateOwner = {
   id: string;
@@ -47,7 +73,12 @@ export type KanbanDeal = {
     lastName: string;
     headshotUrl: string | null;
   };
+  sortOrder: number;
 };
+
+type DealOptimisticAction =
+  | { type: 'move'; id: string; toStage: DealStage }
+  | { type: 'reorder'; stage: DealStage; orderedIds: string[] };
 
 const STAGE_LABEL: Record<DealStage, string> = {
   lead: 'Lead',
@@ -126,12 +157,18 @@ export function DealsKanban({
   // pulls truth back regardless of outcome.
   const [optimisticDeals, dispatch] = useOptimistic<
     KanbanDeal[],
-    { id: string; toStage: DealStage }
-  >(deals, (current, action) =>
-    current.map((d) =>
-      d.id === action.id ? { ...d, stage: action.toStage } : d,
-    ),
-  );
+    DealOptimisticAction
+  >(deals, (current, action) => {
+    if (action.type === 'move') {
+      return current.map((d) =>
+        d.id === action.id ? { ...d, stage: action.toStage } : d,
+      );
+    }
+    const indexById = new Map(action.orderedIds.map((id, i) => [id, i + 1]));
+    return current.map((d) =>
+      indexById.has(d.id) ? { ...d, sortOrder: indexById.get(d.id)! } : d,
+    );
+  });
 
   const handleDrop = useCallback(
     (dealId: string, toStage: DealStage) => {
@@ -142,7 +179,7 @@ export function DealsKanban({
       fd.set('dealId', dealId);
       fd.set('toStage', toStage);
       startTransition(async () => {
-        dispatch({ id: dealId, toStage });
+        dispatch({ type: 'move', id: dealId, toStage });
         const result = (await moveDeal({ status: 'idle' }, fd)) as MoveDealState;
         if (result.status === 'error') {
           setError(result.message);
@@ -151,6 +188,29 @@ export function DealsKanban({
       });
     },
     [deals, dispatch, router],
+  );
+
+  const handleReorder = useCallback(
+    (stage: DealStage, orderedIds: string[]) => {
+      if (orderedIds.length === 0) return;
+      if (REORDER_DISABLED_STAGES.has(stage)) return;
+      setError(null);
+      const fd = new FormData();
+      fd.set('stage', stage);
+      fd.set('orderedIds', orderedIds.join(','));
+      startTransition(async () => {
+        dispatch({ type: 'reorder', stage, orderedIds });
+        const result = (await reorderDealsInStage(
+          { status: 'idle' },
+          fd,
+        )) as ReorderDealsState;
+        if (result.status === 'error') {
+          setError(result.message);
+        }
+        router.refresh();
+      });
+    },
+    [dispatch, router],
   );
 
   const grouped: Record<DealStage, KanbanDeal[]> = {
@@ -163,6 +223,9 @@ export function DealsKanban({
   };
   for (const d of optimisticDeals) {
     grouped[d.stage].push(d);
+  }
+  for (const stage of Object.keys(grouped) as DealStage[]) {
+    grouped[stage].sort(compareForColumn);
   }
 
   return (
@@ -191,6 +254,7 @@ export function DealsKanban({
               canCreate={canCreate && stage !== 'lost'}
               canMove={canMove}
               onDrop={handleDrop}
+              onReorder={handleReorder}
               quickCreateOwners={quickCreateOwners}
               quickCreateClients={quickCreateClients}
               defaultOwnerId={defaultOwnerId}
@@ -212,6 +276,7 @@ function KanbanColumn({
   canCreate,
   canMove,
   onDrop,
+  onReorder,
   quickCreateOwners,
   quickCreateClients,
   defaultOwnerId,
@@ -225,14 +290,40 @@ function KanbanColumn({
   canCreate: boolean;
   canMove: boolean;
   onDrop: (dealId: string, toStage: DealStage) => void;
+  onReorder: (stage: DealStage, orderedIds: string[]) => void;
   quickCreateOwners: QuickCreateOwner[];
   quickCreateClients: QuickCreateClient[];
   defaultOwnerId: string | null;
   commercialsVisible: boolean;
 }) {
   const [hovering, setHovering] = useState(false);
+  const [insertion, setInsertion] = useState<
+    { targetId: string; pos: 'before' | 'after' } | null
+  >(null);
+  const reorderable = canMove && !REORDER_DISABLED_STAGES.has(stage);
   const expected = cards.reduce((s, d) => s + d.expectedValueCents, 0);
   const weighted = cards.reduce((s, d) => s + d.weightedValueCents, 0);
+
+  const computeReorder = (
+    draggedId: string,
+    targetId: string,
+    pos: 'before' | 'after',
+  ): string[] | null => {
+    if (draggedId === targetId) return null;
+    const ids = cards.map((c) => c.id);
+    const fromIdx = ids.indexOf(draggedId);
+    let targetIdx = ids.indexOf(targetId);
+    if (targetIdx === -1) return null;
+    if (fromIdx !== -1) ids.splice(fromIdx, 1);
+    targetIdx = ids.indexOf(targetId);
+    const insertIdx = pos === 'after' ? targetIdx + 1 : targetIdx;
+    ids.splice(insertIdx, 0, draggedId);
+    const before = cards.map((c) => c.id).join('|');
+    const after = ids.join('|');
+    if (before === after) return null;
+    return ids;
+  };
+
   return (
     <div
       onDragOver={(e) => {
@@ -240,13 +331,32 @@ function KanbanColumn({
         e.preventDefault();
         setHovering(true);
       }}
-      onDragLeave={() => setHovering(false)}
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        setHovering(false);
+        setInsertion(null);
+      }}
       onDrop={(e) => {
         if (!canMove) return;
         e.preventDefault();
         const dealId = e.dataTransfer.getData('text/deal-id');
+        const wasInsertion = insertion;
         setHovering(false);
-        if (dealId) onDrop(dealId, stage);
+        setInsertion(null);
+        if (!dealId) return;
+        if (wasInsertion && reorderable) {
+          const draggedCard = cards.find((c) => c.id === dealId);
+          if (draggedCard) {
+            const next = computeReorder(
+              dealId,
+              wasInsertion.targetId,
+              wasInsertion.pos,
+            );
+            if (next) onReorder(stage, next);
+            return;
+          }
+        }
+        onDrop(dealId, stage);
       }}
       className={`rounded-xl border bg-surface-subtle/40 p-3 transition-colors ${
         hovering ? 'border-brand bg-surface-hover/40' : 'border-line'
@@ -284,6 +394,18 @@ function KanbanColumn({
             card={card}
             canMove={canMove}
             commercialsVisible={commercialsVisible}
+            reorderable={reorderable}
+            insertionPos={
+              insertion && insertion.targetId === card.id ? insertion.pos : null
+            }
+            onCardDragOver={(targetId, pos) => {
+              if (!reorderable) return;
+              setInsertion((prev) =>
+                prev && prev.targetId === targetId && prev.pos === pos
+                  ? prev
+                  : { targetId, pos },
+              );
+            }}
           />
         ))}
         {canCreate && (
@@ -468,10 +590,20 @@ function KanbanCard({
   card,
   canMove,
   commercialsVisible,
+  reorderable,
+  insertionPos,
+  onCardDragOver,
 }: {
   card: KanbanDeal;
   canMove: boolean;
   commercialsVisible: boolean;
+  /** True when this column allows within-column priority ranking. */
+  reorderable: boolean;
+  /** When non-null, render the insertion indicator line above
+   *  (`before`) or below (`after`) this card. */
+  insertionPos: 'before' | 'after' | null;
+  /** Fired on dragover while the cursor is over THIS card. */
+  onCardDragOver: (targetId: string, pos: 'before' | 'after') => void;
 }) {
   const last = card.daysSinceLastConversation;
   const lastTone =
@@ -481,11 +613,33 @@ function KanbanCard({
         ? 'text-status-amber'
         : 'text-ink-3';
   return (
+    <div className="relative">
+      {insertionPos === 'before' && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 -top-1 h-0.5 rounded-full bg-brand"
+        />
+      )}
+      {insertionPos === 'after' && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 -bottom-1 h-0.5 rounded-full bg-brand"
+        />
+      )}
     <div
       draggable={canMove && !card.archivedAt}
       onDragStart={(e) => {
         e.dataTransfer.setData('text/deal-id', card.id);
         e.dataTransfer.effectAllowed = 'move';
+      }}
+      onDragOver={(e) => {
+        if (!reorderable || card.archivedAt) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        const pos: 'before' | 'after' =
+          e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+        e.preventDefault();
+        e.stopPropagation();
+        onCardDragOver(card.id, pos);
       }}
       className={`group rounded-lg border border-line bg-card p-3 shadow-sm transition-shadow ${
         canMove && !card.archivedAt
@@ -495,9 +649,11 @@ function KanbanCard({
       title={
         card.archivedAt
           ? 'Archived deals are read-only'
-          : canMove
-            ? 'Drag to another column to change stage'
-            : undefined
+          : reorderable
+            ? 'Drag within the column to rank · drag between columns to change stage'
+            : canMove
+              ? 'Drag to another column to change stage'
+              : undefined
       }
     >
       <div className="flex items-start justify-between">
@@ -557,6 +713,7 @@ function KanbanCard({
           </span>
         </div>
       </div>
+    </div>
     </div>
   );
 }

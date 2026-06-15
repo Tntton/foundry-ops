@@ -411,6 +411,7 @@ function KanbanColumn({
   canAddTeam,
   allPeople,
   onDrop,
+  onReorder,
   newProjectHref,
 }: {
   stage: ProjectStage;
@@ -423,9 +424,17 @@ function KanbanColumn({
   canAddTeam: boolean;
   allPeople: CardPersonOption[];
   onDrop: (projectId: string, toStage: ProjectStage) => void;
+  onReorder: (stage: ProjectStage, orderedIds: string[]) => void;
   newProjectHref: string;
 }) {
   const [hovering, setHovering] = useState(false);
+  // Insertion indicator state: which card is being hovered, and is the
+  // drop landing above or below its midline. `null` = no line drawn
+  // (e.g. dragging over the column gutter rather than a card).
+  const [insertion, setInsertion] = useState<
+    { targetId: string; pos: 'before' | 'after' } | null
+  >(null);
+  const reorderable = canMove && !REORDER_DISABLED_STAGES.has(stage);
   const dotColor =
     stage === 'kickoff'
       ? 'bg-status-green'
@@ -434,6 +443,32 @@ function KanbanColumn({
         : stage === 'closing'
           ? 'bg-status-amber'
           : 'bg-status-green';
+
+  // Compute the post-drop ID order for a within-column reorder. Pulls
+  // the dragged card out of its current slot (if it's already in this
+  // column) and re-inserts it at the index implied by (targetId, pos).
+  // Cross-column drops never reach here — they fall through to the
+  // existing onDrop branch in the column-level drop handler.
+  const computeReorder = (
+    draggedId: string,
+    targetId: string,
+    pos: 'before' | 'after',
+  ): string[] | null => {
+    if (draggedId === targetId) return null;
+    const ids = cards.map((c) => c.id);
+    const fromIdx = ids.indexOf(draggedId);
+    let targetIdx = ids.indexOf(targetId);
+    if (targetIdx === -1) return null;
+    if (fromIdx !== -1) ids.splice(fromIdx, 1);
+    targetIdx = ids.indexOf(targetId); // recompute after splice
+    const insertIdx = pos === 'after' ? targetIdx + 1 : targetIdx;
+    ids.splice(insertIdx, 0, draggedId);
+    const before = cards.map((c) => c.id).join('|');
+    const after = ids.join('|');
+    if (before === after) return null;
+    return ids;
+  };
+
   return (
     <div
       onDragOver={(e) => {
@@ -441,13 +476,38 @@ function KanbanColumn({
         e.preventDefault();
         setHovering(true);
       }}
-      onDragLeave={() => setHovering(false)}
+      onDragLeave={(e) => {
+        // Only clear when the drag really leaves the column — children
+        // firing dragleave shouldn't kill the hover state.
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        setHovering(false);
+        setInsertion(null);
+      }}
       onDrop={(e) => {
         if (!canMove) return;
         e.preventDefault();
         const projectId = e.dataTransfer.getData('text/project-id');
+        const wasInsertion = insertion;
         setHovering(false);
-        if (projectId) onDrop(projectId, stage);
+        setInsertion(null);
+        if (!projectId) return;
+
+        // Within-column reorder path: card-level drop already captured
+        // the target+pos before bubbling up.
+        if (wasInsertion && reorderable) {
+          const draggedCard = cards.find((c) => c.id === projectId);
+          if (draggedCard) {
+            const next = computeReorder(
+              projectId,
+              wasInsertion.targetId,
+              wasInsertion.pos,
+            );
+            if (next) onReorder(stage, next);
+            return;
+          }
+          // Card not in this column → fall through to cross-column move.
+        }
+        onDrop(projectId, stage);
       }}
       className={`rounded-xl border bg-surface-subtle/40 p-3 transition-colors ${
         hovering
@@ -476,6 +536,18 @@ function KanbanColumn({
             canMove={canMove}
             canAddTeam={canAddTeam}
             allPeople={allPeople}
+            reorderable={reorderable}
+            insertionPos={
+              insertion && insertion.targetId === card.id ? insertion.pos : null
+            }
+            onCardDragOver={(targetId, pos) => {
+              if (!reorderable) return;
+              setInsertion((prev) =>
+                prev && prev.targetId === targetId && prev.pos === pos
+                  ? prev
+                  : { targetId, pos },
+              );
+            }}
           />
         ))}
         {canCreate && (
@@ -496,11 +568,23 @@ function KanbanCard({
   canMove,
   canAddTeam,
   allPeople,
+  reorderable,
+  insertionPos,
+  onCardDragOver,
 }: {
   card: KanbanProject;
   canMove: boolean;
   canAddTeam: boolean;
   allPeople: CardPersonOption[];
+  /** True when this column allows within-column priority ranking
+   *  (i.e. the column isn't a read-only history lane). */
+  reorderable: boolean;
+  /** When non-null, render the insertion indicator line above
+   *  (`before`) or below (`after`) this card. */
+  insertionPos: 'before' | 'after' | null;
+  /** Fired on dragover while the cursor is over THIS card. Tells the
+   *  parent column where the insertion line should sit. */
+  onCardDragOver: (targetId: string, pos: 'before' | 'after') => void;
 }) {
   const dotColor =
     card.qcStatus === 'red'
@@ -536,16 +620,48 @@ function KanbanCard({
   const addOptions = allPeople.filter((p) => !teamIds.has(p.id));
 
   return (
+    <div className="relative">
+      {insertionPos === 'before' && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 -top-1.5 h-0.5 rounded-full bg-brand"
+        />
+      )}
+      {insertionPos === 'after' && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 -bottom-1.5 h-0.5 rounded-full bg-brand"
+        />
+      )}
     <div
       draggable={canMove}
       onDragStart={(e) => {
         e.dataTransfer.setData('text/project-id', card.id);
         e.dataTransfer.effectAllowed = 'move';
       }}
+      onDragOver={(e) => {
+        if (!reorderable) return;
+        // Determine whether the cursor is above or below the midline.
+        const rect = e.currentTarget.getBoundingClientRect();
+        const pos: 'before' | 'after' =
+          e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+        // Suppress the parent column's plain drag-over handling so we
+        // don't double-render hover styling — but DO call
+        // preventDefault here so the drop target stays valid.
+        e.preventDefault();
+        e.stopPropagation();
+        onCardDragOver(card.id, pos);
+      }}
       className={`group rounded-lg border border-line bg-card p-4 shadow-sm transition-shadow ${
         canMove ? 'cursor-grab active:cursor-grabbing hover:shadow-md' : ''
       }`}
-      title={canMove ? 'Drag to another column to change stage' : undefined}
+      title={
+        reorderable
+          ? 'Drag within the column to rank · drag between columns to change stage'
+          : canMove
+            ? 'Drag to another column to change stage'
+            : undefined
+      }
     >
       {/* Reflowed header (per TT, 2026-05-10):
            Row 1 — client legal name (regular weight, small)
@@ -604,6 +720,7 @@ function KanbanCard({
         </div>
         <span className="text-[11px] tabular-nums text-ink-3">{footerLabel}</span>
       </div>
+    </div>
     </div>
   );
 }
