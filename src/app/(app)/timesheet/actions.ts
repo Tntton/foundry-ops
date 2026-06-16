@@ -187,6 +187,7 @@ export async function saveTimesheet(
           select: {
             id: true,
             code: true,
+            stage: true,
             managerId: true,
             primaryPartnerId: true,
           },
@@ -222,11 +223,17 @@ export async function saveTimesheet(
   //   - on-behalf save by admin / project's manager / project's primary
   //     partner: auto-approve those rows so the leader's edit IS the approval
   //   - everyone else: standard draft → submitted → approved flow
+  //
+  // Override: archived (closed) projects ALWAYS require explicit approval
+  // (TT 2026-06-16) — late hours on a wrapped engagement should never
+  // skip the queue, even for super-admin self-saves. The project is
+  // closed; the manager needs a chance to challenge the entry.
   const autoApproveProjectIds = new Set<string>();
+  const nonArchivedProjects = projectManagers.filter((p) => p.stage !== 'archived');
   if (isSuperAdmin) {
-    for (const p of projectManagers) autoApproveProjectIds.add(p.id);
+    for (const p of nonArchivedProjects) autoApproveProjectIds.add(p.id);
   } else if (actingOnBehalf) {
-    for (const p of projectManagers) {
+    for (const p of nonArchivedProjects) {
       if (
         isAdminGroup ||
         p.managerId === session.person.id ||

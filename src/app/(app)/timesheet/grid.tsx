@@ -432,7 +432,13 @@ function AddRowPicker({
       }),
     [projects],
   );
-  const onTeamCount = projects.filter((p) => p.isTeamMember).length;
+  // "On the project team" group is active-only; archived projects route
+  // to the dedicated "Closed projects (needs approval)" group below
+  // regardless of team membership, so the approval-required label is
+  // never hidden behind the "your team" shorthand.
+  const onTeamCount = projects.filter(
+    (p) => p.isTeamMember && p.stage !== 'archived',
+  ).length;
 
   return (
     <div className="flex flex-col items-start gap-1">
@@ -446,7 +452,7 @@ function AddRowPicker({
           {onTeamCount > 0 && (
             <optgroup label="On the project team">
               {sorted
-                .filter((p) => p.isTeamMember)
+                .filter((p) => p.isTeamMember && p.stage !== 'archived')
                 .map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.code} · {p.name}
@@ -454,10 +460,21 @@ function AddRowPicker({
                 ))}
             </optgroup>
           )}
-          {sorted.some((p) => !p.isTeamMember) && (
+          {sorted.some((p) => !p.isTeamMember && p.stage !== 'archived') && (
             <optgroup label="Other active projects (will auto-join the team)">
               {sorted
-                .filter((p) => !p.isTeamMember)
+                .filter((p) => !p.isTeamMember && p.stage !== 'archived')
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.code} · {p.name}
+                  </option>
+                ))}
+            </optgroup>
+          )}
+          {sorted.some((p) => p.stage === 'archived') && (
+            <optgroup label="Closed projects (entries need approval)">
+              {sorted
+                .filter((p) => p.stage === 'archived')
                 .map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.code} · {p.name}

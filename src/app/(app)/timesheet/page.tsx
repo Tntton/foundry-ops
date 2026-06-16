@@ -178,23 +178,55 @@ export default async function TimesheetPage({
   const overviewFrom = new Date();
   overviewFrom.setUTCDate(overviewFrom.getUTCDate() - 26 * 7);
 
-  const [allProjects, teamMemberships, submittedHistory, targetPerson] =
-    await Promise.all([
-      prisma.project.findMany({
-        where: { stage: { not: 'archived' } },
+  // Active projects (everything not archived) are visible to anyone via
+  // the picker. Archived projects only show when the target person has
+  // a footprint there — team membership history OR prior timesheet
+  // entries — so the picker doesn't balloon with every long-finished
+  // engagement. Late hours on closed engagements always route through
+  // approval (saveTimesheet excludes archived projects from auto-approve).
+  const [
+    activeProjects,
+    teamMemberships,
+    submittedHistory,
+    targetPerson,
+    pastEntryProjects,
+  ] = await Promise.all([
+    prisma.project.findMany({
+      where: { stage: { not: 'archived' } },
+      orderBy: { code: 'asc' },
+      select: { id: true, code: true, name: true, stage: true },
+    }),
+    prisma.projectTeam.findMany({
+      where: { personId: target.id },
+      select: { projectId: true },
+    }),
+    listPersonTimesheetEntries(target.id, { from: overviewFrom }),
+    prisma.person.findUnique({
+      where: { id: target.id },
+      select: { rate: true, rateUnit: true, inactiveAt: true },
+    }),
+    prisma.timesheetEntry.findMany({
+      where: { personId: target.id },
+      distinct: ['projectId'],
+      select: { projectId: true },
+    }),
+  ]);
+  const historicalProjectIds = new Set<string>([
+    ...teamMemberships.map((t) => t.projectId),
+    ...pastEntryProjects.map((e) => e.projectId),
+  ]);
+  // Only fetch archived projects the user has a footprint on.
+  const archivedProjects = historicalProjectIds.size === 0
+    ? []
+    : await prisma.project.findMany({
+        where: {
+          id: { in: Array.from(historicalProjectIds) },
+          stage: 'archived',
+        },
         orderBy: { code: 'asc' },
         select: { id: true, code: true, name: true, stage: true },
-      }),
-      prisma.projectTeam.findMany({
-        where: { personId: target.id },
-        select: { projectId: true },
-      }),
-      listPersonTimesheetEntries(target.id, { from: overviewFrom }),
-      prisma.person.findUnique({
-        where: { id: target.id },
-        select: { rate: true, rateUnit: true, inactiveAt: true },
-      }),
-    ]);
+      });
+  const allProjects = [...activeProjects, ...archivedProjects];
   const teamProjectIds = new Set(teamMemberships.map((t) => t.projectId));
   // Hourly rate in cents — Person.rate is per `rateUnit` (hour or day). Day rate / 8 ≈ hourly.
   const hourlyRateCents = targetPerson
