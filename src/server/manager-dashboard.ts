@@ -135,13 +135,12 @@ export async function computeManagerDashboard(
   );
   const isManagerScope = scope === 'mine';
 
-  // Hide the firm-overhead expense buckets (FHB000 / FHO000 / FHX000)
-  // from every dashboard surface. They exist as Project rows so
-  // expenses can be tagged against them, but they're not real projects
-  // and shouldn't show in QC tiles, team-week, or firm-overview.
-  // Internal FH projects (FHP*) keep showing — they're tracked like
-  // normal client work.
-  const BUCKET_CODES = ['FHB000', 'FHO000', 'FHX000'];
+  // Hide the firm-overhead expense buckets (FHO000 / FHX000) from every
+  // dashboard surface. They exist as Project rows so expenses can be
+  // tagged against them, but they're not real projects and shouldn't
+  // show in QC tiles, team-week, or firm-overview. Internal FH projects
+  // (FHP000, FHP001+) keep showing — they're tracked like normal work.
+  const BUCKET_CODES = ['FHO000', 'FHX000'];
 
   // ─── My / firm projects ────────────────────────────────────────────────
   const projectWhere = isManagerScope

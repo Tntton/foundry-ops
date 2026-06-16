@@ -76,9 +76,9 @@ export default async function BillDetailPage({ params }: { params: { id: string 
         })
       : Promise.resolve([]),
   ]);
-  // FHB000 + FHO000 are filtered out — only FHX000 surfaces as a
-  // sort-to-top OPEX option. See `isHiddenFromAllocationPicker` for
-  // the rationale (TT decision 2026-05-11).
+  // FHO000 is filtered out — only FHX000 surfaces as a sort-to-top
+  // OPEX option. See `isHiddenFromAllocationPicker` for the rationale
+  // (TT decision 2026-05-11).
   const visibleProjects = projectsRaw.filter(
     (p) => !isHiddenFromAllocationPicker(p.code),
   );

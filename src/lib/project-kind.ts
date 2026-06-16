@@ -4,16 +4,17 @@
  * The codebase splits projects into three behavioural groups, all keyed
  * off the human-readable code:
  *
- *   - `FHB` / `FHO` / `FHX` (always with the `000` suffix today): the
- *     three firm-overhead expense buckets. Filtered out of every project
- *     surface in `listProjects` — they exist as Project rows so expenses
- *     can be tagged against them, but they're not "projects" in the
- *     working sense.
- *   - `FHP` (FHP001, FHP002, …): real internal Foundry Health projects.
- *     Tracked like client projects (team, time, expenses, budget) but
- *     with no paying client → no P&L, no invoicing, no fixed start/end
- *     window. Some are standing (primer development, social media), some
- *     are episodic (conferences, brand refreshes).
+ *   - `FHO000` / `FHX000`: the firm-overhead expense buckets
+ *     (FHO = Operations / OPEX, FHX = BD + Other). Filtered out of every
+ *     project surface in `listProjects` — they exist as Project rows so
+ *     expenses can be tagged against them, but they're not "projects" in
+ *     the working sense.
+ *   - `FHP` (FHP000, FHP001, FHP002, …): real internal Foundry Health
+ *     projects, including the FHP000 catch-all. Tracked like client
+ *     projects (team, time, expenses, budget) but with no paying client
+ *     → no P&L, no invoicing, no fixed start/end window. Some are standing
+ *     (primer development, social media), some are episodic (conferences,
+ *     brand refreshes).
  *   - everything else: client engagements. Full revenue surface — P&L,
  *     invoices, contract value, contract dates.
  *
@@ -21,7 +22,7 @@
  * place rather than open-coding the prefix check at every call site.
  */
 
-const BUCKET_CODES = new Set(['FHB000', 'FHO000', 'FHX000']);
+const BUCKET_CODES = new Set(['FHO000', 'FHX000']);
 
 export function isExpenseBucket(code: string): boolean {
   return BUCKET_CODES.has(code);
@@ -29,18 +30,18 @@ export function isExpenseBucket(code: string): boolean {
 
 /**
  * Bucket codes that admin should NOT be able to allocate new lines
- * to via the AP / expense pickers. FHB000 (BD) and FHO000 (Operations)
- * exist in the schema so historical lines stay tagged, but TT's call
- * (2026-05-11) is that ongoing allocation funnels everything into
- * **FHX000 (Uncategorised)** as the single OPEX target. FHB/FHO are
- * derived from the category at month-end-reporting time, not at
- * allocation time, so admin shouldn't pick them at the gate.
+ * to via the AP / expense pickers. FHO000 (Operations) exists in the
+ * schema so historical lines stay tagged, but TT's call (2026-05-11) is
+ * that ongoing allocation funnels everything into **FHX000 (BD / Other)**
+ * as the single OPEX target. FHO is derived from the category at
+ * month-end-reporting time, not at allocation time, so admin shouldn't
+ * pick it at the gate.
  *
  * Pickers still surface the current value as a pinned "(current)"
- * option when a row is already tagged to one of these — admin can
- * see what's there and re-route, they just can't *select* it fresh.
+ * option when a row is already tagged to FHO000 — admin can see what's
+ * there and re-route, they just can't *select* it fresh.
  */
-const HIDDEN_PICKER_BUCKET_CODES = new Set(['FHB000', 'FHO000']);
+const HIDDEN_PICKER_BUCKET_CODES = new Set(['FHO000']);
 
 export function isHiddenFromAllocationPicker(code: string): boolean {
   return HIDDEN_PICKER_BUCKET_CODES.has(code);

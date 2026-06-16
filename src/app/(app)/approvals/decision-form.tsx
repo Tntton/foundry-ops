@@ -53,7 +53,7 @@ export function DecisionForm({
     currentProjectId: string | null;
     /** Current project's code + name. Used to pin a "(current)"
      *  entry on the picker when the row is tagged to a project
-     *  filtered out of the visible options (FHB000 / FHO000). */
+     *  filtered out of the visible options (FHO000). */
     currentProjectCode?: string | null;
     currentProjectName?: string | null;
     currentCategory: string | null;

@@ -31,10 +31,10 @@ export function NewProjectForm({
   partners: PersonOpt[];
   managers: PersonOpt[];
   prefill?: Prefill;
-  /** The FH internal client row (`code: 'FH'`) — used to auto-pin
+  /** The FHP internal client row (`code: 'FHP'`) — used to auto-pin
    *  internal projects without showing the client picker. Null when
-   *  the seed hasn't run yet, in which case the internal branch is
-   *  disabled. */
+   *  the client row hasn't been created yet, in which case the
+   *  internal branch is disabled. */
   internalClient: { id: string; legalName: string } | null;
   /** Server-suggested next free FHP code (e.g. "FHP007"). The form
    *  pre-fills the code field with this when the operator picks

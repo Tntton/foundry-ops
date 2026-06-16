@@ -23,13 +23,13 @@ export function TagProjectForm({
     <form action={action} className="space-y-2 text-sm">
       <label htmlFor={`project-${expenseId}`} className="text-xs text-ink-3">
         Tag a project. Use{' '}
-        <span className="font-mono">FHB000</span> (BD),{' '}
-        <span className="font-mono">FHO000</span> (Ops), or{' '}
-        <span className="font-mono">FHX000</span> (Uncategorised) for
+        <span className="font-mono">FHO000</span> (Ops) or{' '}
+        <span className="font-mono">FHX000</span> (BD / Other) for
         non-client expenses. Internal FH initiatives have their own
-        codes (e.g. <span className="font-mono">FHP001</span>). Anyone
-        can re-allocate until approval — admin can still override at
-        the approval gate.
+        codes (e.g. <span className="font-mono">FHP000</span>,{' '}
+        <span className="font-mono">FHP001</span>). Anyone can
+        re-allocate until approval — admin can still override at the
+        approval gate.
       </label>
       <div className="flex flex-wrap items-center gap-2">
         <select

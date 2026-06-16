@@ -93,7 +93,7 @@ export default async function DashboardPage({
 
   const canSeeAllFirm = hasAnyRole(session, ['super_admin', 'admin', 'partner']);
   // Admin (super_admin / admin) sees the firm-overhead expense report
-  // — bills + expenses tagged to FHB / FHO / FHX as a vendor table.
+  // — bills + expenses tagged to FHO / FHX as a vendor table.
   // Partners + managers don't see this card; they get the project
   // tiles only (which already exclude the buckets).
   const isAdmin = hasAnyRole(session, ['super_admin', 'admin']);
@@ -879,18 +879,16 @@ function AdminBdPipelineSection({ data }: { data: AdminBdPipeline }) {
 
 /**
  * Admin-only firm-overhead expense report. Surfaces every Bill +
- * Expense tagged to one of the three buckets (FHB / FHO / FHX) as a
+ * Expense tagged to one of the firm-overhead buckets (FHO / FHX) as a
  * single vendor / amount table. Partners + managers don't see this —
  * they're not responsible for routing firm-overhead spend.
  */
 function AdminExpenseReportSection({ data }: { data: AdminExpenseReport }) {
   const BUCKET_LABEL: Record<string, string> = {
-    FHB000: 'BD',
     FHO000: 'Operations',
-    FHX000: 'Uncategorised',
+    FHX000: 'BD / Other',
   };
   const BUCKET_VARIANT: Record<string, 'amber' | 'green' | 'blue' | 'outline'> = {
-    FHB000: 'blue',
     FHO000: 'green',
     FHX000: 'amber',
   };
@@ -900,7 +898,7 @@ function AdminExpenseReportSection({ data }: { data: AdminExpenseReport }) {
         <div>
           <CardTitle>Firm overhead expense report</CardTitle>
           <p className="mt-1 text-xs text-ink-3">
-            Bills + expenses tagged to FHB / FHO / FHX. No progress, margin or AR
+            Bills + expenses tagged to FHO / FHX. No progress, margin or AR
             — just where the firm-level spend is going.
           </p>
         </div>
@@ -915,8 +913,8 @@ function AdminExpenseReportSection({ data }: { data: AdminExpenseReport }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="grid grid-cols-3 gap-2 text-xs">
-          {(['FHB000', 'FHO000', 'FHX000'] as const).map((code) => (
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          {(['FHO000', 'FHX000'] as const).map((code) => (
             <div
               key={code}
               className="rounded-md border border-line bg-surface-subtle/40 px-3 py-2"

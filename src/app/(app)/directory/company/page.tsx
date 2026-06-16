@@ -12,19 +12,20 @@ import { CompanyLogo } from '@/components/company-logo';
 
 /**
  * Company tab — Foundry Health's own particulars. Sits next to
- * Suppliers in the directory tabs. The FH internal client (`code:
- * 'FH'`) backs every internal FHP project + the firm-overhead expense
- * buckets, so this is where its identity, registered address, billing
- * details, payment terms, and ABN live in one place. Filtered out of
- * the regular /directory/clients list so it doesn't sit alongside
- * paying clients.
+ * Suppliers in the directory tabs. The FHP internal client (FH Projects)
+ * backs internal FHP* projects, so this is where its identity, registered
+ * address, billing details, payment terms, and ABN live in one place.
+ * Filtered out of the regular /directory/clients list so it doesn't sit
+ * alongside paying clients. FHO (Operations) and FHX (BD / Other) are
+ * also internal clients backing the firm-overhead expense buckets but
+ * are accounting-only — they don't surface here.
  */
 export default async function CompanyDirectoryPage() {
   const session = await getSession();
   if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
 
   const fh = await prisma.client.findUnique({
-    where: { code: 'FH' },
+    where: { code: 'FHP' },
     include: {
       primaryPartner: {
         select: {
@@ -77,14 +78,10 @@ export default async function CompanyDirectoryPage() {
       {!fh ? (
         <Card>
           <CardContent className="space-y-2 py-8 text-center text-sm text-ink-3">
-            <p>The FH internal client record hasn&apos;t been created yet.</p>
+            <p>The FHP internal client record hasn&apos;t been created yet.</p>
             <p className="text-xs">
-              Run{' '}
-              <code className="rounded bg-surface-subtle px-1 font-mono">
-                pnpm tsx scripts/seed-house-projects.ts
-              </code>{' '}
-              to create it (it backs every internal FHP project + the firm-overhead
-              expense buckets).
+              Insert a Client row with <code className="font-mono">code = &lsquo;FHP&rsquo;</code>{' '}
+              (FH Projects) — it backs every internal FHP project.
             </p>
           </CardContent>
         </Card>

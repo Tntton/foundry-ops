@@ -55,7 +55,7 @@ export default async function BdOutcomesPage() {
       where: {
         // All projects (excluding the FH overhead buckets) — every
         // project represents a won engagement.
-        code: { notIn: ['FHB000', 'FHO000', 'FHX000'] },
+        code: { notIn: ['FHO000', 'FHX000'] },
       },
       select: {
         id: true,

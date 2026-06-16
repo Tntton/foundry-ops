@@ -209,11 +209,10 @@ async function ApprovalQueueWrapper({
           })
         : Promise.resolve([]),
     ]);
-  // FHB000 + FHO000 are filtered out entirely — see
-  // `isHiddenFromAllocationPicker` doc. Only FHX000 (Uncategorised)
-  // remains as a sort-to-top option for OPEX allocation. If a row is
-  // currently tagged to FHB/FHO, the picker pins a "(current)" entry
-  // separately so admin can see + re-route it.
+  // FHO000 is filtered out entirely — see `isHiddenFromAllocationPicker`
+  // doc. Only FHX000 (BD / Other) remains as a sort-to-top option for
+  // OPEX allocation. If a row is currently tagged to FHO000, the picker
+  // pins a "(current)" entry separately so admin can see + re-route it.
   const visibleProjects = projectOptionsRaw.filter(
     (p) => !isHiddenFromAllocationPicker(p.code),
   );
@@ -258,9 +257,9 @@ async function ApprovalQueueWrapper({
           },
           subjectProjectId: exp?.projectId ?? bil?.projectId ?? null,
           // Code + name passed alongside so pickers can pin a
-          // "(current) FHB000 - Business Development" option when
-          // the row is tagged to an otherwise-hidden bucket. Avoids
-          // a "value matches no option" state on the picker.
+          // "(current) FHO000 - Operations" option when the row is
+          // tagged to an otherwise-hidden bucket. Avoids a "value
+          // matches no option" state on the picker.
           subjectProjectCode: exp?.project?.code ?? bil?.project?.code ?? null,
           subjectProjectName: exp?.project?.name ?? bil?.project?.name ?? null,
           subjectCategory: exp?.category ?? bil?.category ?? null,

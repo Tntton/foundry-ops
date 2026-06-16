@@ -97,9 +97,9 @@ const INTERNAL_LABEL_OVERRIDE: Partial<Record<ProjectStage, string>> = {
  * (Homefield Partners), FHP002 (primer development), FHP003 (social
  * media) and so on. They render as a separate band on the kanban so
  * the team can see firm-internal initiatives at a glance without
- * mixing them in with client engagements. The three pure-overhead
- * expense buckets (FHB / FHO / FHX) are already filtered out of the
- * project list at the server, so this check only sees real projects.
+ * mixing them in with client engagements. The pure-overhead expense
+ * buckets (FHO / FHX) are already filtered out of the project list at
+ * the server, so this check only sees real projects.
  */
 function isInternalProject(code: string): boolean {
   return code.startsWith('FHP');

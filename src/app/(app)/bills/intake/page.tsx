@@ -53,9 +53,9 @@ export default async function BillIntakePage({
   const active = activeId ? await getIntakeBill(activeId) : null;
   // Receipt-upload project picker scope:
   //   - every "live" project (kickoff / delivery / closing / standing)
-  //     so the firm-overhead buckets (FHB / FHO / FHX, all stage =
-  //     delivery), every active client engagement, and every standing
-  //     internal initiative all appear naturally
+  //     so the firm-overhead buckets (FHO / FHX, both stage = standing),
+  //     every active client engagement, and every standing internal
+  //     initiative all appear naturally
   //   - PLUS archived projects whose actualEndDate (or endDate
   //     fallback) sits inside the current AU financial year, so
   //     late-arriving receipts can still be coded against a job that
