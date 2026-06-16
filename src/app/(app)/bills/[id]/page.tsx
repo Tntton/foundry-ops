@@ -63,7 +63,16 @@ export default async function BillDetailPage({ params }: { params: { id: string 
   const [projectsRaw, personsRaw] = await Promise.all([
     canEditClassification
       ? prisma.project.findMany({
-          where: { stage: { not: 'archived' } },
+          // FH-* internal projects (FHB / FHP / FHO / FHX prefixes) are
+          // always visible regardless of stage so late re-allocation
+          // works on any closed internal bucket too (TT 2026-06-16).
+          // Client engagements still hide once archived.
+          where: {
+            OR: [
+              { code: { startsWith: 'FH' } },
+              { stage: { not: 'archived' } },
+            ],
+          },
           orderBy: { code: 'asc' },
           select: { id: true, code: true, name: true },
         })
@@ -76,19 +85,14 @@ export default async function BillDetailPage({ params }: { params: { id: string 
         })
       : Promise.resolve([]),
   ]);
-  // All three *000 catch-alls (FHB000 BD, FHO000 Operations, FHX000
-  // Other) sort to the top as initial-allocation targets. Lines can be
-  // re-assigned to a more specific code later. See
-  // `isHiddenFromAllocationPicker` for the rationale (TT 2026-06-16).
-  const visibleProjects = projectsRaw.filter(
+  // Picker order is straight alphabetical by code (TT 2026-06-16) so
+  // the four FH-series prefixes cluster naturally near the top in
+  // their own order, then client engagements sort by their own code
+  // below. The earlier *000-pin behaviour is gone in favour of one
+  // uniform rule.
+  const projectOptions = projectsRaw.filter(
     (p) => !isHiddenFromAllocationPicker(p.code),
   );
-  const BUCKETS = ['FHB000', 'FHO000', 'FHX000'];
-  const bucketProjects = visibleProjects
-    .filter((p) => BUCKETS.includes(p.code))
-    .sort((a, b) => BUCKETS.indexOf(a.code) - BUCKETS.indexOf(b.code));
-  const otherProjects = visibleProjects.filter((p) => !BUCKETS.includes(p.code));
-  const projectOptions = [...bucketProjects, ...otherProjects];
   const personOptions = personsRaw.map((p) => ({
     id: p.id,
     firstName: p.firstName,

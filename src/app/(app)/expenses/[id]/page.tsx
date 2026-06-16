@@ -75,27 +75,22 @@ export default async function ExpenseDetailPage({
   // decision flow.
   const canTagProject =
     expense.status === 'draft' || expense.status === 'submitted';
-  // Pull eligible projects + reorder so the three firm-overhead buckets
-  // (FHB000 BD, FHO000 Operations, FHX000 Other) sit at the top of the
-  // dropdown for easy expense routing. Internal FH projects (FHP*) and
-  // client projects sort below alphabetically.
-  const projectOptionsRaw = canTagProject
+  // FH-* internal projects (FHB / FHP / FHO / FHX prefixes) are always
+  // visible regardless of stage so late re-allocation works on any
+  // closed internal bucket too (TT 2026-06-16). Client engagements
+  // still hide once archived. Order is straight alphabetical by code.
+  const projectOptions = canTagProject
     ? await prisma.project.findMany({
-        where: { stage: { not: 'archived' } },
+        where: {
+          OR: [
+            { code: { startsWith: 'FH' } },
+            { stage: { not: 'archived' } },
+          ],
+        },
         orderBy: { code: 'asc' },
         select: { id: true, code: true, name: true },
       })
     : [];
-  const BUCKET_CODES = ['FHB000', 'FHO000', 'FHX000'];
-  const bucketProjects = projectOptionsRaw
-    .filter((p) => BUCKET_CODES.includes(p.code))
-    .sort(
-      (a, b) => BUCKET_CODES.indexOf(a.code) - BUCKET_CODES.indexOf(b.code),
-    );
-  const otherProjects = projectOptionsRaw.filter(
-    (p) => !BUCKET_CODES.includes(p.code),
-  );
-  const projectOptions = [...bucketProjects, ...otherProjects];
 
   const amountExGst = expense.amount - expense.gst;
 
