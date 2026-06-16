@@ -76,14 +76,18 @@ export default async function BillDetailPage({ params }: { params: { id: string 
         })
       : Promise.resolve([]),
   ]);
-  // FHO000 is filtered out — only FHX000 surfaces as a sort-to-top
-  // OPEX option. See `isHiddenFromAllocationPicker` for the rationale
-  // (TT decision 2026-05-11).
+  // All three *000 catch-alls (FHB000 BD, FHO000 Operations, FHX000
+  // Other) sort to the top as initial-allocation targets. Lines can be
+  // re-assigned to a more specific code later. See
+  // `isHiddenFromAllocationPicker` for the rationale (TT 2026-06-16).
   const visibleProjects = projectsRaw.filter(
     (p) => !isHiddenFromAllocationPicker(p.code),
   );
-  const bucketProjects = visibleProjects.filter((p) => p.code === 'FHX000');
-  const otherProjects = visibleProjects.filter((p) => p.code !== 'FHX000');
+  const BUCKETS = ['FHB000', 'FHO000', 'FHX000'];
+  const bucketProjects = visibleProjects
+    .filter((p) => BUCKETS.includes(p.code))
+    .sort((a, b) => BUCKETS.indexOf(a.code) - BUCKETS.indexOf(b.code));
+  const otherProjects = visibleProjects.filter((p) => !BUCKETS.includes(p.code));
   const projectOptions = [...bucketProjects, ...otherProjects];
   const personOptions = personsRaw.map((p) => ({
     id: p.id,

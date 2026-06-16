@@ -4,8 +4,8 @@ import { prisma } from '@/server/db';
  * Admin-only firm-overhead expense report.
  *
  * The user-product decision (TT, 2026-05-10) is that admins see the
- * firm-overhead expense buckets — FHO000 (Operations) and FHX000
- * (BD / Other) — as a vendor/amount table on their dashboard, NOT as
+ * three firm-overhead expense buckets — FHB000 (BD), FHO000 (Operations),
+ * FHX000 (Other) — as a vendor/amount table on their dashboard, NOT as
  * project tiles with progress/margin/AR. Project metrics are meaningless
  * for buckets (no contract value, no client, no team).
  *
@@ -13,7 +13,7 @@ import { prisma } from '@/server/db';
  * grouped by supplier/vendor with the bucket as a column. Rejected
  * lines are excluded.
  */
-const BUCKET_CODES = ['FHO000', 'FHX000'] as const;
+const BUCKET_CODES = ['FHB000', 'FHO000', 'FHX000'] as const;
 type BucketCode = (typeof BUCKET_CODES)[number];
 
 export type AdminExpenseRow = {
@@ -49,7 +49,7 @@ export type AdminExpenseReport = {
 };
 
 /**
- * Roll up bills + expenses tagged to FHO / FHX into a single
+ * Roll up bills + expenses tagged to FHB / FHO / FHX into a single
  * vendor/amount table. Excludes rejected rows + draft expenses
  * (they're not yet committed firm spend).
  */
@@ -68,7 +68,7 @@ export async function computeAdminExpenseReport(): Promise<AdminExpenseReport> {
     return {
       rows: [],
       totals: {
-        perBucket: { FHO000: 0, FHX000: 0 },
+        perBucket: { FHB000: 0, FHO000: 0, FHX000: 0 },
         grand: 0,
         rowCount: 0,
       },
@@ -144,6 +144,7 @@ export async function computeAdminExpenseReport(): Promise<AdminExpenseReport> {
   rows.sort((a, b) => b.date.getTime() - a.date.getTime());
 
   const perBucket: Record<BucketCode, number> = {
+    FHB000: 0,
     FHO000: 0,
     FHX000: 0,
   };

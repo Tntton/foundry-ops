@@ -37,7 +37,7 @@ export function QueueRowAllocator({
   initialProjectId: string | null;
   /** Current project's code + name. Used to pin a "(current)" entry
    *  in the picker when the row is tagged to a project that's been
-   *  filtered out (FHO000). */
+   *  filtered out (i.e. listed in HIDDEN_PICKER_BUCKET_CODES). */
   initialProjectCode?: string | null;
   initialProjectName?: string | null;
   initialAttributedToPersonId: string | null;
@@ -56,8 +56,9 @@ export function QueueRowAllocator({
   );
 
   // Pin the row's current project as a "(current)" option when it's
-  // not in the visible options (i.e. tagged to FHO000). Stops the
-  // controlled-select value mismatching its options.
+  // not in the visible options (i.e. tagged to a code in
+  // HIDDEN_PICKER_BUCKET_CODES). Stops the controlled-select value
+  // mismatching its options.
   const currentMissing =
     initialProjectId !== null &&
     !projectOptions.some((p) => p.id === initialProjectId);

@@ -1,47 +1,55 @@
 /**
  * Project-kind discrimination, by code prefix.
  *
- * The codebase splits projects into three behavioural groups, all keyed
- * off the human-readable code:
+ * Four FH-internal prefixes, each with a `*000` catch-all where lines
+ * initially land for later re-assignment to a more specific code in
+ * the same family:
  *
- *   - `FHO000` / `FHX000`: the firm-overhead expense buckets
- *     (FHO = Operations / OPEX, FHX = BD + Other). Filtered out of every
- *     project surface in `listProjects` — they exist as Project rows so
- *     expenses can be tagged against them, but they're not "projects" in
- *     the working sense.
- *   - `FHP` (FHP000, FHP001, FHP002, …): real internal Foundry Health
- *     projects, including the FHP000 catch-all. Tracked like client
- *     projects (team, time, expenses, budget) but with no paying client
- *     → no P&L, no invoicing, no fixed start/end window. Some are standing
- *     (primer development, social media), some are episodic (conferences,
- *     brand refreshes).
- *   - everything else: client engagements. Full revenue surface — P&L,
- *     invoices, contract value, contract dates.
+ *   - `FHB` — Business Development. `FHB000` is the firm-level BD
+ *     catch-all (proposals, conferences, pre-engagement meetings,
+ *     marketing collateral). Specific BD initiatives can later get
+ *     their own FHB001+ code and lines reassigned.
+ *   - `FHO` — Operations / OPEX. `FHO000` is the catch-all
+ *     (subscriptions, professional services, office costs).
+ *   - `FHX` — Other / uncategorised. `FHX000` is the catch-all for
+ *     anything that doesn't fit BD / Ops / a real project — the
+ *     last-resort bucket, re-routed by admin when possible.
+ *   - `FHP` — internal Foundry Health projects. `FHP000` is the
+ *     catch-all for ad-hoc internal time; FHP001+ are real internal
+ *     projects (primer development, social media, brand refreshes).
+ *     Tracked like client projects (team, time, budget) but with no
+ *     paying client → no P&L, no invoicing, no fixed window.
+ *
+ * Everything else = client engagements. Full revenue surface — P&L,
+ * invoices, contract value, contract dates.
  *
  * The flags below let UI and server code make the same decision in one
  * place rather than open-coding the prefix check at every call site.
+ *
+ * Note: the three FHB/FHO/FHX `*000` codes are "expense buckets" —
+ * hidden from project surfaces but pickable in the AP/expense allocator.
+ * `FHP000` is treated as a real internal project (shows on the internal
+ * kanban band alongside FHP001+).
  */
 
-const BUCKET_CODES = new Set(['FHO000', 'FHX000']);
+const BUCKET_CODES = new Set(['FHB000', 'FHO000', 'FHX000']);
 
 export function isExpenseBucket(code: string): boolean {
   return BUCKET_CODES.has(code);
 }
 
 /**
- * Bucket codes that admin should NOT be able to allocate new lines
- * to via the AP / expense pickers. FHO000 (Operations) exists in the
- * schema so historical lines stay tagged, but TT's call (2026-05-11) is
- * that ongoing allocation funnels everything into **FHX000 (BD / Other)**
- * as the single OPEX target. FHO is derived from the category at
- * month-end-reporting time, not at allocation time, so admin shouldn't
- * pick it at the gate.
+ * Bucket codes that admin should NOT be able to allocate new lines to
+ * via the AP / expense pickers.
  *
- * Pickers still surface the current value as a pinned "(current)"
- * option when a row is already tagged to FHO000 — admin can see what's
- * there and re-route, they just can't *select* it fresh.
+ * Empty by design (TT 2026-06-16): every `*000` catch-all (FHB000,
+ * FHO000, FHX000 — and FHP000 for internal time) is a valid initial
+ * landing spot. Lines get reassigned to a more specific code later if
+ * a better fit emerges. No bucket is hidden at allocation time.
+ *
+ * Kept as a configurable surface in case the policy reverses again.
  */
-const HIDDEN_PICKER_BUCKET_CODES = new Set(['FHO000']);
+const HIDDEN_PICKER_BUCKET_CODES: Set<string> = new Set();
 
 export function isHiddenFromAllocationPicker(code: string): boolean {
   return HIDDEN_PICKER_BUCKET_CODES.has(code);

@@ -209,15 +209,19 @@ async function ApprovalQueueWrapper({
           })
         : Promise.resolve([]),
     ]);
-  // FHO000 is filtered out entirely — see `isHiddenFromAllocationPicker`
-  // doc. Only FHX000 (BD / Other) remains as a sort-to-top option for
-  // OPEX allocation. If a row is currently tagged to FHO000, the picker
-  // pins a "(current)" entry separately so admin can see + re-route it.
+  // All three *000 catch-alls (FHB000 BD, FHO000 Operations, FHX000
+  // Other) sort to the top as initial-allocation targets — admin can
+  // pick any of them, and re-assign to a more specific code later
+  // (TT 2026-06-16). `isHiddenFromAllocationPicker` is currently empty
+  // but kept as a configurable choke-point in case policy reverses.
   const visibleProjects = projectOptionsRaw.filter(
     (p) => !isHiddenFromAllocationPicker(p.code),
   );
-  const bucketProjects = visibleProjects.filter((p) => p.code === 'FHX000');
-  const otherProjects = visibleProjects.filter((p) => p.code !== 'FHX000');
+  const BUCKETS = ['FHB000', 'FHO000', 'FHX000'];
+  const bucketProjects = visibleProjects
+    .filter((p) => BUCKETS.includes(p.code))
+    .sort((a, b) => BUCKETS.indexOf(a.code) - BUCKETS.indexOf(b.code));
+  const otherProjects = visibleProjects.filter((p) => !BUCKETS.includes(p.code));
   const projectOptions = [...bucketProjects, ...otherProjects];
   const personOptions = personOptionsRaw.map((p) => ({
     id: p.id,
@@ -257,9 +261,9 @@ async function ApprovalQueueWrapper({
           },
           subjectProjectId: exp?.projectId ?? bil?.projectId ?? null,
           // Code + name passed alongside so pickers can pin a
-          // "(current) FHO000 - Operations" option when the row is
-          // tagged to an otherwise-hidden bucket. Avoids a "value
-          // matches no option" state on the picker.
+          // "(current) …" option when the row is tagged to a project
+          // that's been hidden from the picker. Avoids a "value
+          // matches no option" state on the controlled select.
           subjectProjectCode: exp?.project?.code ?? bil?.project?.code ?? null,
           subjectProjectName: exp?.project?.name ?? bil?.project?.name ?? null,
           subjectCategory: exp?.category ?? bil?.category ?? null,

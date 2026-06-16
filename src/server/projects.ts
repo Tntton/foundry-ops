@@ -117,12 +117,12 @@ export async function listProjects(
       }
     : null;
 
-  // Hide the firm-overhead expense buckets (FHO000 / FHX000) from the
-  // projects list / kanban / grid / table — they exist as Project rows
-  // so expenses can be tagged against them, but they aren't projects in
-  // the working sense and shouldn't pollute the project surfaces. Real
-  // internal FH projects (FHP000, FHP001+) still show.
-  const BUCKET_CODES = ['FHO000', 'FHX000'];
+  // Hide the firm-overhead expense buckets (FHB000 / FHO000 / FHX000)
+  // from the projects list / kanban / grid / table — they exist as
+  // Project rows so expenses can be tagged against them, but they
+  // aren't projects in the working sense and shouldn't pollute the
+  // project surfaces. Internal FH projects (FHP000, FHP001+) still show.
+  const BUCKET_CODES = ['FHB000', 'FHO000', 'FHX000'];
 
   const where: Record<string, unknown> = {
     ...(filter.stage ? { stage: filter.stage } : {}),

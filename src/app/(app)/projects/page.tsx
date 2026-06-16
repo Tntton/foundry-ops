@@ -538,8 +538,8 @@ function projectToKanbanCard(
  * Internal FH projects (FHP series — FHP000 catch-all, primer
  * development, social media, brand work, etc) split into a separate
  * band so they don't compete visually with paying-client engagements.
- * Code prefix is the discriminator; the pure-overhead expense buckets
- * (FHO / FHX) are already filtered out by `listProjects`.
+ * Code prefix is the discriminator; the three pure-overhead expense
+ * buckets (FHB / FHO / FHX) are already filtered out by `listProjects`.
  */
 function isInternalProject(code: string): boolean {
   return code.startsWith('FHP');

@@ -45,11 +45,11 @@ function ym(d: Date): string {
  * lifetime margin.
  */
 export async function computeFirmPnL(): Promise<FirmPnL> {
-  // Hide the firm-overhead expense buckets (FHO000 / FHX000) from firm
-  // P&L roll-ups — they distort margin numbers because they have zero
-  // contract value but accrue cost. Internal FH projects (FHP*) keep
-  // showing.
-  const BUCKET_CODES = ['FHO000', 'FHX000'];
+  // Hide the firm-overhead expense buckets (FHB000 / FHO000 / FHX000)
+  // from firm P&L roll-ups — they distort margin numbers because they
+  // have zero contract value but accrue cost. Internal FH projects
+  // (FHP*) keep showing.
+  const BUCKET_CODES = ['FHB000', 'FHO000', 'FHX000'];
   const [projects, invoices, expenses, bills, timesheet] = await Promise.all([
     prisma.project.findMany({
       where: { code: { notIn: BUCKET_CODES } },

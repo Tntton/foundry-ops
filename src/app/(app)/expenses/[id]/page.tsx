@@ -75,10 +75,10 @@ export default async function ExpenseDetailPage({
   // decision flow.
   const canTagProject =
     expense.status === 'draft' || expense.status === 'submitted';
-  // Pull eligible projects + reorder so the firm-overhead buckets
-  // (FHO000 Operations, FHX000 BD/Other) sit at the top of the dropdown
-  // for easy expense routing. Internal FH projects (FHP*) and client
-  // projects sort below alphabetically.
+  // Pull eligible projects + reorder so the three firm-overhead buckets
+  // (FHB000 BD, FHO000 Operations, FHX000 Other) sit at the top of the
+  // dropdown for easy expense routing. Internal FH projects (FHP*) and
+  // client projects sort below alphabetically.
   const projectOptionsRaw = canTagProject
     ? await prisma.project.findMany({
         where: { stage: { not: 'archived' } },
@@ -86,7 +86,7 @@ export default async function ExpenseDetailPage({
         select: { id: true, code: true, name: true },
       })
     : [];
-  const BUCKET_CODES = ['FHO000', 'FHX000'];
+  const BUCKET_CODES = ['FHB000', 'FHO000', 'FHX000'];
   const bucketProjects = projectOptionsRaw
     .filter((p) => BUCKET_CODES.includes(p.code))
     .sort(

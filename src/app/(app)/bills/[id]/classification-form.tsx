@@ -132,10 +132,10 @@ export function BillClassificationForm({
             className="h-9 w-full rounded-md border border-line bg-surface-elev px-2 text-sm text-ink"
           >
             <option value="">— OPEX (no project) —</option>
-            {/* Pin the bill's current project as "(current)" when
-                it's filtered out of the visible options (FHO000).
-                Keeps the controlled-select value in sync with its
-                options. */}
+            {/* Pin the bill's current project as "(current)" when it's
+                filtered out of the visible options (e.g. a code added
+                to HIDDEN_PICKER_BUCKET_CODES). Keeps the controlled-
+                select value in sync with its options. */}
             {initial.projectId &&
               !projectOptions.some((p) => p.id === initial.projectId) && (
                 <option value={initial.projectId}>

@@ -60,8 +60,8 @@ export type QueueItemLite = {
    *  and the "needs allocation" amber chip when the value is null. */
   subjectProjectId?: string | null;
   /** Current project's code + name. Threaded through so pickers can
-   *  pin a "(current) FHO000 - …" option when the row is tagged to
-   *  a bucket that's otherwise filtered out of the picker. */
+   *  pin a "(current) …" option when the row is tagged to a code that's
+   *  otherwise filtered out of the picker (HIDDEN_PICKER_BUCKET_CODES). */
   subjectProjectCode?: string | null;
   subjectProjectName?: string | null;
   /** Current cost-type (category) for the subject. Drives the cost-
