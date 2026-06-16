@@ -193,7 +193,17 @@ async function ApprovalQueueWrapper({
           }),
       canOverrideAllocation
         ? prisma.project.findMany({
-            where: { stage: { not: 'archived' } },
+            // FH-* internal projects (FHB, FHP, FHO, FHX prefixes) are
+            // always visible in the approvals picker regardless of
+            // stage so late re-allocation works on any closed internal
+            // bucket too (TT 2026-06-16). Client engagements still
+            // hide once archived.
+            where: {
+              OR: [
+                { code: { startsWith: 'FH' } },
+                { stage: { not: 'archived' } },
+              ],
+            },
             orderBy: { code: 'asc' },
             select: { id: true, code: true, name: true },
           })
@@ -209,20 +219,16 @@ async function ApprovalQueueWrapper({
           })
         : Promise.resolve([]),
     ]);
-  // All three *000 catch-alls (FHB000 BD, FHO000 Operations, FHX000
-  // Other) sort to the top as initial-allocation targets — admin can
-  // pick any of them, and re-assign to a more specific code later
-  // (TT 2026-06-16). `isHiddenFromAllocationPicker` is currently empty
-  // but kept as a configurable choke-point in case policy reverses.
-  const visibleProjects = projectOptionsRaw.filter(
+  // Picker order is straight alphabetical by code (TT 2026-06-16) so
+  // the four FH-series prefixes (FHB / FHO / FHP / FHX) cluster
+  // naturally near the top in their natural order, and client
+  // engagements sort by their own code below. Earlier we pinned the
+  // *000 catch-alls separately; that's been dropped in favour of a
+  // single uniform sort. `isHiddenFromAllocationPicker` is currently
+  // empty but kept as a choke-point in case policy reverses.
+  const projectOptions = projectOptionsRaw.filter(
     (p) => !isHiddenFromAllocationPicker(p.code),
   );
-  const BUCKETS = ['FHB000', 'FHO000', 'FHX000'];
-  const bucketProjects = visibleProjects
-    .filter((p) => BUCKETS.includes(p.code))
-    .sort((a, b) => BUCKETS.indexOf(a.code) - BUCKETS.indexOf(b.code));
-  const otherProjects = visibleProjects.filter((p) => !BUCKETS.includes(p.code));
-  const projectOptions = [...bucketProjects, ...otherProjects];
   const personOptions = personOptionsRaw.map((p) => ({
     id: p.id,
     firstName: p.firstName,
