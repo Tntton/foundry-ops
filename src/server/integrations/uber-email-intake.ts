@@ -368,6 +368,7 @@ async function processOneReceipt(args: {
       subjectId: row.id,
       requiredRole,
       requestedById: rider.id,
+      amountCents,
       summary: `Uber · $${(amountCents / 100).toFixed(0)} · email receipt`,
     });
     await writeAudit(tx, {

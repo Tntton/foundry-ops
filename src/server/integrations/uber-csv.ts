@@ -283,6 +283,7 @@ export async function importUberCsv(opts: {
         subjectId: bill.id,
         requiredRole,
         requestedById: opts.actorPersonId,
+        amountCents,
         summary: `Uber · $${(amountCents / 100).toFixed(0)}${tripSummary ? ` · ${tripSummary}` : ''}`,
       });
       await writeAudit(tx, {

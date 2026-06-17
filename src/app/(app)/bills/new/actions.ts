@@ -127,6 +127,7 @@ export async function createBill(
           subjectId: bill.id,
           requiredRole,
           requestedById: session.person.id,
+          amountCents,
           summary: `${bill.supplierName ?? 'Vendor'} · $${(amountCents / 100).toFixed(0)}`,
         });
       }

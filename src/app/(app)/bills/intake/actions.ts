@@ -249,6 +249,7 @@ export async function approveIntakeBill(
         subjectId: bill.id,
         requiredRole,
         requestedById: session.person.id,
+        amountCents: bill.amountTotal,
         summary: `${bill.supplierName ?? 'Vendor'} · $${(bill.amountTotal / 100).toFixed(0)}`,
       });
       await writeAudit(tx, {
@@ -666,6 +667,7 @@ async function createCostFromExtraction(
           subjectId: e.id,
           requiredRole,
           requestedById: actorPersonId,
+          amountCents: amountTotal,
           summary: `${extractedSupplier ?? 'Receipt'} · $${(amountTotal / 100).toFixed(0)}`,
         });
         await writeAudit(tx, {

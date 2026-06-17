@@ -213,6 +213,17 @@ export async function notifyAdminPool(
  * surface to the caller — bubble up unless the calling action wants to
  * tolerate notification failures.
  */
+/**
+ * High-value cap for WhatsApp side-channel approvals (TT 2026-06-18).
+ * Subjects at or above this threshold are notified in-app + email only
+ * — the policy is web-only authentication for high-value approvals, so
+ * WhatsApp can't carry the decision UX. Aligns with A8 (invoice >$20k →
+ * Super Admin) — anything routed to Super Admin shouldn't be pinged
+ * over an unauthenticated channel. The in-app feed still fires; only
+ * the WhatsApp DM is suppressed.
+ */
+const WHATSAPP_MAX_AMOUNT_CENTS = 2_000_000;
+
 export async function notifyApproversOfNewApproval(
   tx: Prisma.TransactionClient,
   opts: {
@@ -221,6 +232,9 @@ export async function notifyApproversOfNewApproval(
     subjectId: string;
     requiredRole: Role;
     requestedById: string;
+    /** Subject amount in AUD cents, inc GST. Used to gate the WhatsApp
+     *  side-channel: ≥$20k goes web-only (no WhatsApp DM). */
+    amountCents: number;
     /** Short human-friendly description of what's awaiting decision —
      *  e.g. "$1,250 expense from Sohyb Basir" or "Invoice IFM001-INV-04
      *  for $42,000". Surfaces as the feed body. */
@@ -273,7 +287,13 @@ export async function notifyApproversOfNewApproval(
   // Only attempts when WhatsApp is configured; silent no-op otherwise.
   // Dynamic import to keep the WhatsApp module out of cold-start paths
   // for tx flows that don't need it.
-  const targets = approverPool.filter((p) => p.whatsappNumber);
+  //
+  // High-value subjects (≥$20k) are suppressed — web-only policy, see
+  // WHATSAPP_MAX_AMOUNT_CENTS doc.
+  const isHighValue = opts.amountCents >= WHATSAPP_MAX_AMOUNT_CENTS;
+  const targets = isHighValue
+    ? []
+    : approverPool.filter((p) => p.whatsappNumber);
   if (targets.length > 0) {
     void (async () => {
       const { isWhatsAppConfigured, sendWhatsAppText } = await import(

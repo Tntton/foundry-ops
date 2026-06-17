@@ -125,6 +125,7 @@ export async function submitExpense(
         subjectId: expense.id,
         requiredRole,
         requestedById: session.person.id,
+        amountCents,
         summary: `${data.vendor ?? 'Expense'} · $${(amountCents / 100).toFixed(0)}`,
       });
       await writeAudit(tx, {

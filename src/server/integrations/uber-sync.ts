@@ -280,6 +280,7 @@ async function landTrip(
       subjectId: bill.id,
       requiredRole,
       requestedById: actor,
+      amountCents,
       summary: `Uber · $${(amountCents / 100).toFixed(0)}${tripSummary ? ` · ${tripSummary}` : ''}`,
     });
     await writeAudit(tx, {

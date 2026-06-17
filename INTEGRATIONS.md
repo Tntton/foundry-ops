@@ -113,16 +113,17 @@ A person can be in multiple groups; roles array is the union.
 
 | Name | Purpose | Variables |
 |---|---|---|
-| `approval_request` | Approval needed for invoice/bill/etc. | `{1}` subject, `{2}` amount, `{3}` deep link |
-| `approval_mfa` | MFA challenge for >$20k | `{1}` 6-digit code |
-| `timesheet_reminder` | Friday reminder | `{1}` deep link |
-| `ar_overdue` | Overdue invoice alert | `{1}` invoice number, `{2}` days, `{3}` link |
+| `approval_request` | Approval needed for invoice/bill/etc. (<$20k only) | `{1}` subject, `{2}` amount; button URL `{1}` approval id |
+| `timesheet_reminder` | End-of-week reminder | `{1}` first name |
+| `ar_overdue` | Overdue invoice alert | `{1}` invoice number, `{2}` days; button URL `{1}` invoice id |
 | `receipt_intake_instructions` | Onboard: "send a photo to log an expense" | — |
+
+**High-value approvals are web-only** (TT 2026-06-18). Subjects ≥ AUD 20,000 do NOT trigger a WhatsApp DM — they go in-app + email only, and the approver must authenticate via Entra ID + decide in the web app. `notifyApproversOfNewApproval` enforces this gate (`WHATSAPP_MAX_AMOUNT_CENTS = 2_000_000`). No `approval_mfa` template — the MFA flow is replaced by full-session web auth.
 
 **Inbound auth (for mutating actions):**
 - Source number must match a registered Person's `whatsappNumber`
 - `YES` / `NO` / `REVIEW` literal matching
-- For subjects >$20k: send MFA challenge via `approval_mfa` template; require reply with 6-digit code within 5 min
+- Subjects ≥ $20k never reach this path — the WhatsApp DM was suppressed upstream, so there's no inbound decision to authenticate.
 
 **Media handling:**
 - Inbound photos → download via Meta media API → upload to SharePoint → trigger Receipt Parser agent

@@ -127,6 +127,7 @@ export async function createInvoice(
           subjectId: invoice.id,
           requiredRole,
           requestedById: session.person.id,
+          amountCents: amountTotalCents,
           summary: `${invoice.number} · $${(amountTotalCents / 100).toFixed(0)}`,
         });
       }

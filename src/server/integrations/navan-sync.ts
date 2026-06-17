@@ -353,6 +353,7 @@ async function landBooking(
       subjectId: bill.id,
       requiredRole,
       requestedById: actor,
+      amountCents,
       summary: `${vendor} · $${(amountCents / 100).toFixed(0)} · Navan ${bookingType}`,
     });
     await writeAudit(tx, {
@@ -461,6 +462,7 @@ async function landExpense(
       subjectId: row.id,
       requiredRole,
       requestedById: person.id,
+      amountCents,
       summary: `${merchant} · $${(amountCents / 100).toFixed(0)} · Navan`,
     });
     await writeAudit(tx, {

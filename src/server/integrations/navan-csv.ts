@@ -287,6 +287,7 @@ export async function importNavanCsv(opts: {
         subjectId: bill.id,
         requiredRole,
         requestedById: opts.actorPersonId,
+        amountCents,
         summary: `${vendor} · $${(amountCents / 100).toFixed(0)} · Navan ${bookingType}${tripName ? ` (${tripName})` : ''}`,
       });
       await writeAudit(tx, {

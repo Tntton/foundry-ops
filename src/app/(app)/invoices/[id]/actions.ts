@@ -223,6 +223,7 @@ export async function submitInvoiceForApproval(
         subjectId: invoiceId,
         requiredRole,
         requestedById: session!.person.id,
+        amountCents: invoice.amountTotal,
         summary: `${invoice.number} · $${(invoice.amountTotal / 100).toFixed(0)}`,
       });
       await writeAudit(tx, {
