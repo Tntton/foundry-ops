@@ -34,7 +34,12 @@ export type PrefillKind =
   // confirmation card. The user clicks Confirm and the server runs
   // the underlying action directly. No intermediate form.
   | 'recruit_proposal'
-  | 'feedback_proposal';
+  | 'feedback_proposal'
+  // Reconcile family — super-admin reconciliation assistant mutation
+  // proposals. Confirm endpoint applies the underlying update + writes
+  // an audit row.
+  | 'reconcile_update'
+  | 'reconcile_bulk';
 
 export type PrefillTokenPayload<T = unknown> = {
   /** Schema version — bump if the wire shape changes incompatibly. */

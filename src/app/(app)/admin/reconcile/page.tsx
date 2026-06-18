@@ -3,8 +3,13 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { computeReconcileQueue, summariseGaps } from '@/server/reconcile/gap-finder';
+import {
+  getOrCreateActiveThread,
+  listThreadMessages,
+} from '@/server/agents/assistant/threads';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { ReconcileChatPanel } from './chat-panel';
 
 /**
  * Reconcile assistant — super-admin-only back-end-population workspace.
@@ -28,6 +33,17 @@ export default async function ReconcilePage() {
 
   const gaps = await computeReconcileQueue();
   const summary = summariseGaps(gaps);
+  // Lazy-load the active reconcile thread + last messages so the chat
+  // panel renders prior history on refresh. Thread is created on demand.
+  // hasAnyRole above guarantees session is non-null, but TS can't infer that.
+  if (!session) return null;
+  const thread = await getOrCreateActiveThread(session.person.id, 'reconcile');
+  const rawHistory = await listThreadMessages(thread.id);
+  const history = rawHistory
+    .filter((m): m is typeof m & { role: 'user' | 'assistant' } =>
+      m.role === 'user' || m.role === 'assistant',
+    )
+    .map((m) => ({ role: m.role, content: m.content }));
 
   return (
     <div className="space-y-4">
@@ -124,14 +140,7 @@ export default async function ReconcilePage() {
             </p>
           </CardHeader>
           <CardContent>
-            <div className="flex h-[480px] flex-col items-center justify-center rounded-md border border-dashed border-line bg-surface-subtle/40 text-center">
-              <p className="text-sm text-ink-2">Chat + drop zone coming next.</p>
-              <p className="mt-2 max-w-sm text-xs text-ink-3">
-                The agent loop, bulk update tools, CSV importers, and PDF/Word
-                extraction land in follow-up commits. The gap queue at left is
-                already live — start chipping through it in the existing UI.
-              </p>
-            </div>
+            <ReconcileChatPanel initialHistory={history} />
           </CardContent>
         </Card>
       </div>
