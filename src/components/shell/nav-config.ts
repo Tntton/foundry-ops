@@ -23,6 +23,7 @@ import {
   KeyRound,
   Database,
   Upload,
+  ListChecks,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -323,6 +324,15 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         href: '/admin/import',
         icon: Upload,
         roles: ['super_admin', 'admin'],
+      },
+      {
+        // Reconcile assistant — super-admin-only back-end-population
+        // workspace. Gap-finder queue + (Phase 2) Claude agent with
+        // bulk update / CSV import / doc extraction tools.
+        label: 'Reconcile',
+        href: '/admin/reconcile',
+        icon: ListChecks,
+        roles: ['super_admin'],
       },
       // Agents surface: ships with TASK-080 onward. Hidden from nav until then.
       {

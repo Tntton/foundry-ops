@@ -1702,9 +1702,20 @@ enum AssistantMessageRole {
   tool
 }
 
+// Discriminates threads by purpose so the reconcile assistant
+// (super-admin back-end populating tool, /admin/reconcile) doesn't mix
+// its history with the general in-app helper at /assistant.
+// `general` = the default in-app helper. `reconcile` = the admin
+// reconciliation assistant.
+enum AssistantThreadKind {
+  general
+  reconcile
+}
+
 model AssistantThread {
   id            String                @id @default(cuid())
   personId      String
+  kind          AssistantThreadKind   @default(general)
   status        AssistantThreadStatus @default(active)
   // Stamp updated whenever a message is appended; cheap to read for
   // "your conversation has been quiet for N hours" UX later.
@@ -1717,8 +1728,8 @@ model AssistantThread {
 
   // Drives the per-user "find my active thread" lookup. Partial unique
   // would be cleaner but Prisma doesn't expose it portably; the app
-  // enforces single-active per person in the action layer instead.
-  @@index([personId, status])
+  // enforces single-active per (person, kind) in the action layer.
+  @@index([personId, kind, status])
   @@index([personId, lastMessageAt])
 }
 

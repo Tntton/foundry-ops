@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { AssistantThreadKind, Prisma } from '@prisma/client';
 import { prisma } from '@/server/db';
 import { writeAudit } from '@/server/audit';
 
@@ -15,14 +15,17 @@ export const ASSISTANT_MAX_TURNS = 50;
 export const ASSISTANT_HISTORY_TURNS = 20;
 
 /**
- * Fetch (or create) the single active thread for a person. Threads are
- * cheap; the first message of a fresh user creates one lazily.
+ * Fetch (or create) the single active thread for a person + assistant
+ * kind. Threads are cheap; the first message of a fresh user creates one
+ * lazily. Kind defaults to `general` (the in-app helper); pass
+ * `reconcile` for the admin reconciliation assistant.
  */
 export async function getOrCreateActiveThread(
   personId: string,
+  kind: AssistantThreadKind = 'general',
 ): Promise<{ id: string; createdAt: Date; turnCount: number }> {
   const existing = await prisma.assistantThread.findFirst({
-    where: { personId, status: 'active' },
+    where: { personId, kind, status: 'active' },
     select: {
       id: true,
       createdAt: true,
@@ -41,13 +44,13 @@ export async function getOrCreateActiveThread(
   }
   const created = await prisma.$transaction(async (tx) => {
     const t = await tx.assistantThread.create({
-      data: { personId },
+      data: { personId, kind },
       select: { id: true, createdAt: true },
     });
     await writeAudit(tx, {
       actor: { type: 'person', id: personId },
       action: 'created',
-      entity: { type: 'assistant_thread', id: t.id, after: { status: 'active' } },
+      entity: { type: 'assistant_thread', id: t.id, after: { status: 'active', kind } },
       source: 'web',
     });
     return t;
@@ -58,14 +61,15 @@ export async function getOrCreateActiveThread(
 /**
  * Archive the active thread (if any) and create a new one. Used by the
  * widget's reset button. Idempotent — calling on a person with no active
- * thread just creates a fresh one.
+ * thread just creates a fresh one. Kind defaults to `general`.
  */
 export async function resetActiveThread(
   personId: string,
+  kind: AssistantThreadKind = 'general',
 ): Promise<{ id: string }> {
   return prisma.$transaction(async (tx) => {
     const active = await tx.assistantThread.findFirst({
-      where: { personId, status: 'active' },
+      where: { personId, kind, status: 'active' },
       select: { id: true },
     });
     if (active) {
@@ -81,13 +85,13 @@ export async function resetActiveThread(
       });
     }
     const fresh = await tx.assistantThread.create({
-      data: { personId },
+      data: { personId, kind },
       select: { id: true },
     });
     await writeAudit(tx, {
       actor: { type: 'person', id: personId },
       action: 'created',
-      entity: { type: 'assistant_thread', id: fresh.id, after: { status: 'active' } },
+      entity: { type: 'assistant_thread', id: fresh.id, after: { status: 'active', kind } },
       source: 'web',
     });
     return { id: fresh.id };
