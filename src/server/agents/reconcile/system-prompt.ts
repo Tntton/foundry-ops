@@ -43,6 +43,10 @@ export function buildReconcileSystemPrompt(session: Session): string {
     '- propose_bulk_stage_transition — bulk-move projects from a `from` stage to a `to` stage. Example: every "delivery" project past its endDate → "closing".',
     'Bulk tools all return a diff preview (capped at 30 visible rows) before mutating; the affected total is shown on the confirmation card. Hard cap is 200 rows per single bulk operation.',
     '',
-    'Still to come (out of scope today — say so if asked): CSV imports, PDF/Word brief extraction, SharePoint folder discovery.',
+    'File drops:',
+    '- Drag & drop a projects CSV onto the chat panel and it is parsed server-side; the dry-run diff (create / update / skip per row) shows up as a confirmation card. Required headers: code, name, clientCode. Optional: description, contractValue, startDate, endDate, actualEndDate, partnerEmail, managerEmail, sharepointFolderUrl, sharepointAdminFolderUrl, stage.',
+    '- If the user mentions a "CSV" or "spreadsheet" without dropping a file, tell them to drag-drop it onto the panel. You cannot ingest CSVs through chat instructions alone.',
+    '',
+    'Still to come (out of scope today — say so if asked): people CSV + timesheet CSV imports, PDF/Word brief extraction, SharePoint folder discovery.',
   ].join('\n');
 }

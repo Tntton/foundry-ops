@@ -11,7 +11,7 @@ export const runtime = 'nodejs';
 
 const BodySchema = z.object({
   token: z.string().min(1),
-  kind: z.enum(['reconcile_update', 'reconcile_bulk']),
+  kind: z.enum(['reconcile_update', 'reconcile_bulk', 'reconcile_csv_projects']),
 });
 
 // ── Single-row update payload ────────────────────────────────────────
@@ -140,7 +140,10 @@ export async function POST(req: Request): Promise<Response> {
   if (parsed.data.kind === 'reconcile_update') {
     return applySingleUpdate(session, verify.payload.payload);
   }
-  return applyBulk(session, verify.payload.payload);
+  if (parsed.data.kind === 'reconcile_bulk') {
+    return applyBulk(session, verify.payload.payload);
+  }
+  return applyCsvProjects(session, verify.payload.payload);
 }
 
 async function applySingleUpdate(session: Session, raw: unknown): Promise<Response> {
@@ -200,6 +203,109 @@ async function applySingleUpdate(session: Session, raw: unknown): Promise<Respon
     }
     console.error('[reconcile/confirm] single failed:', err);
     return NextResponse.json({ error: 'update_failed' }, { status: 500 });
+  }
+}
+
+// ── CSV — projects ────────────────────────────────────────────────────
+const CsvProjectsPayloadSchema = z.object({
+  rows: z
+    .array(
+      z.object({
+        action: z.enum(['create', 'update']),
+        code: z.string().min(1),
+        data: z.object({
+          code: z.string().min(1),
+          clientId: z.string().min(1),
+          name: z.string().min(1),
+          description: z.string().nullable(),
+          contractValueCents: z.number().int().nonnegative(),
+          startDate: z.coerce.date().nullable(),
+          endDate: z.coerce.date().nullable(),
+          actualEndDate: z.coerce.date().nullable(),
+          primaryPartnerId: z.string().min(1),
+          managerId: z.string().min(1),
+          sharepointFolderUrl: z.string().nullable(),
+          sharepointAdminFolderUrl: z.string().nullable(),
+          stage: z.enum(STAGES),
+        }),
+      }),
+    )
+    .min(1)
+    .max(5000),
+});
+
+async function applyCsvProjects(session: Session, raw: unknown): Promise<Response> {
+  const payload = CsvProjectsPayloadSchema.safeParse(raw);
+  if (!payload.success) {
+    return NextResponse.json({ error: 'malformed_proposal' }, { status: 400 });
+  }
+  const { rows } = payload.data;
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      let created = 0;
+      let updated = 0;
+      for (const row of rows) {
+        const d = row.data;
+        if (row.action === 'create') {
+          await tx.project.create({
+            data: {
+              code: d.code,
+              clientId: d.clientId,
+              name: d.name,
+              description: d.description,
+              contractValue: d.contractValueCents,
+              startDate: d.startDate,
+              endDate: d.endDate,
+              actualEndDate: d.actualEndDate,
+              primaryPartnerId: d.primaryPartnerId,
+              managerId: d.managerId,
+              sharepointFolderUrl: d.sharepointFolderUrl,
+              sharepointAdminFolderUrl: d.sharepointAdminFolderUrl,
+              stage: d.stage,
+            },
+          });
+          created += 1;
+        } else {
+          await tx.project.update({
+            where: { code: d.code },
+            data: {
+              name: d.name,
+              description: d.description,
+              contractValue: d.contractValueCents,
+              startDate: d.startDate,
+              endDate: d.endDate,
+              actualEndDate: d.actualEndDate,
+              primaryPartnerId: d.primaryPartnerId,
+              managerId: d.managerId,
+              sharepointFolderUrl: d.sharepointFolderUrl,
+              sharepointAdminFolderUrl: d.sharepointAdminFolderUrl,
+              stage: d.stage,
+            },
+          });
+          updated += 1;
+        }
+        await writeAudit(tx, {
+          actor: { type: 'person', id: session.person.id },
+          action: row.action === 'create' ? 'created' : 'updated',
+          entity: {
+            type: 'project',
+            id: d.code,
+            after: { csvImport: true, code: d.code, action: row.action } as never,
+          },
+          source: 'agent',
+        });
+      }
+      return { created, updated };
+    });
+    return NextResponse.json({
+      ok: true,
+      mode: 'csv_projects',
+      created: result.created,
+      updated: result.updated,
+    });
+  } catch (err) {
+    console.error('[reconcile/confirm] csv projects failed:', err);
+    return NextResponse.json({ error: 'csv_apply_failed' }, { status: 500 });
   }
 }
 

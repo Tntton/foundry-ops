@@ -39,7 +39,8 @@ export type PrefillKind =
   // proposals. Confirm endpoint applies the underlying update + writes
   // an audit row.
   | 'reconcile_update'
-  | 'reconcile_bulk';
+  | 'reconcile_bulk'
+  | 'reconcile_csv_projects';
 
 export type PrefillTokenPayload<T = unknown> = {
   /** Schema version — bump if the wire shape changes incompatibly. */

@@ -161,16 +161,20 @@ export function ReconcileChatPanel({
       ),
     );
     try {
-      // Surface name encodes whether this is a single-row update or a
-      // bulk operation — bulk surfaces start with reconcile_bulk_*.
-      const isBulk = turn.proposal.surface.startsWith('reconcile_bulk');
+      // Surface name encodes the kind:
+      //   reconcile_bulk_*           → bulk update
+      //   reconcile_csv_projects     → CSV projects import
+      //   anything else              → single-row update
+      const surface = turn.proposal.surface;
+      const kind = surface === 'reconcile_csv_projects'
+        ? 'reconcile_csv_projects'
+        : surface.startsWith('reconcile_bulk')
+          ? 'reconcile_bulk'
+          : 'reconcile_update';
       const res = await fetch('/api/reconcile/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          token: turn.proposal.token,
-          kind: isBulk ? 'reconcile_bulk' : 'reconcile_update',
-        }),
+        body: JSON.stringify({ token: turn.proposal.token, kind }),
       });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string; error?: string };
       if (res.ok && data.ok) {
@@ -221,8 +225,78 @@ export function ReconcileChatPanel({
     );
   }
 
+  async function onCsvUpload(file: File) {
+    if (file.size > 2 * 1024 * 1024) {
+      setTurns((prev) => [
+        ...prev,
+        { role: 'user', text: `(dropped ${file.name})` },
+        { role: 'assistant', text: 'File too large — CSV must be ≤ 2MB.' },
+      ]);
+      return;
+    }
+    setTurns((prev) => [
+      ...prev,
+      { role: 'user', text: `Uploading ${file.name}…` },
+      { role: 'assistant', text: '' },
+    ]);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('type', 'projects');
+      const res = await fetch('/api/reconcile/import', { method: 'POST', body: fd });
+      const data = (await res.json()) as
+        | {
+            ok: true;
+            kind: 'proposal';
+            surface: string;
+            token: string;
+            title: string;
+            fields: Array<{ label: string; value: string }>;
+            confirmLabel: string;
+            summary: string;
+          }
+        | { ok: true; kind: 'no_op'; message: string }
+        | { ok?: false; error?: string; message?: string };
+      if (!res.ok || !('ok' in data) || !data.ok) {
+        const msg = (data as { message?: string; error?: string }).message ?? (data as { error?: string }).error ?? 'Import failed.';
+        appendText(`Import failed: ${msg}`);
+        return;
+      }
+      if (data.kind === 'no_op') {
+        appendText(data.message);
+        return;
+      }
+      setLastAssistant((t) => ({
+        ...t,
+        text: t.text || `Parsed ${file.name} — review the diff and confirm to apply.`,
+        proposal: {
+          kind: 'proposal_card',
+          surface: data.surface,
+          token: data.token,
+          title: data.title,
+          fields: data.fields,
+          confirmLabel: data.confirmLabel,
+          summary: data.summary,
+        },
+      }));
+    } catch (err) {
+      console.error('[reconcile.import] failed:', err);
+      appendText('Network error during upload.');
+    }
+  }
+
+  function onDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file) void onCsvUpload(file);
+  }
+
   return (
-    <div className="flex h-[560px] flex-col">
+    <div
+      className="flex h-[560px] flex-col"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={onDrop}
+    >
       <div
         ref={scrollerRef}
         className="flex-1 space-y-3 overflow-y-auto rounded-md border border-line bg-surface-subtle/40 p-3"
@@ -231,6 +305,8 @@ export function ReconcileChatPanel({
           <p className="text-xs text-ink-3">
             Plain-text the question — e.g. <em>&ldquo;what should I fix first?&rdquo;</em> or
             <em> &ldquo;set the contract value on FHP002 to 50000&rdquo;</em>.
+            <br />
+            Drag &amp; drop a projects CSV anywhere on this panel to import.
           </p>
         ) : (
           turns.map((t, i) => (
