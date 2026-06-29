@@ -4,6 +4,8 @@ import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { signPrefillToken } from '@/server/agents/assistant/prefill/token';
 import { planProjectImport } from '@/server/reconcile/csv-projects';
+import { planPeopleImport } from '@/server/reconcile/csv-people';
+import { planTimesheetImport } from '@/server/reconcile/csv-timesheets';
 import { extractProjectBrief } from '@/server/reconcile/extract-brief';
 
 export const dynamic = 'force-dynamic';
@@ -141,7 +143,31 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: 'unreadable_file' }, { status: 400 });
   }
 
-  if (type === 'projects') {
+  // Auto-detect the CSV type from its header signature when the client
+  // doesn't pin one. Cheaper UX than a "what kind?" dropdown.
+  let resolvedType = type;
+  if (!resolvedType || resolvedType === 'auto' || resolvedType === 'csv') {
+    const headerLine = text.split(/\r?\n/, 1)[0]?.toLowerCase() ?? '';
+    const has = (h: string) => headerLine.split(',').map((s) => s.trim()).includes(h);
+    if (has('personemail') && has('projectcode') && has('date') && has('hours')) {
+      resolvedType = 'timesheets';
+    } else if (has('email') && has('firstname') && has('lastname')) {
+      resolvedType = 'people';
+    } else if (has('code') && has('clientcode')) {
+      resolvedType = 'projects';
+    } else {
+      return NextResponse.json(
+        {
+          error: 'unknown_csv_shape',
+          message:
+            'Could not auto-detect CSV type. Expected one of: projects (code, clientCode, …), people (email, firstName, lastName, …), or timesheets (personEmail, projectCode, date, hours).',
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (resolvedType === 'projects') {
     const result = await planProjectImport(text, session.person.id);
     if (!result.ok) {
       return NextResponse.json({ error: 'parse_failed', message: result.error }, { status: 400 });
@@ -197,8 +223,111 @@ export async function POST(req: Request): Promise<Response> {
     });
   }
 
+  if (resolvedType === 'people') {
+    const result = await planPeopleImport(text);
+    if (!result.ok) {
+      return NextResponse.json({ error: 'parse_failed', message: result.error }, { status: 400 });
+    }
+    const { plan } = result;
+    const { create, update, skip, total } = plan.counts;
+    if (create + update === 0) {
+      return NextResponse.json({
+        ok: true,
+        kind: 'no_op',
+        message: `Parsed ${total} rows but nothing to write — ${skip} skipped.`,
+        plan,
+      });
+    }
+    const writable = plan.rows.filter((r): r is typeof r & { data: NonNullable<typeof r.data> } =>
+      r.action !== 'skip' && r.data !== undefined,
+    );
+    const token = signPrefillToken({
+      kind: 'reconcile_csv_people',
+      personId: session.person.id,
+      payload: {
+        rows: writable.map((r) => ({ action: r.action, email: r.email, data: r.data })),
+      },
+    });
+    const PREVIEW = 30;
+    return NextResponse.json({
+      ok: true,
+      kind: 'proposal',
+      surface: 'reconcile_csv_people',
+      token,
+      title: `Import ${create + update} people (${create} new, ${update} updated)`,
+      fields: [
+        { label: 'Parsed', value: `${total} rows` },
+        { label: 'Create', value: String(create) },
+        { label: 'Update', value: String(update) },
+        ...(skip > 0 ? [{ label: 'Skip', value: String(skip) }] : []),
+        ...plan.rows.slice(0, PREVIEW).map((r) => ({
+          label: `${r.action} · ${r.email || `(row ${r.lineNo})`}`,
+          value: r.note,
+        })),
+        ...(plan.rows.length > PREVIEW
+          ? [{ label: '…', value: `${plan.rows.length - PREVIEW} more rows not shown` }]
+          : []),
+      ],
+      confirmLabel: `Write ${create + update}`,
+      summary: `People CSV: ${create} create, ${update} update, ${skip} skip.`,
+    });
+  }
+
+  if (resolvedType === 'timesheets') {
+    const result = await planTimesheetImport(text);
+    if (!result.ok) {
+      return NextResponse.json({ error: 'parse_failed', message: result.error }, { status: 400 });
+    }
+    const { plan } = result;
+    const { create, skip, total } = plan.counts;
+    if (create === 0) {
+      return NextResponse.json({
+        ok: true,
+        kind: 'no_op',
+        message: `Parsed ${total} rows but nothing to write — ${skip} skipped (likely duplicates or unknown person/project).`,
+        plan,
+      });
+    }
+    const writable = plan.rows.filter((r): r is typeof r & { data: NonNullable<typeof r.data> } =>
+      r.action === 'create' && r.data !== undefined,
+    );
+    const token = signPrefillToken({
+      kind: 'reconcile_csv_timesheets',
+      personId: session.person.id,
+      payload: {
+        rows: writable.map((r) => ({
+          ...r.data,
+          // dateISO for serialisation safety — Dates round-trip through JSON.
+          dateISO: r.data.date.toISOString(),
+        })).map(({ date: _date, ...rest }) => rest),
+      },
+    });
+    const PREVIEW = 20;
+    return NextResponse.json({
+      ok: true,
+      kind: 'proposal',
+      surface: 'reconcile_csv_timesheets',
+      token,
+      title: `Import ${create} timesheet entries (skip ${skip})`,
+      fields: [
+        { label: 'Parsed', value: `${total} rows` },
+        { label: 'Create', value: String(create) },
+        ...(skip > 0 ? [{ label: 'Skip', value: String(skip) }] : []),
+        ...plan.rows.slice(0, PREVIEW).map((r) => ({
+          label: `${r.action} · row ${r.lineNo}`,
+          value: r.note,
+        })),
+        ...(plan.rows.length > PREVIEW
+          ? [{ label: '…', value: `${plan.rows.length - PREVIEW} more rows not shown` }]
+          : []),
+      ],
+      confirmLabel: `Write ${create}`,
+      summary: `Timesheets CSV: ${create} create, ${skip} skip. Auto-approved on apply.`,
+    });
+  }
+
   return NextResponse.json(
-    { error: 'unsupported_type', message: `Type "${type}" not supported yet. Try type=projects. People + timesheets arrive next.` },
+    { error: 'unsupported_type', message: `Type "${type}" not supported. Use projects | people | timesheets | brief.` },
     { status: 400 },
   );
 }

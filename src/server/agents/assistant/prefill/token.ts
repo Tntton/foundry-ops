@@ -41,6 +41,8 @@ export type PrefillKind =
   | 'reconcile_update'
   | 'reconcile_bulk'
   | 'reconcile_csv_projects'
+  | 'reconcile_csv_people'
+  | 'reconcile_csv_timesheets'
   | 'reconcile_brief';
 
 export type PrefillTokenPayload<T = unknown> = {

@@ -11,7 +11,14 @@ export const runtime = 'nodejs';
 
 const BodySchema = z.object({
   token: z.string().min(1),
-  kind: z.enum(['reconcile_update', 'reconcile_bulk', 'reconcile_csv_projects', 'reconcile_brief']),
+  kind: z.enum([
+    'reconcile_update',
+    'reconcile_bulk',
+    'reconcile_csv_projects',
+    'reconcile_csv_people',
+    'reconcile_csv_timesheets',
+    'reconcile_brief',
+  ]),
 });
 
 // ── Single-row update payload ────────────────────────────────────────
@@ -145,6 +152,12 @@ export async function POST(req: Request): Promise<Response> {
   }
   if (parsed.data.kind === 'reconcile_csv_projects') {
     return applyCsvProjects(session, verify.payload.payload);
+  }
+  if (parsed.data.kind === 'reconcile_csv_people') {
+    return applyCsvPeople(session, verify.payload.payload);
+  }
+  if (parsed.data.kind === 'reconcile_csv_timesheets') {
+    return applyCsvTimesheets(session, verify.payload.payload);
   }
   return applyBrief(session, verify.payload.payload);
 }
@@ -308,6 +321,193 @@ async function applyCsvProjects(session: Session, raw: unknown): Promise<Respons
     });
   } catch (err) {
     console.error('[reconcile/confirm] csv projects failed:', err);
+    return NextResponse.json({ error: 'csv_apply_failed' }, { status: 500 });
+  }
+}
+
+// ── CSV — people (upsert by email) ────────────────────────────────────
+const PeoplePayloadSchema = z.object({
+  rows: z
+    .array(
+      z.object({
+        action: z.enum(['create', 'update']),
+        email: z.string().email(),
+        data: z.object({
+          email: z.string().email(),
+          firstName: z.string().min(1),
+          lastName: z.string().min(1),
+          initials: z.string().min(1),
+          band: z.enum(['MP', 'Partner', 'Associate_Partner', 'Expert', 'Consultant', 'Analyst', 'Support_Staff']),
+          level: z.string().min(1),
+          employment: z.enum(['ft', 'contractor']),
+          roles: z
+            .array(z.enum(['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff']))
+            .min(1),
+          rate: z.number().int().nonnegative(),
+          rateUnit: z.enum(['hour', 'day']),
+          whatsappNumber: z.string().nullable(),
+          region: z.string().length(2),
+          startDate: z.coerce.date(),
+          endDate: z.coerce.date().nullable(),
+        }),
+      }),
+    )
+    .min(1)
+    .max(5000),
+});
+
+async function applyCsvPeople(session: Session, raw: unknown): Promise<Response> {
+  const payload = PeoplePayloadSchema.safeParse(raw);
+  if (!payload.success) {
+    return NextResponse.json({ error: 'malformed_proposal' }, { status: 400 });
+  }
+  const { rows } = payload.data;
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      let created = 0;
+      let updated = 0;
+      for (const row of rows) {
+        const d = row.data;
+        if (row.action === 'create') {
+          await tx.person.create({
+            data: {
+              email: d.email,
+              firstName: d.firstName,
+              lastName: d.lastName,
+              initials: d.initials,
+              band: d.band,
+              level: d.level,
+              employment: d.employment,
+              roles: d.roles,
+              rate: d.rate,
+              rateUnit: d.rateUnit,
+              whatsappNumber: d.whatsappNumber,
+              region: d.region,
+              startDate: d.startDate,
+              endDate: d.endDate,
+            },
+          });
+          created += 1;
+        } else {
+          await tx.person.update({
+            where: { email: d.email },
+            data: {
+              firstName: d.firstName,
+              lastName: d.lastName,
+              initials: d.initials,
+              band: d.band,
+              level: d.level,
+              employment: d.employment,
+              roles: d.roles,
+              rate: d.rate,
+              rateUnit: d.rateUnit,
+              whatsappNumber: d.whatsappNumber,
+              region: d.region,
+              startDate: d.startDate,
+              endDate: d.endDate,
+            },
+          });
+          updated += 1;
+        }
+        await writeAudit(tx, {
+          actor: { type: 'person', id: session.person.id },
+          action: row.action === 'create' ? 'created' : 'updated',
+          entity: {
+            type: 'person',
+            id: d.email,
+            after: { csvImport: true, email: d.email } as never,
+          },
+          source: 'agent',
+        });
+      }
+      return { created, updated };
+    });
+    return NextResponse.json({ ok: true, mode: 'csv_people', created: result.created, updated: result.updated });
+  } catch (err) {
+    console.error('[reconcile/confirm] csv people failed:', err);
+    return NextResponse.json({ error: 'csv_apply_failed' }, { status: 500 });
+  }
+}
+
+// ── CSV — timesheets (write-once create) ──────────────────────────────
+const TimesheetsPayloadSchema = z.object({
+  rows: z
+    .array(
+      z.object({
+        personId: z.string().min(1),
+        projectId: z.string().min(1),
+        dateISO: z.string(),
+        hours: z.number().min(0.5).max(24),
+        description: z.string().max(300).default(''),
+      }),
+    )
+    .min(1)
+    .max(5000),
+});
+
+async function applyCsvTimesheets(session: Session, raw: unknown): Promise<Response> {
+  const payload = TimesheetsPayloadSchema.safeParse(raw);
+  if (!payload.success) {
+    return NextResponse.json({ error: 'malformed_proposal' }, { status: 400 });
+  }
+  const { rows } = payload.data;
+  const now = new Date();
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // Ensure every (person, project) pair has a ProjectTeam row so
+      // resourcing surfaces register the imported hours — same
+      // behaviour as saveTimesheet (resource-planning checks team
+      // membership, not just timesheet entries).
+      const seen = new Set<string>();
+      for (const r of rows) {
+        const key = `${r.personId}|${r.projectId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        await tx.projectTeam.upsert({
+          where: { projectId_personId: { projectId: r.projectId, personId: r.personId } },
+          create: {
+            projectId: r.projectId,
+            personId: r.personId,
+            roleOnProject: 'Imported via reconcile CSV',
+            allocationPct: 0,
+          },
+          update: {},
+        });
+      }
+      let created = 0;
+      for (const r of rows) {
+        await tx.timesheetEntry.create({
+          data: {
+            personId: r.personId,
+            projectId: r.projectId,
+            date: new Date(r.dateISO),
+            hours: r.hours,
+            description: r.description,
+            // Super-admin imports are pre-approved historical entries
+            // — same semantics as the manual /admin/import/timesheets
+            // flow + saveTimesheet's super-admin auto-approve path.
+            status: 'approved',
+            approvedById: session.person.id,
+            approvedAt: now,
+          },
+        });
+        created += 1;
+      }
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'created',
+        entity: {
+          type: 'timesheet_csv_import',
+          id: now.toISOString(),
+          after: { rows: created, source: 'reconcile_csv' } as never,
+        },
+        source: 'agent',
+      });
+      return { created };
+    });
+    return NextResponse.json({ ok: true, mode: 'csv_timesheets', created: result.created });
+  } catch (err) {
+    console.error('[reconcile/confirm] csv timesheets failed:', err);
     return NextResponse.json({ error: 'csv_apply_failed' }, { status: 500 });
   }
 }

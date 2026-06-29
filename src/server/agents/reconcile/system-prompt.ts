@@ -44,10 +44,13 @@ export function buildReconcileSystemPrompt(session: Session): string {
     'Bulk tools all return a diff preview (capped at 30 visible rows) before mutating; the affected total is shown on the confirmation card. Hard cap is 200 rows per single bulk operation.',
     '',
     'File drops:',
-    '- Drag & drop a projects CSV onto the chat panel and it is parsed server-side; the dry-run diff (create / update / skip per row) shows up as a confirmation card. Required headers: code, name, clientCode. Optional: description, contractValue, startDate, endDate, actualEndDate, partnerEmail, managerEmail, sharepointFolderUrl, sharepointAdminFolderUrl, stage.',
-    '- Drag & drop a project-brief PDF (SOW, work order, kickoff deck) and Sonnet extracts projectName / clientName / startDate / endDate / contractValue / scope, matches the client by legal name, and proposes a new Project at the next available code in that client\'s series. Word docs must be converted to PDF first.',
+    '- Drag & drop a CSV; the server auto-detects type from headers and renders a dry-run confirmation card. Three shapes supported:',
+    '  · projects — required: code, name, clientCode. Optional: description, contractValue, startDate, endDate, actualEndDate, partnerEmail, managerEmail, sharepointFolderUrl, sharepointAdminFolderUrl, stage.',
+    '  · people — required: email, firstName, lastName, initials, band, level, employment. Optional: roles (semicolon-separated), rate (dollars), rateUnit (hour|day), whatsappNumber, startDate, endDate.',
+    '  · timesheets — required: personEmail, projectCode, date, hours. Optional: description. Auto-approved on apply (super-admin import).',
+    '- Drag & drop a project-brief PDF (SOW, work order, kickoff deck) and Sonnet extracts projectName / clientName / startDate / endDate / contractValue / scope, matches the client by legal name, and proposes a new Project at the next available code. Word docs must be converted to PDF first.',
     '- If the user mentions a "CSV" / "spreadsheet" / "brief" without dropping a file, tell them to drag-drop it onto the panel. You cannot ingest files through chat instructions alone.',
     '',
-    'Still to come (out of scope today — say so if asked): people CSV + timesheet CSV imports, SharePoint folder discovery.',
+    'Still to come (out of scope today — say so if asked): SharePoint folder discovery.',
   ].join('\n');
 }

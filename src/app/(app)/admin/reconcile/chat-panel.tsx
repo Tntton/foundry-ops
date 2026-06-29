@@ -165,11 +165,15 @@ export function ReconcileChatPanel({
       const surface = turn.proposal.surface;
       const kind = surface === 'reconcile_csv_projects'
         ? 'reconcile_csv_projects'
-        : surface === 'reconcile_brief'
-          ? 'reconcile_brief'
-          : surface.startsWith('reconcile_bulk')
-            ? 'reconcile_bulk'
-            : 'reconcile_update';
+        : surface === 'reconcile_csv_people'
+          ? 'reconcile_csv_people'
+          : surface === 'reconcile_csv_timesheets'
+            ? 'reconcile_csv_timesheets'
+            : surface === 'reconcile_brief'
+              ? 'reconcile_brief'
+              : surface.startsWith('reconcile_bulk')
+                ? 'reconcile_bulk'
+                : 'reconcile_update';
       const res = await fetch('/api/reconcile/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -254,7 +258,9 @@ export function ReconcileChatPanel({
     try {
       const fd = new FormData();
       fd.append('file', file);
-      fd.append('type', isPdf ? 'brief' : 'projects');
+      // CSV type auto-detected server-side from the header row; PDFs go
+      // through the brief extractor.
+      fd.append('type', isPdf ? 'brief' : 'auto');
       const res = await fetch('/api/reconcile/import', { method: 'POST', body: fd });
       const data = (await res.json()) as
         | {
