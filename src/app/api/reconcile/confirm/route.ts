@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
-import { hasAnyRole } from '@/server/roles';
-import { writeAudit, computeDelta } from '@/server/audit';
+import { hasAnyRole, type Session } from '@/server/roles';
+import { writeAudit } from '@/server/audit';
 import { verifyPrefillToken } from '@/server/agents/assistant/prefill/token';
 
 export const dynamic = 'force-dynamic';
@@ -11,10 +11,11 @@ export const runtime = 'nodejs';
 
 const BodySchema = z.object({
   token: z.string().min(1),
-  kind: z.enum(['reconcile_update']),
+  kind: z.enum(['reconcile_update', 'reconcile_bulk']),
 });
 
-const PayloadSchema = z.object({
+// ── Single-row update payload ────────────────────────────────────────
+const UpdatePayloadSchema = z.object({
   entityType: z.enum(['project']),
   entityId: z.string().min(1),
   field: z.enum([
@@ -34,12 +35,7 @@ const PayloadSchema = z.object({
 const STAGES = ['kickoff', 'delivery', 'closing', 'archived', 'standing', 'benched'] as const;
 type Stage = (typeof STAGES)[number];
 
-/**
- * Coerce the raw string back into a typed value. Kept here (not shared
- * with the propose tool) so the confirm endpoint is the single source
- * of truth for what actually lands in the DB.
- */
-function coerce(field: z.infer<typeof PayloadSchema>['field'], raw: string):
+function coerce(field: z.infer<typeof UpdatePayloadSchema>['field'], raw: string):
   | { ok: true; value: unknown }
   | { ok: false; reason: string } {
   const v = raw.trim();
@@ -67,10 +63,36 @@ function coerce(field: z.infer<typeof PayloadSchema>['field'], raw: string):
   return { ok: true, value: v };
 }
 
+// ── Bulk payload ─────────────────────────────────────────────────────
+const BulkPayloadSchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('archive_stale'),
+    cutoffIso: z.string(),
+    projectIds: z.array(z.string()).min(1).max(500),
+  }),
+  z.object({
+    mode: z.literal('reconcile_actual_end'),
+    source: z.enum(['today', 'endDate']),
+    projectIds: z.array(z.string()).min(1).max(500),
+  }),
+  z.object({
+    mode: z.literal('reassign_lead'),
+    role: z.enum(['primaryPartner', 'manager']),
+    assigneeId: z.string().min(1),
+    projectIds: z.array(z.string()).min(1).max(500),
+  }),
+  z.object({
+    mode: z.literal('stage_transition'),
+    toStage: z.enum(STAGES),
+    projectIds: z.array(z.string()).min(1).max(500),
+  }),
+]);
+type BulkPayload = z.infer<typeof BulkPayloadSchema>;
+
 /**
- * POST /api/reconcile/confirm — applies a propose_update_project change
- * after verifying the signed token. Super-admin-gated. Writes an
- * AuditEvent capturing before/after for the field.
+ * POST /api/reconcile/confirm — verifies a reconcile_update or
+ * reconcile_bulk token and applies the underlying mutation inside a
+ * transaction with per-row audit. Super-admin gated.
  */
 export async function POST(req: Request): Promise<Response> {
   const session = await getSession();
@@ -115,19 +137,23 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  const payloadCheck = PayloadSchema.safeParse(verify.payload.payload);
-  if (!payloadCheck.success) {
+  if (parsed.data.kind === 'reconcile_update') {
+    return applySingleUpdate(session, verify.payload.payload);
+  }
+  return applyBulk(session, verify.payload.payload);
+}
+
+async function applySingleUpdate(session: Session, raw: unknown): Promise<Response> {
+  const payload = UpdatePayloadSchema.safeParse(raw);
+  if (!payload.success) {
     return NextResponse.json({ error: 'malformed_proposal' }, { status: 400 });
   }
-  const { entityType, entityId, field, valueRaw } = payloadCheck.data;
-
+  const { entityType, entityId, field, valueRaw } = payload.data;
   const coerced = coerce(field, valueRaw);
   if (!coerced.ok) {
     return NextResponse.json({ error: 'invalid_value', message: coerced.reason }, { status: 400 });
   }
-
   if (entityType !== 'project') {
-    // Other entity types arrive in follow-up commits.
     return NextResponse.json({ error: 'unsupported_entity' }, { status: 400 });
   }
 
@@ -143,10 +169,7 @@ export async function POST(req: Request): Promise<Response> {
         },
       });
       if (!before) throw new Error('project_not_found');
-
       const beforeVal = (before as Record<string, unknown>)[field];
-      // Prisma will reject illegal cross-type assignments, e.g. setting
-      // contractValue to a Date — coerce above already constrains this.
       const updated = await tx.project.update({
         where: { id: entityId },
         data: { [field]: coerced.value } as Record<string, unknown>,
@@ -163,7 +186,6 @@ export async function POST(req: Request): Promise<Response> {
         },
         source: 'agent',
       });
-      void computeDelta; // imported for symmetry; not used directly here
       return updated;
     });
     return NextResponse.json({
@@ -176,7 +198,94 @@ export async function POST(req: Request): Promise<Response> {
     if (msg === 'project_not_found') {
       return NextResponse.json({ error: 'project_not_found' }, { status: 404 });
     }
-    console.error('[reconcile/confirm] failed:', err);
+    console.error('[reconcile/confirm] single failed:', err);
     return NextResponse.json({ error: 'update_failed' }, { status: 500 });
+  }
+}
+
+async function applyBulk(session: Session, raw: unknown): Promise<Response> {
+  const payload = BulkPayloadSchema.safeParse(raw);
+  if (!payload.success) {
+    return NextResponse.json({ error: 'malformed_proposal' }, { status: 400 });
+  }
+  const p: BulkPayload = payload.data;
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // Re-fetch the affected rows so we audit a real "before" snapshot,
+      // not the (potentially stale) snapshot the propose tool captured.
+      const rows = await tx.project.findMany({
+        where: { id: { in: p.projectIds } },
+        select: {
+          id: true, code: true, stage: true, endDate: true,
+          actualEndDate: true, primaryPartnerId: true, managerId: true,
+        },
+      });
+      if (rows.length === 0) {
+        throw new Error('no_rows');
+      }
+      let updatedCount = 0;
+      for (const row of rows) {
+        const data: Record<string, unknown> = {};
+        const before: Record<string, unknown> = {};
+        const after: Record<string, unknown> = {};
+
+        if (p.mode === 'archive_stale') {
+          if (row.stage === 'archived') continue;
+          before.stage = row.stage;
+          after.stage = 'archived';
+          data.stage = 'archived';
+        } else if (p.mode === 'reconcile_actual_end') {
+          if (row.actualEndDate !== null) continue;
+          const value = p.source === 'today' ? new Date() : row.endDate;
+          if (!value) continue;
+          before.actualEndDate = null;
+          after.actualEndDate = value;
+          data.actualEndDate = value;
+        } else if (p.mode === 'reassign_lead') {
+          const field = p.role === 'primaryPartner' ? 'primaryPartnerId' : 'managerId';
+          const currentId = row[field as 'primaryPartnerId' | 'managerId'];
+          if (currentId === p.assigneeId) continue;
+          before[field] = currentId;
+          after[field] = p.assigneeId;
+          data[field] = p.assigneeId;
+        } else if (p.mode === 'stage_transition') {
+          if (row.stage === p.toStage) continue;
+          before.stage = row.stage;
+          after.stage = p.toStage;
+          data.stage = p.toStage;
+        }
+
+        if (Object.keys(data).length === 0) continue;
+
+        await tx.project.update({ where: { id: row.id }, data });
+        await writeAudit(tx, {
+          actor: { type: 'person', id: session.person.id },
+          action: 'updated',
+          entity: {
+            type: 'project',
+            id: row.id,
+            before: before as never,
+            after: { ...(after as Record<string, unknown>), bulkMode: p.mode } as never,
+          },
+          source: 'agent',
+        });
+        updatedCount += 1;
+      }
+      return { updatedCount, totalCandidates: rows.length };
+    });
+    return NextResponse.json({
+      ok: true,
+      mode: p.mode,
+      updated: result.updatedCount,
+      total: result.totalCandidates,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'bulk_failed';
+    if (msg === 'no_rows') {
+      return NextResponse.json({ error: 'no_rows' }, { status: 404 });
+    }
+    console.error('[reconcile/confirm] bulk failed:', err);
+    return NextResponse.json({ error: 'bulk_failed' }, { status: 500 });
   }
 }

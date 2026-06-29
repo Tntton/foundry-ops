@@ -161,10 +161,16 @@ export function ReconcileChatPanel({
       ),
     );
     try {
+      // Surface name encodes whether this is a single-row update or a
+      // bulk operation — bulk surfaces start with reconcile_bulk_*.
+      const isBulk = turn.proposal.surface.startsWith('reconcile_bulk');
       const res = await fetch('/api/reconcile/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: turn.proposal.token, kind: 'reconcile_update' }),
+        body: JSON.stringify({
+          token: turn.proposal.token,
+          kind: isBulk ? 'reconcile_bulk' : 'reconcile_update',
+        }),
       });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string; error?: string };
       if (res.ok && data.ok) {

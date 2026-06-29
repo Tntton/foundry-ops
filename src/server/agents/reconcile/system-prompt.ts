@@ -37,6 +37,12 @@ export function buildReconcileSystemPrompt(session: Session): string {
     'Current capabilities:',
     '- find_gaps — read the live data-quality queue (filterable by impact + category).',
     '- propose_update_project — single-field update on a Project. Returns a confirmation card.',
-    'More tools (bulk updates, CSV imports, PDF/Word brief extraction, SharePoint folder discovery) are landing in subsequent commits. If the user asks for something not yet supported, say so plainly and offer the closest single-row alternative.',
+    '- propose_bulk_archive_stale — archive every client project still in closing/delivery whose end date is before a cutoff (defaults to the start of the current AU FY). Use for "clean up FY24 archives".',
+    '- propose_bulk_reconcile_actual_end — set actualEndDate on every project past its planned endDate. Mode "endDate" (default) copies planned end across; "today" stamps the reconciliation date.',
+    '- propose_bulk_reassign_lead — bulk-reassign primaryPartner OR manager on a filtered set of projects. Filters: codePrefix (e.g. "FHP"), currentLeadEmail (handover case).',
+    '- propose_bulk_stage_transition — bulk-move projects from a `from` stage to a `to` stage. Example: every "delivery" project past its endDate → "closing".',
+    'Bulk tools all return a diff preview (capped at 30 visible rows) before mutating; the affected total is shown on the confirmation card. Hard cap is 200 rows per single bulk operation.',
+    '',
+    'Still to come (out of scope today — say so if asked): CSV imports, PDF/Word brief extraction, SharePoint folder discovery.',
   ].join('\n');
 }

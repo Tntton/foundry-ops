@@ -5,6 +5,12 @@ import { hasAnyRole } from '@/server/roles';
 import type { ToolContext, ToolDefinition, AnthropicTool } from './types';
 import { findGaps } from './find-gaps';
 import { proposeUpdateProject } from './propose-update-project';
+import {
+  proposeBulkArchiveStale,
+  proposeBulkReconcileActualEnd,
+  proposeBulkReassignLead,
+  proposeBulkStageTransition,
+} from './propose-bulk-projects';
 
 /**
  * Reconcile-assistant tool registry. Every tool is super-admin gated
@@ -16,6 +22,10 @@ import { proposeUpdateProject } from './propose-update-project';
 const ALL_TOOLS: readonly ToolDefinition[] = [
   findGaps,
   proposeUpdateProject,
+  proposeBulkArchiveStale,
+  proposeBulkReconcileActualEnd,
+  proposeBulkReassignLead,
+  proposeBulkStageTransition,
 ];
 
 export function reconcileToolSpecs(): AnthropicTool[] {
