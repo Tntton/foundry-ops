@@ -161,16 +161,15 @@ export function ReconcileChatPanel({
       ),
     );
     try {
-      // Surface name encodes the kind:
-      //   reconcile_bulk_*           → bulk update
-      //   reconcile_csv_projects     → CSV projects import
-      //   anything else              → single-row update
+      // Surface name encodes the confirm kind.
       const surface = turn.proposal.surface;
       const kind = surface === 'reconcile_csv_projects'
         ? 'reconcile_csv_projects'
-        : surface.startsWith('reconcile_bulk')
-          ? 'reconcile_bulk'
-          : 'reconcile_update';
+        : surface === 'reconcile_brief'
+          ? 'reconcile_brief'
+          : surface.startsWith('reconcile_bulk')
+            ? 'reconcile_bulk'
+            : 'reconcile_update';
       const res = await fetch('/api/reconcile/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -225,12 +224,25 @@ export function ReconcileChatPanel({
     );
   }
 
-  async function onCsvUpload(file: File) {
-    if (file.size > 2 * 1024 * 1024) {
+  async function onFileUpload(file: File) {
+    // Route by extension. PDF → brief extractor. CSV → projects importer.
+    const name = file.name.toLowerCase();
+    const isPdf = file.type === 'application/pdf' || name.endsWith('.pdf');
+    const isCsv = file.type === 'text/csv' || name.endsWith('.csv');
+    if (!isPdf && !isCsv) {
       setTurns((prev) => [
         ...prev,
         { role: 'user', text: `(dropped ${file.name})` },
-        { role: 'assistant', text: 'File too large — CSV must be ≤ 2MB.' },
+        { role: 'assistant', text: 'Unsupported file type. Drop a CSV (projects) or a PDF (project brief). Word docs need to be converted to PDF first.' },
+      ]);
+      return;
+    }
+    const maxBytes = isPdf ? 8 * 1024 * 1024 : 2 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      setTurns((prev) => [
+        ...prev,
+        { role: 'user', text: `(dropped ${file.name})` },
+        { role: 'assistant', text: `File too large — ${isPdf ? 'PDFs' : 'CSVs'} must be ≤ ${Math.round(maxBytes / 1024 / 1024)}MB.` },
       ]);
       return;
     }
@@ -242,7 +254,7 @@ export function ReconcileChatPanel({
     try {
       const fd = new FormData();
       fd.append('file', file);
-      fd.append('type', 'projects');
+      fd.append('type', isPdf ? 'brief' : 'projects');
       const res = await fetch('/api/reconcile/import', { method: 'POST', body: fd });
       const data = (await res.json()) as
         | {
@@ -288,7 +300,7 @@ export function ReconcileChatPanel({
   function onDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
-    if (file) void onCsvUpload(file);
+    if (file) void onFileUpload(file);
   }
 
   return (
@@ -306,7 +318,7 @@ export function ReconcileChatPanel({
             Plain-text the question — e.g. <em>&ldquo;what should I fix first?&rdquo;</em> or
             <em> &ldquo;set the contract value on FHP002 to 50000&rdquo;</em>.
             <br />
-            Drag &amp; drop a projects CSV anywhere on this panel to import.
+            Drag &amp; drop a projects CSV or a project-brief PDF anywhere on this panel.
           </p>
         ) : (
           turns.map((t, i) => (

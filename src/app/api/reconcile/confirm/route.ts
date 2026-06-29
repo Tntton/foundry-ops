@@ -11,7 +11,7 @@ export const runtime = 'nodejs';
 
 const BodySchema = z.object({
   token: z.string().min(1),
-  kind: z.enum(['reconcile_update', 'reconcile_bulk', 'reconcile_csv_projects']),
+  kind: z.enum(['reconcile_update', 'reconcile_bulk', 'reconcile_csv_projects', 'reconcile_brief']),
 });
 
 // ── Single-row update payload ────────────────────────────────────────
@@ -143,7 +143,10 @@ export async function POST(req: Request): Promise<Response> {
   if (parsed.data.kind === 'reconcile_bulk') {
     return applyBulk(session, verify.payload.payload);
   }
-  return applyCsvProjects(session, verify.payload.payload);
+  if (parsed.data.kind === 'reconcile_csv_projects') {
+    return applyCsvProjects(session, verify.payload.payload);
+  }
+  return applyBrief(session, verify.payload.payload);
 }
 
 async function applySingleUpdate(session: Session, raw: unknown): Promise<Response> {
@@ -306,6 +309,91 @@ async function applyCsvProjects(session: Session, raw: unknown): Promise<Respons
   } catch (err) {
     console.error('[reconcile/confirm] csv projects failed:', err);
     return NextResponse.json({ error: 'csv_apply_failed' }, { status: 500 });
+  }
+}
+
+// ── Brief — creates a new Project from a PDF extraction ────────────────
+const BriefPayloadSchema = z.object({
+  clientId: z.string().min(1),
+  clientCode: z.string().min(1),
+  projectName: z.string().min(1),
+  scopeSummary: z.string().nullable(),
+  startDate: z.string().nullable(),
+  endDate: z.string().nullable(),
+  contractValueCents: z.number().int().nonnegative(),
+  primaryPartnerId: z.string().min(1),
+  managerId: z.string().min(1),
+});
+
+/**
+ * Allocate the next free `<clientCode>NNN` project code. Bumps off
+ * the max existing suffix so concurrent creates are still unique (DB
+ * unique constraint on `code` is the real backstop).
+ */
+async function nextProjectCode(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  clientCode: string,
+): Promise<string> {
+  const existing = await tx.project.findMany({
+    where: { code: { startsWith: clientCode } },
+    select: { code: true },
+  });
+  let max = 0;
+  for (const p of existing) {
+    const m = new RegExp(`^${clientCode}(\\d{3,})$`).exec(p.code);
+    if (m) {
+      const n = Number(m[1]);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+  }
+  const next = max + 1;
+  return `${clientCode}${next.toString().padStart(3, '0')}`;
+}
+
+async function applyBrief(session: Session, raw: unknown): Promise<Response> {
+  const payload = BriefPayloadSchema.safeParse(raw);
+  if (!payload.success) {
+    return NextResponse.json({ error: 'malformed_proposal' }, { status: 400 });
+  }
+  const p = payload.data;
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const code = await nextProjectCode(tx, p.clientCode);
+      const created = await tx.project.create({
+        data: {
+          code,
+          clientId: p.clientId,
+          name: p.projectName,
+          description: p.scopeSummary,
+          contractValue: p.contractValueCents,
+          startDate: p.startDate ? new Date(p.startDate) : null,
+          endDate: p.endDate ? new Date(p.endDate) : null,
+          primaryPartnerId: p.primaryPartnerId,
+          managerId: p.managerId,
+          stage: 'kickoff',
+        },
+        select: { id: true, code: true },
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'created',
+        entity: {
+          type: 'project',
+          id: created.id,
+          after: { code: created.code, source: 'brief_extraction' } as never,
+        },
+        source: 'agent',
+      });
+      return created;
+    });
+    return NextResponse.json({
+      ok: true,
+      mode: 'brief',
+      project: { id: result.id, code: result.code },
+    });
+  } catch (err) {
+    console.error('[reconcile/confirm] brief failed:', err);
+    return NextResponse.json({ error: 'brief_apply_failed' }, { status: 500 });
   }
 }
 

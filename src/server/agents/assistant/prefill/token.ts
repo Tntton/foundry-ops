@@ -40,7 +40,8 @@ export type PrefillKind =
   // an audit row.
   | 'reconcile_update'
   | 'reconcile_bulk'
-  | 'reconcile_csv_projects';
+  | 'reconcile_csv_projects'
+  | 'reconcile_brief';
 
 export type PrefillTokenPayload<T = unknown> = {
   /** Schema version — bump if the wire shape changes incompatibly. */

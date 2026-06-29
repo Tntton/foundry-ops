@@ -1,13 +1,16 @@
 import { NextResponse } from 'next/server';
+import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { signPrefillToken } from '@/server/agents/assistant/prefill/token';
 import { planProjectImport } from '@/server/reconcile/csv-projects';
+import { extractProjectBrief } from '@/server/reconcile/extract-brief';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // 2MB — CSVs are tiny; reject anything that smells like a misclick.
+const MAX_BRIEF_BYTES = 8 * 1024 * 1024; // 8MB — practical ceiling for claude-sonnet PDF vision.
 
 /**
  * POST /api/reconcile/import — multipart upload of a CSV file.
@@ -47,6 +50,83 @@ export async function POST(req: Request): Promise<Response> {
   if (!(file instanceof File)) {
     return NextResponse.json({ error: 'missing_file' }, { status: 400 });
   }
+  // ── Brief (PDF) extraction branch ────────────────────────────────
+  if (type === 'brief') {
+    if (file.size > MAX_BRIEF_BYTES) {
+      return NextResponse.json(
+        { error: 'file_too_large', message: `Brief PDF must be ≤ ${Math.round(MAX_BRIEF_BYTES / 1024 / 1024)}MB.` },
+        { status: 413 },
+      );
+    }
+    const buf = Buffer.from(await file.arrayBuffer());
+    const base64 = buf.toString('base64');
+    const ext = await extractProjectBrief({ base64, mimeType: file.type });
+    if (!ext.ok) {
+      return NextResponse.json({ error: 'extract_failed', message: ext.reason }, { status: 400 });
+    }
+    const b = ext.data;
+    // Try to match the client by legalName (case-insensitive contains).
+    let matchedClient: { id: string; code: string; legalName: string } | null = null;
+    if (b.clientName) {
+      matchedClient = await prisma.client.findFirst({
+        where: {
+          archivedAt: null,
+          legalName: { contains: b.clientName, mode: 'insensitive' },
+        },
+        select: { id: true, code: true, legalName: true },
+      });
+    }
+    if (!matchedClient) {
+      return NextResponse.json({
+        ok: true,
+        kind: 'no_op',
+        message: b.clientName
+          ? `Couldn't match a Client to "${b.clientName}". Create the client first, then re-drop the brief.`
+          : "Brief didn't mention a client name. Create the project manually.",
+        extracted: b,
+      });
+    }
+    const token = signPrefillToken({
+      kind: 'reconcile_brief',
+      personId: session.person.id,
+      payload: {
+        clientId: matchedClient.id,
+        clientCode: matchedClient.code,
+        projectName: b.projectName ?? '(untitled brief)',
+        scopeSummary: b.scopeSummary,
+        startDate: b.startDate,
+        endDate: b.endDate,
+        contractValueCents: b.contractValueDollars !== null ? Math.round(b.contractValueDollars * 100) : 0,
+        primaryPartnerId: session.person.id,
+        managerId: session.person.id,
+      },
+    });
+    return NextResponse.json({
+      ok: true,
+      kind: 'proposal',
+      surface: 'reconcile_brief',
+      token,
+      title: `Create project from brief — ${b.projectName ?? '(untitled)'}`,
+      fields: [
+        { label: 'Client', value: `${matchedClient.code} · ${matchedClient.legalName}` },
+        { label: 'Project name', value: b.projectName ?? '—' },
+        {
+          label: 'Contract value',
+          value: b.contractValueDollars !== null
+            ? `AUD ${b.contractValueDollars.toLocaleString('en-AU')}`
+            : '—',
+        },
+        { label: 'Start', value: b.startDate ?? '—' },
+        { label: 'End', value: b.endDate ?? '—' },
+        ...(b.scopeSummary ? [{ label: 'Scope', value: b.scopeSummary }] : []),
+        { label: 'Confidence', value: `${b.confidence}%` },
+        { label: 'Lead', value: 'You (defaults — change later if needed)' },
+      ],
+      confirmLabel: 'Create project',
+      summary: `Create ${matchedClient.code} project from brief.`,
+    });
+  }
+
   if (file.size > MAX_FILE_BYTES) {
     return NextResponse.json(
       { error: 'file_too_large', message: `CSV must be ≤ ${Math.round(MAX_FILE_BYTES / 1024 / 1024)}MB.` },
