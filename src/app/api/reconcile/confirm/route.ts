@@ -18,6 +18,7 @@ const BodySchema = z.object({
     'reconcile_csv_people',
     'reconcile_csv_timesheets',
     'reconcile_brief',
+    'reconcile_sharepoint_link',
   ]),
 });
 
@@ -159,7 +160,10 @@ export async function POST(req: Request): Promise<Response> {
   if (parsed.data.kind === 'reconcile_csv_timesheets') {
     return applyCsvTimesheets(session, verify.payload.payload);
   }
-  return applyBrief(session, verify.payload.payload);
+  if (parsed.data.kind === 'reconcile_brief') {
+    return applyBrief(session, verify.payload.payload);
+  }
+  return applySharepointLink(session, verify.payload.payload);
 }
 
 async function applySingleUpdate(session: Session, raw: unknown): Promise<Response> {
@@ -509,6 +513,67 @@ async function applyCsvTimesheets(session: Session, raw: unknown): Promise<Respo
   } catch (err) {
     console.error('[reconcile/confirm] csv timesheets failed:', err);
     return NextResponse.json({ error: 'csv_apply_failed' }, { status: 500 });
+  }
+}
+
+// ── SharePoint link — set sharepointFolderUrl + sharepointAdminFolderUrl ──
+const SharepointLinkPayloadSchema = z.object({
+  projectId: z.string().min(1),
+  teamUrl: z.string().nullable(),
+  adminUrl: z.string().nullable(),
+});
+
+async function applySharepointLink(session: Session, raw: unknown): Promise<Response> {
+  const payload = SharepointLinkPayloadSchema.safeParse(raw);
+  if (!payload.success) {
+    return NextResponse.json({ error: 'malformed_proposal' }, { status: 400 });
+  }
+  const p = payload.data;
+  if (!p.teamUrl && !p.adminUrl) {
+    return NextResponse.json({ error: 'no_op_proposal' }, { status: 400 });
+  }
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const before = await tx.project.findUnique({
+        where: { id: p.projectId },
+        select: {
+          id: true, code: true,
+          sharepointFolderUrl: true, sharepointAdminFolderUrl: true,
+        },
+      });
+      if (!before) throw new Error('project_not_found');
+      const data: Record<string, string> = {};
+      if (p.teamUrl) data.sharepointFolderUrl = p.teamUrl;
+      if (p.adminUrl) data.sharepointAdminFolderUrl = p.adminUrl;
+      const updated = await tx.project.update({
+        where: { id: p.projectId },
+        data,
+        select: { id: true, code: true },
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'updated',
+        entity: {
+          type: 'project',
+          id: p.projectId,
+          before: {
+            sharepointFolderUrl: before.sharepointFolderUrl,
+            sharepointAdminFolderUrl: before.sharepointAdminFolderUrl,
+          } as never,
+          after: { ...data, source: 'sharepoint_discovery' } as never,
+        },
+        source: 'agent',
+      });
+      return updated;
+    });
+    return NextResponse.json({ ok: true, mode: 'sharepoint_link', project: result });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'sharepoint_link_failed';
+    if (msg === 'project_not_found') {
+      return NextResponse.json({ error: 'project_not_found' }, { status: 404 });
+    }
+    console.error('[reconcile/confirm] sharepoint link failed:', err);
+    return NextResponse.json({ error: 'sharepoint_link_failed' }, { status: 500 });
   }
 }
 

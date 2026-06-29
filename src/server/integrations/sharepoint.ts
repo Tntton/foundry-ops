@@ -181,6 +181,55 @@ async function getItemByPathOrNull(
   }
 }
 
+/**
+ * Look up the existing SharePoint folders for a project WITHOUT creating
+ * anything. Used by the reconcile assistant to "discover and link" the
+ * folder that's already on the team site — saves the user from pasting
+ * URLs manually for the dozens of legacy projects that were created
+ * outside the app.
+ *
+ * Returns null on either branch if the matching folder doesn't exist
+ * (admin folder is optional in practice). Returns null altogether when
+ * the Graph integration isn't configured.
+ */
+export type DiscoveredFolders = {
+  teamUrl: string | null;
+  adminUrl: string | null;
+  /** True if at least one of the two URLs was found. Callers use this
+   *  to decide whether to surface a "found" proposal vs a "not found"
+   *  no-op message. */
+  anyFound: boolean;
+};
+
+export async function discoverProjectFolders(
+  clientCode: string,
+  clientName: string,
+  projectCode: string,
+): Promise<DiscoveredFolders | null> {
+  if (!graphConfigured()) return null;
+  const siteUrl = optionalEnv('SHAREPOINT_SITE_URL');
+  if (!siteUrl) return null;
+  const siteId = await resolveSiteId(siteUrl);
+  const driveId = await resolveDriveId(siteId);
+  const clientFolderName = `${clientCode} ${clientName}`.trim();
+  const teamRoot =
+    optionalEnv('SHAREPOINT_CLIENTS_ROOT') ??
+    'CORPORATE/TEAM ACCESS/01 Client projects/01 Active clients';
+  const adminRoot = optionalEnv('SHAREPOINT_ADMIN_ROOT');
+
+  const [teamItem, adminItem] = await Promise.all([
+    getItemByPathOrNull(driveId, `${teamRoot}/${clientFolderName}/${projectCode}`),
+    adminRoot
+      ? getItemByPathOrNull(driveId, `${adminRoot}/${clientFolderName}/${projectCode}`)
+      : Promise.resolve(null),
+  ]);
+  return {
+    teamUrl: teamItem?.webUrl ?? null,
+    adminUrl: adminItem?.webUrl ?? null,
+    anyFound: teamItem !== null || adminItem !== null,
+  };
+}
+
 async function waitForCopyCompletion(monitorUrl: string): Promise<void> {
   const timeoutAt = Date.now() + 2 * 60 * 1000; // 2 minutes max
   while (Date.now() < timeoutAt) {

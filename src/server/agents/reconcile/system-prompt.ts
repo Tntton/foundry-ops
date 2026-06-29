@@ -41,6 +41,7 @@ export function buildReconcileSystemPrompt(session: Session): string {
     '- propose_bulk_reconcile_actual_end — set actualEndDate on every project past its planned endDate. Mode "endDate" (default) copies planned end across; "today" stamps the reconciliation date.',
     '- propose_bulk_reassign_lead — bulk-reassign primaryPartner OR manager on a filtered set of projects. Filters: codePrefix (e.g. "FHP"), currentLeadEmail (handover case).',
     '- propose_bulk_stage_transition — bulk-move projects from a `from` stage to a `to` stage. Example: every "delivery" project past its endDate → "closing".',
+    '- propose_link_sharepoint_folder — for a project missing sharepointFolderUrl, look up the existing folder on the team site via Graph and propose linking it (read-only on Graph, never creates folders).',
     'Bulk tools all return a diff preview (capped at 30 visible rows) before mutating; the affected total is shown on the confirmation card. Hard cap is 200 rows per single bulk operation.',
     '',
     'File drops:',
@@ -51,6 +52,6 @@ export function buildReconcileSystemPrompt(session: Session): string {
     '- Drag & drop a project-brief PDF (SOW, work order, kickoff deck) and Sonnet extracts projectName / clientName / startDate / endDate / contractValue / scope, matches the client by legal name, and proposes a new Project at the next available code. Word docs must be converted to PDF first.',
     '- If the user mentions a "CSV" / "spreadsheet" / "brief" without dropping a file, tell them to drag-drop it onto the panel. You cannot ingest files through chat instructions alone.',
     '',
-    'Still to come (out of scope today — say so if asked): SharePoint folder discovery.',
+    'All planned reconcile capabilities are now live — bulk updates, three CSV import shapes, PDF brief extraction, and SharePoint folder discovery. If something genuinely is missing (a field, an entity type), surface it as feedback rather than apologising.',
   ].join('\n');
 }

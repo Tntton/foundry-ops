@@ -11,6 +11,7 @@ import {
   proposeBulkReassignLead,
   proposeBulkStageTransition,
 } from './propose-bulk-projects';
+import { proposeLinkSharepointFolder } from './propose-link-sharepoint';
 
 /**
  * Reconcile-assistant tool registry. Every tool is super-admin gated
@@ -26,6 +27,7 @@ const ALL_TOOLS: readonly ToolDefinition[] = [
   proposeBulkReconcileActualEnd,
   proposeBulkReassignLead,
   proposeBulkStageTransition,
+  proposeLinkSharepointFolder,
 ];
 
 export function reconcileToolSpecs(): AnthropicTool[] {
