@@ -19,6 +19,8 @@ const BodySchema = z.object({
     'reconcile_csv_timesheets',
     'reconcile_brief',
     'reconcile_sharepoint_link',
+    'reconcile_csv_contractor_invoices',
+    'reconcile_csv_opex_bills',
   ]),
 });
 
@@ -162,6 +164,12 @@ export async function POST(req: Request): Promise<Response> {
   }
   if (parsed.data.kind === 'reconcile_brief') {
     return applyBrief(session, verify.payload.payload);
+  }
+  if (parsed.data.kind === 'reconcile_csv_contractor_invoices') {
+    return applyCsvContractorInvoices(session, verify.payload.payload);
+  }
+  if (parsed.data.kind === 'reconcile_csv_opex_bills') {
+    return applyCsvOpexBills(session, verify.payload.payload);
   }
   return applySharepointLink(session, verify.payload.payload);
 }
@@ -512,6 +520,152 @@ async function applyCsvTimesheets(session: Session, raw: unknown): Promise<Respo
     return NextResponse.json({ ok: true, mode: 'csv_timesheets', created: result.created });
   } catch (err) {
     console.error('[reconcile/confirm] csv timesheets failed:', err);
+    return NextResponse.json({ error: 'csv_apply_failed' }, { status: 500 });
+  }
+}
+
+// ── CSV — contractor invoices (write-once, historical aggregates) ────
+const ContractorInvoicesPayloadSchema = z.object({
+  rows: z
+    .array(
+      z.object({
+        personId: z.string().min(1),
+        projectId: z.string().min(1),
+        hours: z.number().nonnegative(),
+        amountExGst: z.number().int().nonnegative(),
+        gst: z.number().int().nonnegative(),
+        periodLabel: z.string(),
+        periodAnchorISO: z.string(),
+        roleOnInvoice: z.string().nullable(),
+        notes: z.string().nullable(),
+      }),
+    )
+    .min(1)
+    .max(5000),
+});
+
+async function applyCsvContractorInvoices(session: Session, raw: unknown): Promise<Response> {
+  const payload = ContractorInvoicesPayloadSchema.safeParse(raw);
+  if (!payload.success) {
+    return NextResponse.json({ error: 'malformed_proposal' }, { status: 400 });
+  }
+  const { rows } = payload.data;
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // Ensure (person, project) is on the team — same reasoning as
+      // the timesheet importer.
+      const seen = new Set<string>();
+      for (const r of rows) {
+        const key = `${r.personId}|${r.projectId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        await tx.projectTeam.upsert({
+          where: { projectId_personId: { projectId: r.projectId, personId: r.personId } },
+          create: {
+            projectId: r.projectId,
+            personId: r.personId,
+            roleOnProject: 'Contractor (historical)',
+            allocationPct: 0,
+          },
+          update: {},
+        });
+      }
+      let created = 0;
+      for (const r of rows) {
+        await tx.contractorInvoice.create({
+          data: {
+            personId: r.personId,
+            projectId: r.projectId,
+            hours: r.hours,
+            amountExGst: r.amountExGst,
+            gst: r.gst,
+            periodLabel: r.periodLabel,
+            periodAnchor: new Date(r.periodAnchorISO),
+            roleOnInvoice: r.roleOnInvoice,
+            notes: r.notes,
+          },
+        });
+        created += 1;
+      }
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'created',
+        entity: {
+          type: 'contractor_invoice_csv_import',
+          id: new Date().toISOString(),
+          after: { rows: created, source: 'reconcile_csv' } as never,
+        },
+        source: 'agent',
+      });
+      return { created };
+    });
+    return NextResponse.json({ ok: true, mode: 'csv_contractor_invoices', created: result.created });
+  } catch (err) {
+    console.error('[reconcile/confirm] contractor invoices failed:', err);
+    return NextResponse.json({ error: 'csv_apply_failed' }, { status: 500 });
+  }
+}
+
+// ── CSV — OPEX bills (write-once, historical) ─────────────────────────
+const OpexBillsPayloadSchema = z.object({
+  rows: z
+    .array(
+      z.object({
+        projectId: z.string().min(1),
+        supplierName: z.string().min(1),
+        category: z.string().min(1),
+        amountTotal: z.number().int(),
+        gst: z.number().int().nonnegative(),
+        issueDateISO: z.string(),
+        dueDateISO: z.string(),
+        notes: z.string().nullable(),
+        status: z.enum(['pending_review', 'approved', 'scheduled_for_payment', 'paid', 'rejected']),
+      }),
+    )
+    .min(1)
+    .max(5000),
+});
+
+async function applyCsvOpexBills(session: Session, raw: unknown): Promise<Response> {
+  const payload = OpexBillsPayloadSchema.safeParse(raw);
+  if (!payload.success) {
+    return NextResponse.json({ error: 'malformed_proposal' }, { status: 400 });
+  }
+  const { rows } = payload.data;
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      let created = 0;
+      for (const r of rows) {
+        await tx.bill.create({
+          data: {
+            supplierName: r.supplierName,
+            receivedVia: 'opex_import',
+            issueDate: new Date(r.issueDateISO),
+            dueDate: new Date(r.dueDateISO),
+            amountTotal: r.amountTotal,
+            gst: r.gst,
+            category: r.category,
+            projectId: r.projectId,
+            status: r.status,
+          },
+        });
+        created += 1;
+      }
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'created',
+        entity: {
+          type: 'opex_bill_csv_import',
+          id: new Date().toISOString(),
+          after: { rows: created, source: 'reconcile_csv' } as never,
+        },
+        source: 'agent',
+      });
+      return { created };
+    });
+    return NextResponse.json({ ok: true, mode: 'csv_opex_bills', created: result.created });
+  } catch (err) {
+    console.error('[reconcile/confirm] opex bills failed:', err);
     return NextResponse.json({ error: 'csv_apply_failed' }, { status: 500 });
   }
 }

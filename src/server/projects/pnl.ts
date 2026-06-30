@@ -9,11 +9,17 @@ export type ProjectPnL = {
   };
   cost: {
     timesheet: number;
+    /** Historical aggregated contractor cost imported from the FY26
+     *  master tracker. Treated as consultant cost for margin purposes.
+     *  Doesn't double-count with `timesheet` — contractor work that
+     *  pre-dates the platform lives here; post-platform lives in
+     *  TimesheetEntry. */
+    contractorInvoice: number;
     expense: number;
     bill: number;
   };
   margin: number; // revenue.invoiced + revenue.wip - total cost
-  hours: number; // total hours logged
+  hours: number; // total hours logged (timesheet + contractor-invoice)
   monthly: MonthlyRow[];
 };
 
@@ -31,7 +37,7 @@ export async function computeProjectPnL(projectId: string): Promise<ProjectPnL> 
   // Fan out — Supabase Pro pool is large enough that parallelizing
   // these 6 reads is the right call. The dashboard calls this per-
   // project so the savings compound.
-  const [project, invoices, expenses, bills, tsEntries, teamRates] = await Promise.all([
+  const [project, invoices, expenses, bills, tsEntries, teamRates, contractorInvoices] = await Promise.all([
     prisma.project.findUniqueOrThrow({
       where: { id: projectId },
       select: { contractValue: true },
@@ -70,6 +76,12 @@ export async function computeProjectPnL(projectId: string): Promise<ProjectPnL> 
       where: { projectId },
       select: { personId: true, customRateCents: true },
     }),
+    // Historical contractor invoices — pre-platform aggregated cost.
+    // Hours + amount already known; no rate-card lookup needed.
+    prisma.contractorInvoice.findMany({
+      where: { projectId },
+      select: { hours: true, amountExGst: true, periodAnchor: true },
+    }),
   ]);
   const customRateByPerson = new Map<string, number>();
   for (const t of teamRates) {
@@ -98,6 +110,11 @@ export async function computeProjectPnL(projectId: string): Promise<ProjectPnL> 
     hours += h;
     timesheetCost += Math.round(h * costRateFor(e.personId, e.person.rate));
   }
+  let contractorInvoiceCost = 0;
+  for (const c of contractorInvoices) {
+    hours += Number(c.hours);
+    contractorInvoiceCost += c.amountExGst;
+  }
 
   const monthlyMap = new Map<string, { revenue: number; cost: number }>();
   function bump(month: string, patch: Partial<{ revenue: number; cost: number }>) {
@@ -121,17 +138,25 @@ export async function computeProjectPnL(projectId: string): Promise<ProjectPnL> 
       ),
     });
   }
+  for (const c of contractorInvoices) {
+    bump(ym(c.periodAnchor), { cost: c.amountExGst });
+  }
   const monthly = Array.from(monthlyMap.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([month, v]) => ({ month, ...v }));
 
-  const totalCost = timesheetCost + expenseCost + billCostExGst;
+  const totalCost = timesheetCost + contractorInvoiceCost + expenseCost + billCostExGst;
   const margin = revInvoiced + revWip - totalCost;
 
   return {
     contractValue: project.contractValue,
     revenue: { invoiced: revInvoiced, wip: revWip, paid: revPaid },
-    cost: { timesheet: timesheetCost, expense: expenseCost, bill: billCostExGst },
+    cost: {
+      timesheet: timesheetCost,
+      contractorInvoice: contractorInvoiceCost,
+      expense: expenseCost,
+      bill: billCostExGst,
+    },
     margin,
     hours,
     monthly,

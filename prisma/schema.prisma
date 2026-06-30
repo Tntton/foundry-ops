@@ -453,6 +453,7 @@ model Person {
   managerOfProjects Project[]    @relation("ProjectManager")
   projectTeamMemberships ProjectTeam[]
   timesheetEntries TimesheetEntry[]
+  contractorInvoices ContractorInvoice[]
   expenses         Expense[]
   approvalsRequested Approval[]  @relation("ApprovalRequestedBy")
   approvalsDecided   Approval[]  @relation("ApprovalDecidedBy")
@@ -688,6 +689,7 @@ model Project {
   team                       ProjectTeam[]
   milestones                 Milestone[]
   timesheetEntries           TimesheetEntry[]
+  contractorInvoices         ContractorInvoice[]
   expenses                   Expense[]
   invoices                   Invoice[]
   bills                      Bill[]
@@ -979,6 +981,48 @@ model TimesheetEntry {
 
   @@index([personId, date])
   @@index([projectId, date])
+}
+
+/// Historical aggregated contractor cost. Ingested from the FY26
+/// master tracker — one row per contractor × project × invoice-period
+/// bucket. The source spreadsheet doesn't have per-day granularity,
+/// so we don't try to fake it as TimesheetEntry rows; we treat the
+/// aggregate as the canonical cost record.
+///
+/// Slots into computeProjectPnL alongside the live timesheet bucket
+/// (cost.contractorInvoice). The convention: TimesheetEntry covers
+/// post-platform work; ContractorInvoice covers pre-platform history.
+/// No de-dup logic — operationally, contractors switch from "logged
+/// on a spreadsheet" to "logged via the app" at a known cutover date.
+///
+/// No FK to a real invoice — TT 2026-06-30 decision: history is
+/// reorganised later if invoice-level precision is ever needed.
+model ContractorInvoice {
+  id              String   @id @default(cuid())
+  personId        String
+  projectId       String
+  hours           Decimal  @db.Decimal(8, 2)
+  /// AUD cents, ex GST. The cost that hits project P&L.
+  amountExGst     Int
+  gst             Int      @default(0)
+  /// Free-text label as it appears in the source ("Jul-25", "23/11/2025",
+  /// "Jul 2025 – Jun 2026", etc.). Not date-parsed — the upstream data
+  /// is too inconsistent to coerce.
+  periodLabel     String
+  /// Anchored to a single Date for month-bucketing in P&L. Best-effort
+  /// parse: a specific date stays as that date; a month bucket lands
+  /// on the 1st of the month; a range lands on the range start.
+  periodAnchor    DateTime @db.Date
+  roleOnInvoice   String?  // e.g. "Senior Manager", "Associate Partner"
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  person          Person   @relation(fields: [personId], references: [id])
+  project         Project  @relation(fields: [projectId], references: [id])
+
+  @@index([projectId, periodAnchor])
+  @@index([personId, periodAnchor])
 }
 
 model Expense {

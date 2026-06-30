@@ -44,7 +44,9 @@ export type PrefillKind =
   | 'reconcile_csv_people'
   | 'reconcile_csv_timesheets'
   | 'reconcile_brief'
-  | 'reconcile_sharepoint_link';
+  | 'reconcile_sharepoint_link'
+  | 'reconcile_csv_contractor_invoices'
+  | 'reconcile_csv_opex_bills';
 
 export type PrefillTokenPayload<T = unknown> = {
   /** Schema version — bump if the wire shape changes incompatibly. */

@@ -6,6 +6,8 @@ import { signPrefillToken } from '@/server/agents/assistant/prefill/token';
 import { planProjectImport } from '@/server/reconcile/csv-projects';
 import { planPeopleImport } from '@/server/reconcile/csv-people';
 import { planTimesheetImport } from '@/server/reconcile/csv-timesheets';
+import { planContractorInvoiceImport } from '@/server/reconcile/csv-contractor-invoices';
+import { planOpexBillImport } from '@/server/reconcile/csv-opex-bills';
 import { extractProjectBrief } from '@/server/reconcile/extract-brief';
 
 export const dynamic = 'force-dynamic';
@@ -151,6 +153,10 @@ export async function POST(req: Request): Promise<Response> {
     const has = (h: string) => headerLine.split(',').map((s) => s.trim()).includes(h);
     if (has('personemail') && has('projectcode') && has('date') && has('hours')) {
       resolvedType = 'timesheets';
+    } else if (has('consultant') && has('projectcode') && has('billablehours') && has('invoicedexgst')) {
+      resolvedType = 'contractor_invoices';
+    } else if (has('chargecode') && has('item') && has('amount')) {
+      resolvedType = 'opex_bills';
     } else if (has('email') && has('firstname') && has('lastname')) {
       resolvedType = 'people';
     } else if (has('code') && has('clientcode')) {
@@ -160,7 +166,7 @@ export async function POST(req: Request): Promise<Response> {
         {
           error: 'unknown_csv_shape',
           message:
-            'Could not auto-detect CSV type. Expected one of: projects (code, clientCode, …), people (email, firstName, lastName, …), or timesheets (personEmail, projectCode, date, hours).',
+            'Could not auto-detect CSV type. Expected one of: projects (code, clientCode, …), people (email, firstName, lastName, …), timesheets (personEmail, projectCode, date, hours), contractor invoices (consultant, projectCode, billableHours, invoicedExGst), or OPEX bills (chargeCode, item, amount).',
         },
         { status: 400 },
       );
@@ -326,8 +332,116 @@ export async function POST(req: Request): Promise<Response> {
     });
   }
 
+  if (resolvedType === 'contractor_invoices') {
+    const result = await planContractorInvoiceImport(text);
+    if (!result.ok) {
+      return NextResponse.json({ error: 'parse_failed', message: result.error }, { status: 400 });
+    }
+    const { plan } = result;
+    const { create, skip, total } = plan.counts;
+    if (create === 0) {
+      return NextResponse.json({
+        ok: true,
+        kind: 'no_op',
+        message: `Parsed ${total} rows but nothing to write — ${skip} skipped. Common cause: people CSV not yet imported.`,
+        plan,
+      });
+    }
+    const writable = plan.rows.filter((r): r is typeof r & { data: NonNullable<typeof r.data> } =>
+      r.action === 'create' && r.data !== undefined,
+    );
+    const token = signPrefillToken({
+      kind: 'reconcile_csv_contractor_invoices',
+      personId: session.person.id,
+      payload: {
+        rows: writable.map((r) => ({
+          ...r.data,
+          periodAnchorISO: r.data.periodAnchor.toISOString(),
+        })).map(({ periodAnchor: _pa, ...rest }) => rest),
+      },
+    });
+    const PREVIEW = 25;
+    return NextResponse.json({
+      ok: true,
+      kind: 'proposal',
+      surface: 'reconcile_csv_contractor_invoices',
+      token,
+      title: `Import ${create} contractor invoices`,
+      fields: [
+        { label: 'Parsed', value: `${total} rows` },
+        { label: 'Create', value: String(create) },
+        ...(skip > 0 ? [{ label: 'Skip', value: String(skip) }] : []),
+        { label: 'Total hours', value: plan.totals.hours.toLocaleString('en-AU') },
+        { label: 'Total ex-GST', value: `AUD ${(plan.totals.amountExGst / 100).toLocaleString('en-AU')}` },
+        ...plan.rows.slice(0, PREVIEW).map((r) => ({
+          label: `${r.action} · row ${r.lineNo}`,
+          value: r.note,
+        })),
+        ...(plan.rows.length > PREVIEW
+          ? [{ label: '…', value: `${plan.rows.length - PREVIEW} more rows not shown` }]
+          : []),
+      ],
+      confirmLabel: `Write ${create}`,
+      summary: `Contractor invoices: ${create} create, ${skip} skip. Lands in project P&L as consultant cost.`,
+    });
+  }
+
+  if (resolvedType === 'opex_bills') {
+    const result = await planOpexBillImport(text);
+    if (!result.ok) {
+      return NextResponse.json({ error: 'parse_failed', message: result.error }, { status: 400 });
+    }
+    const { plan } = result;
+    const { create, skip, total } = plan.counts;
+    if (create === 0) {
+      return NextResponse.json({
+        ok: true,
+        kind: 'no_op',
+        message: `Parsed ${total} rows but nothing to write — ${skip} skipped.`,
+        plan,
+      });
+    }
+    const writable = plan.rows.filter((r): r is typeof r & { data: NonNullable<typeof r.data> } =>
+      r.action === 'create' && r.data !== undefined,
+    );
+    const token = signPrefillToken({
+      kind: 'reconcile_csv_opex_bills',
+      personId: session.person.id,
+      payload: {
+        rows: writable.map((r) => ({
+          ...r.data,
+          issueDateISO: r.data.issueDate.toISOString(),
+          dueDateISO: r.data.dueDate.toISOString(),
+        })).map(({ issueDate: _id, dueDate: _dd, ...rest }) => rest),
+      },
+    });
+    const PREVIEW = 25;
+    return NextResponse.json({
+      ok: true,
+      kind: 'proposal',
+      surface: 'reconcile_csv_opex_bills',
+      token,
+      title: `Import ${create} OPEX bills`,
+      fields: [
+        { label: 'Parsed', value: `${total} rows` },
+        { label: 'Create', value: String(create) },
+        ...(skip > 0 ? [{ label: 'Skip', value: String(skip) }] : []),
+        { label: 'Total amount', value: `AUD ${(plan.totals.amount / 100).toLocaleString('en-AU')}` },
+        ...plan.rows.slice(0, PREVIEW).map((r) => ({
+          label: `${r.action} · row ${r.lineNo}`,
+          value: r.note,
+        })),
+        ...(plan.rows.length > PREVIEW
+          ? [{ label: '…', value: `${plan.rows.length - PREVIEW} more rows not shown` }]
+          : []),
+      ],
+      confirmLabel: `Write ${create}`,
+      summary: `OPEX bills: ${create} create, ${skip} skip. Marked paid; cross-references project codes from charge codes.`,
+    });
+  }
+
   return NextResponse.json(
-    { error: 'unsupported_type', message: `Type "${type}" not supported. Use projects | people | timesheets | brief.` },
+    { error: 'unsupported_type', message: `Type "${type}" not supported. Use projects | people | timesheets | contractor_invoices | opex_bills | brief.` },
     { status: 400 },
   );
 }
