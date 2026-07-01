@@ -55,6 +55,25 @@ export type FirmPnL = {
     hours: number;
   };
   monthly: MonthlyRollup[];
+  /** All-time totals, unaffected by any FY filter — surfaces as the
+   *  "firm earnings to date" tile. Computed inside the same helper so
+   *  callers get one round-trip. */
+  cumulative: {
+    /** Sum of every invoice ex-GST, regardless of status or date. */
+    revenueCents: number;
+    /** Sum of every payment received (paymentReceivedAmount). */
+    receivedCents: number;
+    /** Sum of every project's contract value. Includes archived. */
+    contractsWonCents: number;
+  };
+};
+
+export type FirmPnLOpts = {
+  /** Inclusive lower bound on the date fields (issueDate / date /
+   *  periodAnchor) for filtering by FY. Omit for all-time. */
+  from?: Date;
+  /** Exclusive upper bound. */
+  to?: Date;
 };
 
 function ym(d: Date): string {
@@ -65,16 +84,31 @@ function ym(d: Date): string {
  * Firm-wide P&L aggregated across every project. Reuses the same accounting
  * logic as the project-level computeProjectPnL (Person.rate for timesheet
  * cost, approved bills ex GST, etc.) but runs a single query per kind and
- * rolls up. Archived projects are included — their history still counts for
- * lifetime margin.
+ * rolls up.
+ *
+ * Optional `opts.from` / `opts.to` narrow every date-anchored input
+ * (invoices, expenses, bills, timesheets, contractor invoices) to a
+ * half-open [from, to) window — used by the /pnl FY selector. When
+ * omitted, all-time.
+ *
+ * `cumulative` totals always ignore the window — they're the "firm
+ * earnings to date" figure surfaced on the page's top tile.
  */
-export async function computeFirmPnL(): Promise<FirmPnL> {
+export async function computeFirmPnL(opts?: FirmPnLOpts): Promise<FirmPnL> {
+  const dateWindow = opts?.from && opts?.to
+    ? { gte: opts.from, lt: opts.to }
+    : opts?.from
+      ? { gte: opts.from }
+      : opts?.to
+        ? { lt: opts.to }
+        : undefined;
+  const hasWindow = dateWindow !== undefined;
   // Hide the firm-overhead expense buckets (FHB000 / FHO000 / FHX000)
   // from firm P&L roll-ups — they distort margin numbers because they
   // have zero contract value but accrue cost. Internal FH projects
   // (FHP*) keep showing.
   const BUCKET_CODES = ['FHB000', 'FHO000', 'FHX000'];
-  const [projects, bucketProjects, invoices, expenses, bills, timesheet, contractorInvoices] = await Promise.all([
+  const [projects, bucketProjects, invoices, expenses, bills, timesheet, contractorInvoices, cumulative] = await Promise.all([
     prisma.project.findMany({
       where: { code: { notIn: BUCKET_CODES } },
       orderBy: { code: 'asc' },
@@ -94,6 +128,7 @@ export async function computeFirmPnL(): Promise<FirmPnL> {
       select: { id: true, code: true },
     }),
     prisma.invoice.findMany({
+      where: hasWindow ? { issueDate: dateWindow } : {},
       select: {
         projectId: true,
         amountExGst: true,
@@ -102,15 +137,24 @@ export async function computeFirmPnL(): Promise<FirmPnL> {
       },
     }),
     prisma.expense.findMany({
-      where: { status: { in: ['approved', 'reimbursed', 'batched_for_payment'] } },
+      where: {
+        status: { in: ['approved', 'reimbursed', 'batched_for_payment'] },
+        ...(hasWindow ? { date: dateWindow } : {}),
+      },
       select: { projectId: true, amount: true, gst: true, date: true },
     }),
     prisma.bill.findMany({
-      where: { status: { in: ['approved', 'scheduled_for_payment', 'paid'] } },
+      where: {
+        status: { in: ['approved', 'scheduled_for_payment', 'paid'] },
+        ...(hasWindow ? { issueDate: dateWindow } : {}),
+      },
       select: { projectId: true, amountTotal: true, gst: true, issueDate: true },
     }),
     prisma.timesheetEntry.findMany({
-      where: { status: { in: ['approved', 'billed'] } },
+      where: {
+        status: { in: ['approved', 'billed'] },
+        ...(hasWindow ? { date: dateWindow } : {}),
+      },
       select: {
         projectId: true,
         hours: true,
@@ -121,8 +165,24 @@ export async function computeFirmPnL(): Promise<FirmPnL> {
     // Historical contractor invoices — pre-platform aggregated cost.
     // Feeds consultantCost alongside live timesheet cost.
     prisma.contractorInvoice.findMany({
+      where: hasWindow ? { periodAnchor: dateWindow } : {},
       select: { projectId: true, hours: true, amountExGst: true, periodAnchor: true },
     }),
+    // Cumulative — always unfiltered so the "firm earnings to date" tile
+    // is stable across FY switches.
+    Promise.all([
+      prisma.invoice.aggregate({
+        _sum: { amountExGst: true, paymentReceivedAmount: true },
+      }),
+      prisma.project.aggregate({
+        where: { code: { notIn: BUCKET_CODES } },
+        _sum: { contractValue: true },
+      }),
+    ]).then(([inv, prj]) => ({
+      revenueCents: inv._sum.amountExGst ?? 0,
+      receivedCents: inv._sum.paymentReceivedAmount ?? 0,
+      contractsWonCents: prj._sum.contractValue ?? 0,
+    })),
   ]);
   const bucketProjectIds = new Set(bucketProjects.map((p) => p.id));
 
@@ -262,5 +322,6 @@ export async function computeFirmPnL(): Promise<FirmPnL> {
     projects: projectsArr,
     totals: { ...partialTotals, firmOpexCents, grossProfitCents, ebitCents },
     monthly: monthlyArr,
+    cumulative,
   };
 }

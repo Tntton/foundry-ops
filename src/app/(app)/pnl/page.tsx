@@ -3,9 +3,11 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { computeFirmPnL } from '@/server/reports/pnl';
+import { auFyOf, auFyLabel, auFyWindow } from '@/lib/au-fy';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { WaterfallChart, type WaterfallStep } from '@/components/charts/waterfall';
+import { cn } from '@/lib/utils';
 import {
   Table,
   TableBody,
@@ -30,11 +32,29 @@ const STAGE_VARIANT: Record<string, 'amber' | 'green' | 'blue' | 'outline'> = {
   archived: 'outline',
 };
 
-export default async function FirmPnLPage() {
+export default async function FirmPnLPage({
+  searchParams,
+}: {
+  searchParams: { fy?: string };
+}) {
   const session = await getSession();
   if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
 
-  const pnl = await computeFirmPnL();
+  // ─── FY selector ─────────────────────────────────────────────────
+  // Current AU FY based on server today; scope is either that FY, an
+  // adjacent one, or "all" (no window).
+  const currentFy = auFyOf(new Date());
+  const availableFys = [currentFy - 1, currentFy]; // e.g. FY26 + FY27
+  const selectedRaw = searchParams.fy ?? String(currentFy);
+  const selected: number | 'all' = selectedRaw === 'all'
+    ? 'all'
+    : Number(selectedRaw) || currentFy;
+  const window = selected === 'all' ? undefined : auFyWindow(selected);
+  const scopeLabel = selected === 'all' ? 'All time' : auFyLabel(selected);
+  const isActiveFy = selected === currentFy;
+  const isArchivedFy = typeof selected === 'number' && selected < currentFy;
+
+  const pnl = await computeFirmPnL(window);
   const maxMonthly = Math.max(
     1,
     ...pnl.monthly.flatMap((m) => [m.revenueCents, m.costCents]),
@@ -150,10 +170,23 @@ export default async function FirmPnLPage() {
     <div className="space-y-6">
       <header className="flex items-start justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-ink">Firm P&amp;L</h1>
+          <h1 className="text-xl font-semibold text-ink">
+            Firm P&amp;L · {scopeLabel}
+            {isActiveFy && (
+              <Badge variant="green" className="ml-2 align-middle text-[10px] uppercase">
+                active
+              </Badge>
+            )}
+            {isArchivedFy && (
+              <Badge variant="outline" className="ml-2 align-middle text-[10px] uppercase">
+                archived
+              </Badge>
+            )}
+          </h1>
           <p className="text-sm text-ink-3">
-            Lifetime revenue vs cost across every project, including archived. Revenue
-            is ex GST; cost uses current Person.rate for timesheets.
+            {selected === 'all'
+              ? 'All-time revenue vs cost across every project.'
+              : `Revenue and cost within the ${scopeLabel} window (1 Jul → 30 Jun). Cost uses current Person.rate for timesheets.`}
           </p>
         </div>
         <a
@@ -163,6 +196,75 @@ export default async function FirmPnLPage() {
           Download CSV
         </a>
       </header>
+
+      {/* ── FY tabs ────────────────────────────────────────────────── */}
+      <nav className="flex items-center gap-1 border-b border-line">
+        {[...availableFys, 'all' as const].map((opt) => {
+          const label = opt === 'all' ? 'All time' : auFyLabel(opt);
+          const isSelected = selected === opt;
+          const isActive = opt === currentFy;
+          return (
+            <Link
+              key={String(opt)}
+              href={opt === 'all' ? '/pnl?fy=all' : `/pnl?fy=${opt}`}
+              className={cn(
+                'flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm',
+                isSelected
+                  ? 'border-brand text-ink'
+                  : 'border-transparent text-ink-3 hover:text-ink-2',
+              )}
+            >
+              {label}
+              {isActive && (
+                <span className="rounded-sm bg-status-green-soft px-1 text-[10px] font-medium uppercase text-status-green">
+                  live
+                </span>
+              )}
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* ── Firm earnings to date (cumulative, all FYs) ───────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-medium">Firm earnings to date</CardTitle>
+          <p className="text-xs text-ink-3">
+            Cumulative across every FY on record — independent of the tab you&apos;re on.
+          </p>
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 gap-4 py-3 md:grid-cols-3">
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-ink-3">
+              Revenue invoiced
+            </div>
+            <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
+              {formatMoney(pnl.cumulative.revenueCents)}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-ink-3">
+              Payments received
+            </div>
+            <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
+              {formatMoney(pnl.cumulative.receivedCents)}
+            </div>
+            <div className="text-[10px] text-ink-3">
+              {pnl.cumulative.revenueCents > 0
+                ? `${Math.round((pnl.cumulative.receivedCents / pnl.cumulative.revenueCents) * 100)}% collected`
+                : '—'}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-ink-3">
+              Contracts won (lifetime)
+            </div>
+            <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
+              {formatMoney(pnl.cumulative.contractsWonCents)}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
         <TotalCard

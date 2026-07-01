@@ -58,3 +58,16 @@ export function auFyOf(date: Date): number {
 export function auFyLabel(yearEnding: number): string {
   return `FY${String(yearEnding).slice(-2)}`;
 }
+
+/**
+ * Half-open date window [from, to) for an arbitrary AU FY. Suitable for
+ * `where: { date: { gte: from, lt: to } }` Prisma filters.
+ *
+ * FY26 → { from: 2025-07-01, to: 2026-07-01 }.
+ */
+export function auFyWindow(yearEnding: number): { from: Date; to: Date } {
+  return {
+    from: new Date(yearEnding - 1, 6, 1),
+    to: new Date(yearEnding, 6, 1),
+  };
+}
