@@ -59,6 +59,13 @@ export default async function FirmPnLPage() {
     ebitCents > 0 ? Math.round((ebitCents * TAX_RESERVE_PCT) / 100) : 0;
   const distributableProfitCents = ebitCents - taxReserveCents;
 
+  // % of revenue helper — used for every bar so partners can scan the
+  // whole cascade in one sweep.
+  const pctOfRev = (cents: number): string =>
+    revenueCents > 0
+      ? `${Math.round((Math.abs(cents) / revenueCents) * 100)}%`
+      : '';
+
   const firmWaterfall: WaterfallStep[] = [
     {
       key: 'revenue',
@@ -67,63 +74,66 @@ export default async function FirmPnLPage() {
       valueCents: revenueCents,
       kind: 'total',
       tone: 'brand',
+      percentLabel: '100%',
     },
     {
       key: 'consultant',
       label: 'Consultant cost',
-      sub: 'contractor invoices + timesheets',
+      sub: 'contractors + timesheets',
       valueCents: -consultantCostCents,
       kind: 'flow',
       tone: 'orange',
+      percentLabel: pctOfRev(consultantCostCents),
     },
     ...(projectExpenseCents > 0
       ? [
           {
             key: 'projectExpense' as const,
             label: 'Project expenses',
-            sub: 'project-tagged bills + reimbursables',
+            sub: 'project-tagged bills',
             valueCents: -projectExpenseCents,
             kind: 'flow' as const,
             tone: 'orange' as const,
+            percentLabel: pctOfRev(projectExpenseCents),
           },
         ]
       : []),
     {
       key: 'gross',
       label: 'Gross profit',
-      sub: revenueCents > 0
-        ? `${Math.round((grossProfitCents / revenueCents) * 100)}% margin`
-        : 'revenue − consultant − expenses',
+      sub: 'revenue − consultant − expenses',
       valueCents: grossProfitCents,
       kind: 'subtotal',
       tone: grossProfitCents >= 0 ? 'green' : 'red',
+      percentLabel: pctOfRev(grossProfitCents),
     },
     {
       key: 'opex',
       label: 'Company OPEX',
-      sub: 'firm overhead · FHB / FHO / FHX buckets',
+      sub: 'firm overhead · FH buckets',
       valueCents: -firmOpexCents,
       kind: 'flow',
       tone: 'orange',
+      percentLabel: pctOfRev(firmOpexCents),
     },
     {
       key: 'ebit',
       label: 'EBIT',
-      sub: revenueCents > 0
-        ? `${Math.round((ebitCents / revenueCents) * 100)}% margin · operating profit`
-        : 'operating profit',
+      sub: 'operating profit',
       valueCents: ebitCents,
       kind: 'subtotal',
       tone: ebitCents >= 0 ? 'green' : 'red',
+      percentLabel: pctOfRev(ebitCents),
     },
     {
       key: 'tax',
       label: 'Tax reserve',
-      sub: `${TAX_RESERVE_PCT}% of EBIT · estimated`,
+      sub: `${TAX_RESERVE_PCT}% of EBIT`,
       valueCents: -taxReserveCents,
       kind: 'flow',
       tone: 'muted',
       estimated: true,
+      percentLabel: pctOfRev(taxReserveCents),
     },
     {
       key: 'profit',
@@ -132,6 +142,7 @@ export default async function FirmPnLPage() {
       valueCents: distributableProfitCents,
       kind: 'total',
       tone: distributableProfitCents >= 0 ? 'green' : 'red',
+      percentLabel: pctOfRev(distributableProfitCents),
     },
   ];
 

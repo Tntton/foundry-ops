@@ -1,3 +1,5 @@
+import type React from 'react';
+
 /**
  * Waterfall chart — adapted from the design prototype's
  * `InteractiveWaterfall` (screens-pnl.jsx). SVG-based, no chart-lib
@@ -35,6 +37,10 @@ export type WaterfallStep = {
    *  for steps where we don't yet have real data and the value is an
    *  estimate. */
   estimated?: boolean;
+  /** Optional percentage displayed under the money value. Format is
+   *  free-form — the chart just renders whatever string is passed
+   *  (e.g. "37% of revenue", "62% margin"). */
+  percentLabel?: string;
 };
 
 const TONE_HEX: Record<WaterfallTone, string> = {
@@ -45,6 +51,56 @@ const TONE_HEX: Record<WaterfallTone, string> = {
   muted: '#8b8984',
   orange: '#b87c3f',
 };
+
+/**
+ * Split a sub-label into at most two lines when it's too wide for the
+ * bar. Rough heuristic — fontSize 11 renders ~5.5px per char, so any
+ * label wider than `bw / 5.5` chars gets wrapped at the nearest word
+ * boundary past the midpoint. If the string has no spaces (e.g. a
+ * single long word) we don't wrap; the SVG will just overflow — that's
+ * rare in practice.
+ */
+function renderSubLabel(
+  sub: string,
+  cx: number,
+  cy: number,
+  bw: number,
+): React.ReactElement {
+  const maxCharsPerLine = Math.max(12, Math.floor(bw / 5.5));
+  if (sub.length <= maxCharsPerLine) {
+    return (
+      <text x={cx} y={cy} fontSize="11" fill="#8b8984" textAnchor="middle">
+        {sub}
+      </text>
+    );
+  }
+  const midIdx = Math.floor(sub.length / 2);
+  const spaceIndices: number[] = [];
+  for (let i = 0; i < sub.length; i += 1) if (sub[i] === ' ') spaceIndices.push(i);
+  if (spaceIndices.length === 0) {
+    // No word boundary — leave as-is; caller's max-width is the guard.
+    return (
+      <text x={cx} y={cy} fontSize="11" fill="#8b8984" textAnchor="middle">
+        {sub}
+      </text>
+    );
+  }
+  const splitAt = spaceIndices.reduce((best, i) =>
+    Math.abs(i - midIdx) < Math.abs(best - midIdx) ? i : best,
+  );
+  const line1 = sub.slice(0, splitAt).trim();
+  const line2 = sub.slice(splitAt + 1).trim();
+  return (
+    <>
+      <text x={cx} y={cy} fontSize="11" fill="#8b8984" textAnchor="middle">
+        {line1}
+      </text>
+      <text x={cx} y={cy + 13} fontSize="11" fill="#8b8984" textAnchor="middle">
+        {line2}
+      </text>
+    </>
+  );
+}
 
 function fmtMoneyShort(cents: number): string {
   const dollars = cents / 100;
@@ -106,12 +162,15 @@ export function WaterfallChart({
   // 9-step firm cascade. Aspect ratio is preserved (no stretching) so
   // text renders at its intended size.
   const padT = 32;
-  const padB = 72;
+  // Widened bottom padding — accommodates 2-line wrapped sub-labels +
+  // optional percentage line + optional 'estimated' italic line.
+  const padB = 96;
   const padL = 64;
   const padR = 16;
   const n = bars.length;
   const gap = 22;
-  const bwTarget = 96; // intended bar width in viewBox units
+  // Wider default bar (was 96) so long sub-labels have room to breathe.
+  const bwTarget = 128;
   const W = padL + padR + n * bwTarget + (n - 1) * gap;
   const H = height;
   const plotH = H - padT - padB;
@@ -279,7 +338,7 @@ export function WaterfallChart({
               {/* Value label above (or below if negative flow) */}
               <text
                 x={x(i) + bw / 2}
-                y={isFlow && neg ? barBottom + 18 : barTop - 8}
+                y={isFlow && neg ? barBottom + 18 : barTop - 20}
                 fontSize="14"
                 fontWeight="600"
                 fill={isFlow && neg ? '#b87c3f' : '#1e3a34'}
@@ -288,6 +347,19 @@ export function WaterfallChart({
               >
                 {fmtMoneyShort(b.valueCents)}
               </text>
+              {/* Optional percentage under the money value */}
+              {b.percentLabel && (
+                <text
+                  x={x(i) + bw / 2}
+                  y={isFlow && neg ? barBottom + 32 : barTop - 6}
+                  fontSize="11"
+                  fill={isFlow && neg ? '#b87c3f' : '#5a5a52'}
+                  textAnchor="middle"
+                  fontFamily="ui-monospace, SFMono-Regular, monospace"
+                >
+                  {b.percentLabel}
+                </text>
+              )}
               {/* Step label on x-axis */}
               <text
                 x={x(i) + bw / 2}
@@ -299,21 +371,14 @@ export function WaterfallChart({
               >
                 {b.label}
               </text>
-              {b.sub && (
-                <text
-                  x={x(i) + bw / 2}
-                  y={H - padB + 34}
-                  fontSize="11"
-                  fill="#8b8984"
-                  textAnchor="middle"
-                >
-                  {b.sub}
-                </text>
-              )}
+              {/* Sub-label — wraps to 2 lines when the string is long
+                  enough to overflow the bar width. Split at the nearest
+                  word boundary past the midpoint. */}
+              {b.sub && renderSubLabel(b.sub, x(i) + bw / 2, H - padB + 34, bw)}
               {b.estimated && (
                 <text
                   x={x(i) + bw / 2}
-                  y={H - padB + 50}
+                  y={H - padB + 66}
                   fontSize="10"
                   fill="#b87c3f"
                   textAnchor="middle"
