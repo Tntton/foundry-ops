@@ -35,112 +35,103 @@ export default async function FirmPnLPage() {
   if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
 
   const pnl = await computeFirmPnL();
-  const activeRevenue = pnl.totals.revenueCents + pnl.totals.wipCents;
-  const marginPct =
-    activeRevenue > 0
-      ? Math.round((pnl.totals.marginCents / activeRevenue) * 100)
-      : null;
   const maxMonthly = Math.max(
     1,
     ...pnl.monthly.flatMap((m) => [m.revenueCents, m.costCents]),
   );
 
-  // ─── Firm waterfall ───────────────────────────────────────────────
-  // Booked → unbilled → invoiced → cost → gross margin → opex →
-  // EBIT → tax reserve → partner profit. OPEX isn't tracked yet so
-  // we render it as $0 with a placeholder hint; tax reserve uses a
-  // 30% default. Both segments are flagged as `estimated` so partners
-  // see at a glance that those numbers are projections, not actuals.
+  // ─── Firm waterfall — mirrors master tracker's Key Readouts ───────
+  // Revenue → consultant cost → project expenses → gross profit →
+  // firm OPEX → EBIT → tax reserve → distributable profit. Structure
+  // matches "Foundry Health FY26 Financial Tracker" so the app and the
+  // spreadsheet tie to the same numbers.
+  //
+  // Contract value (booked) is shown separately in the KPI tiles above
+  // — it doesn't sit inside the P&L waterfall (booked isn't earned).
   const TAX_RESERVE_PCT = 30;
-  const waterfallBooked = pnl.totals.contractValueCents;
-  const waterfallInvoiced = pnl.totals.revenueCents;
-  const waterfallUnbilled = Math.max(0, waterfallBooked - waterfallInvoiced);
-  const waterfallCost = pnl.totals.costCents;
-  // Realised gross margin = invoiced − cost (vs the data-model
-  // `marginCents` which also adds WIP back; we stick to the
-  // pure invoiced-vs-cost view for the cascade).
-  const waterfallGrossMargin = waterfallInvoiced - waterfallCost;
-  const waterfallOpexCents = 0;
-  const waterfallEbit = waterfallGrossMargin - waterfallOpexCents;
-  const waterfallTaxReserve =
-    waterfallEbit > 0
-      ? Math.round((waterfallEbit * TAX_RESERVE_PCT) / 100)
-      : 0;
-  const waterfallProfit = waterfallEbit - waterfallTaxReserve;
+  const revenueCents = pnl.totals.revenueCents;
+  const consultantCostCents = pnl.totals.consultantCostCents;
+  const projectExpenseCents = pnl.totals.projectExpenseCents;
+  const grossProfitCents = pnl.totals.grossProfitCents;
+  const firmOpexCents = pnl.totals.firmOpexCents;
+  const ebitCents = pnl.totals.ebitCents;
+  const taxReserveCents =
+    ebitCents > 0 ? Math.round((ebitCents * TAX_RESERVE_PCT) / 100) : 0;
+  const distributableProfitCents = ebitCents - taxReserveCents;
+
   const firmWaterfall: WaterfallStep[] = [
     {
-      key: 'booked',
-      label: 'Booked',
-      sub: 'signed contracts',
-      valueCents: waterfallBooked,
+      key: 'revenue',
+      label: 'Revenue',
+      sub: 'invoiced ex GST',
+      valueCents: revenueCents,
       kind: 'total',
       tone: 'brand',
     },
     {
-      key: 'unbilled',
-      label: 'Unbilled',
-      sub: 'WIP + future work',
-      valueCents: -waterfallUnbilled,
+      key: 'consultant',
+      label: 'Consultant cost',
+      sub: 'contractor invoices + timesheets',
+      valueCents: -consultantCostCents,
       kind: 'flow',
       tone: 'orange',
     },
-    {
-      key: 'invoiced',
-      label: 'Invoiced',
-      sub: 'issued to clients',
-      valueCents: waterfallInvoiced,
-      kind: 'subtotal',
-      tone: 'brand',
-    },
-    {
-      key: 'cost',
-      label: 'Project cost',
-      sub: 'time + expenses + bills',
-      valueCents: -waterfallCost,
-      kind: 'flow',
-      tone: 'orange',
-    },
+    ...(projectExpenseCents > 0
+      ? [
+          {
+            key: 'projectExpense' as const,
+            label: 'Project expenses',
+            sub: 'project-tagged bills + reimbursables',
+            valueCents: -projectExpenseCents,
+            kind: 'flow' as const,
+            tone: 'orange' as const,
+          },
+        ]
+      : []),
     {
       key: 'gross',
-      label: 'Gross margin',
-      sub: 'invoiced − cost',
-      valueCents: waterfallGrossMargin,
+      label: 'Gross profit',
+      sub: revenueCents > 0
+        ? `${Math.round((grossProfitCents / revenueCents) * 100)}% margin`
+        : 'revenue − consultant − expenses',
+      valueCents: grossProfitCents,
       kind: 'subtotal',
-      tone: waterfallGrossMargin >= 0 ? 'green' : 'red',
+      tone: grossProfitCents >= 0 ? 'green' : 'red',
     },
     {
       key: 'opex',
-      label: 'OPEX',
-      sub: 'firm overheads · tracker pending',
-      valueCents: -waterfallOpexCents,
+      label: 'Company OPEX',
+      sub: 'firm overhead · FHB / FHO / FHX buckets',
+      valueCents: -firmOpexCents,
       kind: 'flow',
       tone: 'orange',
-      estimated: true,
     },
     {
       key: 'ebit',
       label: 'EBIT',
-      sub: 'operating profit',
-      valueCents: waterfallEbit,
+      sub: revenueCents > 0
+        ? `${Math.round((ebitCents / revenueCents) * 100)}% margin · operating profit`
+        : 'operating profit',
+      valueCents: ebitCents,
       kind: 'subtotal',
-      tone: waterfallEbit >= 0 ? 'green' : 'red',
+      tone: ebitCents >= 0 ? 'green' : 'red',
     },
     {
       key: 'tax',
       label: 'Tax reserve',
       sub: `${TAX_RESERVE_PCT}% of EBIT · estimated`,
-      valueCents: -waterfallTaxReserve,
+      valueCents: -taxReserveCents,
       kind: 'flow',
       tone: 'muted',
       estimated: true,
     },
     {
       key: 'profit',
-      label: 'Partner profit',
-      sub: 'distributable',
-      valueCents: waterfallProfit,
+      label: 'Distributable',
+      sub: 'partner profit pool',
+      valueCents: distributableProfitCents,
       kind: 'total',
-      tone: waterfallProfit >= 0 ? 'green' : 'red',
+      tone: distributableProfitCents >= 0 ? 'green' : 'red',
     },
   ];
 
@@ -162,32 +153,46 @@ export default async function FirmPnLPage() {
         </a>
       </header>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <TotalCard
-          label="Contract value"
-          value={formatMoney(pnl.totals.contractValueCents)}
-          sub="All projects, ex GST"
-        />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
         <TotalCard
           label="Revenue"
           value={formatMoney(pnl.totals.revenueCents)}
-          sub={`${formatMoney(pnl.totals.wipCents)} WIP`}
+          sub={`${formatMoney(pnl.totals.wipCents)} WIP · ex GST`}
         />
         <TotalCard
-          label="Cost"
-          value={formatMoney(pnl.totals.costCents)}
-          sub="Time + expenses + bills"
+          label="Consultant cost"
+          value={formatMoney(pnl.totals.consultantCostCents)}
+          sub="Contractor invoices + timesheets"
         />
         <TotalCard
-          label="Margin"
-          value={formatMoney(pnl.totals.marginCents)}
-          sub={marginPct === null ? '—' : `${marginPct}% of active rev`}
-          emphasis={pnl.totals.marginCents < 0}
+          label="Gross profit"
+          value={formatMoney(pnl.totals.grossProfitCents)}
+          sub={
+            pnl.totals.revenueCents > 0
+              ? `${Math.round((pnl.totals.grossProfitCents / pnl.totals.revenueCents) * 100)}% margin`
+              : '—'
+          }
+          emphasis={pnl.totals.grossProfitCents < 0}
         />
         <TotalCard
-          label="Hours logged"
-          value={pnl.totals.hours.toFixed(1)}
-          sub="Approved + billed"
+          label="Company OPEX"
+          value={formatMoney(pnl.totals.firmOpexCents)}
+          sub="Firm overhead · FH buckets"
+        />
+        <TotalCard
+          label="EBIT"
+          value={formatMoney(pnl.totals.ebitCents)}
+          sub={
+            pnl.totals.revenueCents > 0
+              ? `${Math.round((pnl.totals.ebitCents / pnl.totals.revenueCents) * 100)}% margin`
+              : '—'
+          }
+          emphasis={pnl.totals.ebitCents < 0}
+        />
+        <TotalCard
+          label="Contract value"
+          value={formatMoney(pnl.totals.contractValueCents)}
+          sub={`Booked · ${pnl.totals.hours.toFixed(0)}h logged`}
         />
       </div>
 
@@ -195,11 +200,12 @@ export default async function FirmPnLPage() {
         <CardHeader>
           <CardTitle>Firm waterfall</CardTitle>
           <p className="text-xs text-ink-3">
-            Booked contract revenue cascading through unbilled work,
-            invoiced revenue, project cost, OPEX, and tax reserve to
-            partner profit. Hatched bars are estimates — OPEX isn&apos;t
-            yet tracked at the firm level and tax reserve assumes 30% of
-            EBIT.
+            Invoiced revenue → consultant cost → gross profit →
+            company OPEX → EBIT → tax reserve → distributable profit.
+            Structure mirrors the FY26 master tracker&apos;s Key
+            Readouts sheet so the app and the spreadsheet tie to the
+            same numbers. Tax reserve is hatched — 30% of EBIT is a
+            planning estimate, not a filed figure.
           </p>
         </CardHeader>
         <CardContent>
