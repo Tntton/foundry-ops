@@ -21,6 +21,7 @@ const BodySchema = z.object({
     'reconcile_sharepoint_link',
     'reconcile_csv_contractor_invoices',
     'reconcile_csv_opex_bills',
+    'reconcile_csv_invoices',
   ]),
 });
 
@@ -170,6 +171,9 @@ export async function POST(req: Request): Promise<Response> {
   }
   if (parsed.data.kind === 'reconcile_csv_opex_bills') {
     return applyCsvOpexBills(session, verify.payload.payload);
+  }
+  if (parsed.data.kind === 'reconcile_csv_invoices') {
+    return applyCsvInvoices(session, verify.payload.payload);
   }
   return applySharepointLink(session, verify.payload.payload);
 }
@@ -666,6 +670,79 @@ async function applyCsvOpexBills(session: Session, raw: unknown): Promise<Respon
     return NextResponse.json({ ok: true, mode: 'csv_opex_bills', created: result.created });
   } catch (err) {
     console.error('[reconcile/confirm] opex bills failed:', err);
+    return NextResponse.json({ error: 'csv_apply_failed' }, { status: 500 });
+  }
+}
+
+// ── CSV — invoices (historical revenue backfill) ─────────────────────
+const InvoicesPayloadSchema = z.object({
+  rows: z
+    .array(
+      z.object({
+        number: z.string().min(1),
+        projectId: z.string().min(1),
+        clientId: z.string().min(1),
+        issueDateISO: z.string(),
+        dueDateISO: z.string(),
+        amountExGst: z.number().int().positive(),
+        gst: z.number().int().nonnegative(),
+        amountTotal: z.number().int().positive(),
+        paymentReceivedAmount: z.number().int().nonnegative(),
+        status: z.enum([
+          'draft', 'pending_approval', 'approved', 'sent',
+          'partial', 'paid', 'overdue', 'written_off',
+        ]),
+        sentAtISO: z.string().nullable(),
+        paidAtISO: z.string().nullable(),
+      }),
+    )
+    .min(1)
+    .max(5000),
+});
+
+async function applyCsvInvoices(session: Session, raw: unknown): Promise<Response> {
+  const payload = InvoicesPayloadSchema.safeParse(raw);
+  if (!payload.success) {
+    return NextResponse.json({ error: 'malformed_proposal' }, { status: 400 });
+  }
+  const { rows } = payload.data;
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      let created = 0;
+      for (const r of rows) {
+        await tx.invoice.create({
+          data: {
+            number: r.number,
+            projectId: r.projectId,
+            clientId: r.clientId,
+            issueDate: new Date(r.issueDateISO),
+            dueDate: new Date(r.dueDateISO),
+            amountExGst: r.amountExGst,
+            gst: r.gst,
+            amountTotal: r.amountTotal,
+            paymentReceivedAmount: r.paymentReceivedAmount,
+            status: r.status,
+            sentAt: r.sentAtISO ? new Date(r.sentAtISO) : null,
+            paidAt: r.paidAtISO ? new Date(r.paidAtISO) : null,
+          },
+        });
+        created += 1;
+      }
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'created',
+        entity: {
+          type: 'invoice_csv_import',
+          id: new Date().toISOString(),
+          after: { rows: created, source: 'reconcile_csv' } as never,
+        },
+        source: 'agent',
+      });
+      return { created };
+    });
+    return NextResponse.json({ ok: true, mode: 'csv_invoices', created: result.created });
+  } catch (err) {
+    console.error('[reconcile/confirm] invoices failed:', err);
     return NextResponse.json({ error: 'csv_apply_failed' }, { status: 500 });
   }
 }

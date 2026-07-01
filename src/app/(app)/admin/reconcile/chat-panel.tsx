@@ -173,13 +173,15 @@ export function ReconcileChatPanel({
               ? 'reconcile_csv_contractor_invoices'
               : surface === 'reconcile_csv_opex_bills'
                 ? 'reconcile_csv_opex_bills'
-                : surface === 'reconcile_brief'
-                  ? 'reconcile_brief'
-                  : surface === 'reconcile_sharepoint_link'
-                    ? 'reconcile_sharepoint_link'
-                    : surface.startsWith('reconcile_bulk')
-                      ? 'reconcile_bulk'
-                      : 'reconcile_update';
+                : surface === 'reconcile_csv_invoices'
+                  ? 'reconcile_csv_invoices'
+                  : surface === 'reconcile_brief'
+                    ? 'reconcile_brief'
+                    : surface === 'reconcile_sharepoint_link'
+                      ? 'reconcile_sharepoint_link'
+                      : surface.startsWith('reconcile_bulk')
+                        ? 'reconcile_bulk'
+                        : 'reconcile_update';
       const res = await fetch('/api/reconcile/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

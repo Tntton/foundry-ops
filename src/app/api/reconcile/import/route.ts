@@ -8,6 +8,7 @@ import { planPeopleImport } from '@/server/reconcile/csv-people';
 import { planTimesheetImport } from '@/server/reconcile/csv-timesheets';
 import { planContractorInvoiceImport } from '@/server/reconcile/csv-contractor-invoices';
 import { planOpexBillImport } from '@/server/reconcile/csv-opex-bills';
+import { planInvoiceImport } from '@/server/reconcile/csv-invoices';
 import { extractProjectBrief } from '@/server/reconcile/extract-brief';
 
 export const dynamic = 'force-dynamic';
@@ -157,6 +158,8 @@ export async function POST(req: Request): Promise<Response> {
       resolvedType = 'contractor_invoices';
     } else if (has('chargecode') && has('item') && has('amount')) {
       resolvedType = 'opex_bills';
+    } else if (has('projectcode') && has('amountexgst') && !has('billablehours')) {
+      resolvedType = 'invoices';
     } else if (has('email') && has('firstname') && has('lastname')) {
       resolvedType = 'people';
     } else if (has('code') && has('clientcode')) {
@@ -440,8 +443,65 @@ export async function POST(req: Request): Promise<Response> {
     });
   }
 
+  if (resolvedType === 'invoices') {
+    const result = await planInvoiceImport(text);
+    if (!result.ok) {
+      return NextResponse.json({ error: 'parse_failed', message: result.error }, { status: 400 });
+    }
+    const { plan } = result;
+    const { create, skip, total } = plan.counts;
+    if (create === 0) {
+      return NextResponse.json({
+        ok: true,
+        kind: 'no_op',
+        message: `Parsed ${total} rows but nothing to write — ${skip} skipped.`,
+        plan,
+      });
+    }
+    const writable = plan.rows.filter((r): r is typeof r & { data: NonNullable<typeof r.data> } =>
+      r.action === 'create' && r.data !== undefined,
+    );
+    const token = signPrefillToken({
+      kind: 'reconcile_csv_invoices',
+      personId: session.person.id,
+      payload: {
+        rows: writable.map((r) => ({
+          ...r.data,
+          issueDateISO: r.data.issueDate.toISOString(),
+          dueDateISO: r.data.dueDate.toISOString(),
+          sentAtISO: r.data.sentAt?.toISOString() ?? null,
+          paidAtISO: r.data.paidAt?.toISOString() ?? null,
+        })).map(({ issueDate: _id, dueDate: _dd, sentAt: _sa, paidAt: _pa, ...rest }) => rest),
+      },
+    });
+    const PREVIEW = 25;
+    return NextResponse.json({
+      ok: true,
+      kind: 'proposal',
+      surface: 'reconcile_csv_invoices',
+      token,
+      title: `Import ${create} invoices`,
+      fields: [
+        { label: 'Parsed', value: `${total} rows` },
+        { label: 'Create', value: String(create) },
+        ...(skip > 0 ? [{ label: 'Skip', value: String(skip) }] : []),
+        { label: 'Total invoiced ex-GST', value: `AUD ${(plan.totals.invoiced / 100).toLocaleString('en-AU')}` },
+        { label: 'Payments received', value: `AUD ${(plan.totals.received / 100).toLocaleString('en-AU')}` },
+        ...plan.rows.slice(0, PREVIEW).map((r) => ({
+          label: `${r.action} · row ${r.lineNo}`,
+          value: r.note,
+        })),
+        ...(plan.rows.length > PREVIEW
+          ? [{ label: '…', value: `${plan.rows.length - PREVIEW} more rows not shown` }]
+          : []),
+      ],
+      confirmLabel: `Write ${create}`,
+      summary: `Invoices: ${create} create, ${skip} skip. Lands as project revenue.`,
+    });
+  }
+
   return NextResponse.json(
-    { error: 'unsupported_type', message: `Type "${type}" not supported. Use projects | people | timesheets | contractor_invoices | opex_bills | brief.` },
+    { error: 'unsupported_type', message: `Type "${type}" not supported. Use projects | people | timesheets | contractor_invoices | opex_bills | invoices | brief.` },
     { status: 400 },
   );
 }

@@ -51,6 +51,7 @@ export function buildReconcileSystemPrompt(session: Session): string {
     '  · timesheets — required: personEmail, projectCode, date, hours. Optional: description. Auto-approved on apply (super-admin import).',
     '  · contractor_invoices — required: consultant, projectCode, billableHours, invoicedExGst. Optional: role, gst, invoicePeriod, notes. Historical aggregated contractor cost; lands in a new ContractorInvoice table and feeds project P&L as consultant cost. Code remaps: ADA001 → FHP001; BONUS / blank → FHX000.',
     '  · opex_bills — required: chargeCode, item, amount. Optional: atoCategory, supplier, issueDate, gst, notes. Historical OPEX → Bill rows status=paid, tagged to the matching project by chargeCode. Unknown codes route to FHX000.',
+    '  · invoices — required: projectCode, amountExGst. Optional: number (auto-gen when blank), issueDate, dueDate, paymentReceived, gst (defaults 10% AU), status (auto-inferred from paymentReceived), sentAt, paidAt. Historical revenue backfill; feeds project P&L as revenue.',
     '- Drag & drop a project-brief PDF (SOW, work order, kickoff deck) and Sonnet extracts projectName / clientName / startDate / endDate / contractValue / scope, matches the client by legal name, and proposes a new Project at the next available code. Word docs must be converted to PDF first.',
     '- If the user mentions a "CSV" / "spreadsheet" / "brief" without dropping a file, tell them to drag-drop it onto the panel. You cannot ingest files through chat instructions alone.',
     '',
