@@ -399,6 +399,14 @@ export default async function ProjectDetailPage({
               keeping them in the header alongside Settings/Archive felt
               cluttered and duplicated the choices. The Invoices tab opens
               with a clear two-card chooser explaining each option. */}
+          {hasAnyRole(session, ['super_admin', 'admin']) && (
+            <Link
+              href={`/projects/${project.code}/tracker`}
+              className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+            >
+              Financial Tracker
+            </Link>
+          )}
           <Link
             href={`/projects/${project.code}/settings`}
             className="rounded-md border border-line px-3 py-1.5 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
