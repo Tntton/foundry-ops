@@ -50,19 +50,24 @@ export type OpexBillImportPlan = {
   totals: { amount: number };
 };
 
-/** Same fuzzy parser as the contractor importer — single source for the
- *  Date column would be ideal, but the OPEX sheet's date format is more
- *  uniform (ISO or DD/MM/YYYY) so the simpler parser here suffices. */
+/**
+ * Historical-import fallback when an OPEX row has no parseable
+ * issueDate. Anchors to end of FY26 so unparseable historical rows
+ * stay in the FY they belong to (was `new Date()`, which leaked rows
+ * imported on/after 1 Jul 2026 into the FY27 tab).
+ */
+const HISTORICAL_ISSUE_FALLBACK = new Date(Date.UTC(2026, 5, 30));
+
 function parseIssueDate(raw: string | undefined): Date {
   const v = (raw ?? '').trim();
-  if (!v) return new Date();
+  if (!v) return HISTORICAL_ISSUE_FALLBACK;
   const ddmmyyyy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v);
   if (ddmmyyyy) {
     const [, dd, mm, yyyy] = ddmmyyyy;
     return new Date(Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd)));
   }
   const d = new Date(v);
-  return Number.isFinite(d.getTime()) ? d : new Date();
+  return Number.isFinite(d.getTime()) ? d : HISTORICAL_ISSUE_FALLBACK;
 }
 
 export async function planOpexBillImport(csvText: string): Promise<{

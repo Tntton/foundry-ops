@@ -66,9 +66,19 @@ export type ContractorInvoiceImportPlan = {
  *   "Aug 2025 – Jun 2026"      → 2025-08-01
  *   "" or "TBC"                → fallback (today's date)
  */
+/**
+ * Historical-import fallback when a contractor row has no parseable
+ * `Invoice Period`. Previously defaulted to `new Date()`, which caused
+ * rows imported on/after 1 Jul 2026 to leak into the FY27 P&L tab
+ * because their anchor landed in the new FY. Now defaults to the last
+ * day of FY26 (2026-06-30) so historical rows without a period stay
+ * bucketed in the FY they belong to.
+ */
+const HISTORICAL_ANCHOR_FALLBACK = new Date(Date.UTC(2026, 5, 30)); // 2026-06-30
+
 function parsePeriodAnchor(raw: string): Date {
   const v = (raw ?? '').trim();
-  if (!v) return new Date();
+  if (!v) return HISTORICAL_ANCHOR_FALLBACK;
 
   // DD/MM/YYYY or D/M/YYYY
   const ddmmyyyy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v);
@@ -114,9 +124,10 @@ function parsePeriodAnchor(raw: string): Date {
     if (monthIdx !== -1) return new Date(Date.UTC(Number(yyyy), monthIdx, 1));
   }
 
-  // Fallback — anchor to today so the row at least lands. Notes column
-  // will preserve the original string.
-  return new Date();
+  // Fallback — anchor to end of FY26 so unparseable historical rows
+  // stay in the FY they belong to rather than leaking into whichever
+  // FY the import happens to run in.
+  return HISTORICAL_ANCHOR_FALLBACK;
 }
 
 function monthIndex(name: string): number {
