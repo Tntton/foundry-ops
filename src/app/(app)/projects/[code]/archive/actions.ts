@@ -81,14 +81,9 @@ export async function archiveProject(
     return { status: 'error', message: 'Project is already archived.' };
   }
 
-  // Reconciliation gate — both theoretical dates must be set before archive.
-  if (!project.startDate || !project.endDate) {
-    return {
-      status: 'error',
-      message:
-        'Reconcile the theoretical start + end dates in Settings before archiving — these are required for closing reporting.',
-    };
-  }
+  // Previously required both theoretical dates before archive —
+  // removed TT 2026-07-02. Historical projects often have no dates
+  // and shouldn't be blocked from archiving.
 
   const actualEndDate = parsed.data.actualEndDate ?? new Date();
 

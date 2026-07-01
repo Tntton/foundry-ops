@@ -30,11 +30,7 @@ import { ProjectContributionsEditor } from './contributions/contributions-editor
 import { computeProjectBudget } from '@/server/projects/budget';
 import { WaterfallChart, type WaterfallStep } from '@/components/charts/waterfall';
 import { listActivePeopleOptions } from '@/server/projects';
-import {
-  isInternalProject,
-  shouldShowPnL,
-  hasFixedWindow,
-} from '@/lib/project-kind';
+import { isInternalProject, shouldShowPnL } from '@/lib/project-kind';
 
 const STAGE_VARIANT: Record<string, 'amber' | 'green' | 'blue' | 'outline'> = {
   kickoff: 'amber',
@@ -125,7 +121,8 @@ export default async function ProjectDetailPage({
   // still apply.
   const projectIsInternal = isInternalProject(project.code);
   const projectShowsPnL = shouldShowPnL(project.code);
-  const projectHasFixedWindow = hasFixedWindow(project.code);
+  // (theoretical-date reminder banner removed 2026-07-02;
+  // projectHasFixedWindow variable no longer needed)
   // Staff (no leader role) see Project Ops only — Overview / Milestones
   // / Files / Risks / Checklists / Team / Hours. The entire Commercials
   // tab row (P&L / Budget / Invoices / Expenses) is hidden, and the
@@ -436,25 +433,10 @@ export default async function ProjectDetailPage({
         </div>
       )}
 
-      {projectHasFixedWindow &&
-        project.stage !== 'archived' &&
-        (!project.startDate || !project.endDate) && (
-          <div className="rounded-md border border-status-amber bg-status-amber-soft px-3 py-2 text-sm text-status-amber">
-            <strong>Reconcile reminder:</strong> theoretical {!project.startDate ? 'start' : ''}
-            {!project.startDate && !project.endDate ? ' + ' : ''}
-            {!project.endDate ? 'end' : ''} date {!project.startDate && !project.endDate ? 'are' : 'is'}{' '}
-            not set. You can keep working without {!project.startDate && !project.endDate ? 'them' : 'it'}, but the project can&apos;t be moved to closing
-            / archived until both are filled in.{' '}
-            {canEditProject && (
-              <Link
-                href={`/projects/${project.code}/settings`}
-                className="font-medium underline"
-              >
-                Set in Settings →
-              </Link>
-            )}
-          </div>
-        )}
+      {/* Theoretical-date reminder banner removed 2026-07-02 — dates
+          are no longer a gate on closing/archived, so the nag was
+          just noise. Missing dates still surface in the reconcile
+          gap queue if TT wants to backfill them systematically. */}
       {projectIsInternal && project.stage !== 'archived' && (
         <div className="rounded-md border border-line bg-surface-subtle/50 px-3 py-2 text-sm text-ink-2">
           <strong>Internal project · FHP series.</strong> No client revenue —

@@ -7,7 +7,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { writeAudit } from '@/server/audit';
-import { isInternalProject, hasFixedWindow } from '@/lib/project-kind';
+import { isInternalProject } from '@/lib/project-kind';
 import { emitUserUpdateMany, notifyAdminPool } from '@/server/user-updates';
 
 const REORDER_LIMIT = 200;
@@ -118,20 +118,11 @@ export async function moveProject(
     };
   }
 
-  // Reconciliation gate: closing/archived needs both theoretical dates
-  // set — but only for projects that carry a fixed window (client
-  // engagements). Internal FHP projects never hit those lanes anyway
-  // (rejected above), so this branch is effectively client-only.
-  if (
-    hasFixedWindow(project.code) &&
-    (toStage === 'closing' || toStage === 'archived') &&
-    (!project.startDate || !project.endDate)
-  ) {
-    return {
-      status: 'error',
-      message: `Set both theoretical start + end on ${project.code} before moving to ${toStage}.`,
-    };
-  }
+  // Previously blocked moves to closing/archived when theoretical
+  // start/end were missing — removed TT 2026-07-02. Historical
+  // projects (Xero-imports, master-tracker backfill) frequently have
+  // no dates and shouldn't be stranded in delivery. Downstream
+  // reporting handles null dates gracefully.
 
   const stampActualEnd =
     toStage === 'archived' && !project.actualEndDate ? new Date() : null;

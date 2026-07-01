@@ -117,7 +117,7 @@ export function ProjectSettingsForm({
       ? Math.max(1, weeksBetween(toIso(project.startDate), toIso(project.endDate)))
       : 12,
   );
-  const datesIncomplete = !startDate || !endDate;
+  // (datesIncomplete removed 2026-07-02 — dates no longer gate stage.)
 
   // Keep the three inputs in sync without fighting each other:
   //   - Change start: end stays anchored to current duration
@@ -221,17 +221,8 @@ export function ProjectSettingsForm({
         <p className="-mt-1 text-xs text-ink-3">
           Start + end are <strong>theoretical</strong> — the plan, not a hard constraint.
           Timesheets and invoices can sit outside this window; stage + actual-end are the
-          true lifecycle markers. Dates are optional at create-time but must be set
-          before moving the project to <span className="font-mono">closing</span> or{' '}
-          <span className="font-mono">archived</span>.
+          true lifecycle markers. Dates are entirely optional — you can archive without them.
         </p>
-        {datesIncomplete && (
-          <div className="rounded-md border border-status-amber bg-status-amber-soft px-3 py-2 text-xs text-status-amber">
-            Reconcile reminder: theoretical start &amp; end aren&apos;t both set yet. You
-            can save now, but the system will block stage transitions to closing /
-            archived until both dates are filled in.
-          </div>
-        )}
         <FieldRow>
           <Field label="Stage" error={errs['stage']}>
             <Select name="stage" defaultValue={project.stage}>
