@@ -872,6 +872,26 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] For subjects >$20k: 6-digit MFA challenge sent via WhatsApp before accepting
 - [ ] Decision written to Approval + audit
 
+### TASK-123 — WhatsApp: surface delivery status
+**status:** todo
+**depends on:** TASK-120
+**context:** Meta posts `statuses` events (`sent → delivered → read → failed`) to the webhook. Today [whatsapp/webhook/route.ts](src/app/api/whatsapp/webhook/route.ts) parses them out of the payload type but drops them on the floor (see the comment at the `statuses` branch) — so a message Meta accepts but never delivers (e.g. recipient not on the test-recipient list, or error `131047` outside the 24h window / missing template) is invisible in-app. This is exactly the confusion hit during first setup (2026-07-01): "✓ Sent" with a real `wamid` but nothing landed.
+**acceptance:**
+- [ ] Webhook handles `value.statuses[]`: persist latest status + `errors[]` (code + title) against the outbound message row (keyed by `wamid`)
+- [ ] Failed/undelivered surfaced somewhere an Admin can see (integration screen or the send-test panel), including Meta's error code + human title
+- [ ] Signature verification unchanged; still returns 200 to avoid Meta retry storms
+- [ ] Test: golden webhook payload with a `failed` status → row updated + error captured
+- [ ] Commit: `feat(TASK-123): surface WhatsApp delivery status + failures`
+
+### TASK-124 — chore: unify Graph API version
+**status:** todo
+**depends on:** TASK-120
+**context:** [whatsapp.ts](src/server/integrations/whatsapp.ts) pins `GRAPH_BASE` at `v21.0` while the register action in [whatsapp/actions.ts](src/app/(app)/admin/integrations/whatsapp/actions.ts) calls `v22.0`. Both work today; drift is a latent footgun when one version deprecates.
+**acceptance:**
+- [ ] Single source of truth for the Graph API version (one const, imported by both call sites)
+- [ ] Typecheck + lint green
+- [ ] Commit: `chore(TASK-124): unify WhatsApp Graph API version`
+
 ### TASK-130 — DocuSign integration
 **status:** todo
 **depends on:** TASK-010

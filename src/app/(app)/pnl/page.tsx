@@ -8,6 +8,11 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { WaterfallChart, type WaterfallStep } from '@/components/charts/waterfall';
 import { cn } from '@/lib/utils';
+
+// FY switching must re-fetch every time — Next.js otherwise treats
+// /pnl?fy=26 and /pnl?fy=27 as the same cache key on Vercel and both
+// tabs return the same numbers.
+export const dynamic = 'force-dynamic';
 import {
   Table,
   TableBody,
@@ -228,15 +233,21 @@ export default async function FirmPnLPage({
       {/* ── Firm earnings to date (cumulative, all FYs) ───────────── */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium">Firm earnings to date</CardTitle>
+          <CardTitle className="text-sm font-medium">
+            Firm earnings — all-time
+            <Badge variant="outline" className="ml-2 align-middle text-[10px] uppercase">
+              cumulative
+            </Badge>
+          </CardTitle>
           <p className="text-xs text-ink-3">
-            Cumulative across every FY on record — independent of the tab you&apos;re on.
+            Every FY on record. Does NOT change when you switch tabs — the tiles below
+            do.
           </p>
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-4 py-3 md:grid-cols-3">
           <div>
             <div className="text-[10px] uppercase tracking-wide text-ink-3">
-              Revenue invoiced
+              All-time revenue invoiced
             </div>
             <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
               {formatMoney(pnl.cumulative.revenueCents)}
@@ -244,7 +255,7 @@ export default async function FirmPnLPage({
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-wide text-ink-3">
-              Payments received
+              All-time payments received
             </div>
             <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
               {formatMoney(pnl.cumulative.receivedCents)}
@@ -265,6 +276,11 @@ export default async function FirmPnLPage({
           </div>
         </CardContent>
       </Card>
+
+      {/* Clarifying banner above the FY-scoped KPI grid */}
+      <p className="text-xs text-ink-3">
+        Tiles + waterfall below are scoped to <strong>{scopeLabel}</strong>. Switch tabs above to change window.
+      </p>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
         <TotalCard
