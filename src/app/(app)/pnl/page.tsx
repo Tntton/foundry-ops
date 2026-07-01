@@ -3,16 +3,12 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { computeFirmPnL } from '@/server/reports/pnl';
+import { computeFyBudgetActuals, type FyBudgetActuals } from '@/server/reports/fy-budget';
 import { auFyOf, auFyLabel, auFyWindow } from '@/lib/au-fy';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { WaterfallChart, type WaterfallStep } from '@/components/charts/waterfall';
 import { cn } from '@/lib/utils';
-
-// FY switching must re-fetch every time — Next.js otherwise treats
-// /pnl?fy=26 and /pnl?fy=27 as the same cache key on Vercel and both
-// tabs return the same numbers.
-export const dynamic = 'force-dynamic';
 import {
   Table,
   TableBody,
@@ -21,6 +17,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+
+// FY switching must re-fetch every time — Next.js otherwise treats
+// /pnl?fy=26 and /pnl?fy=27 as the same cache key on Vercel and both
+// tabs return the same numbers.
+export const dynamic = 'force-dynamic';
 
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
@@ -60,6 +61,11 @@ export default async function FirmPnLPage({
   const isArchivedFy = typeof selected === 'number' && selected < currentFy;
 
   const pnl = await computeFirmPnL(window);
+  // Only fetch budget-vs-actuals for the active FY — archived FYs
+  // stay a pure actuals view; all-time doesn't have a "budget" concept.
+  const budgetActuals = isActiveFy && typeof selected === 'number'
+    ? await computeFyBudgetActuals(selected)
+    : null;
   const maxMonthly = Math.max(
     1,
     ...pnl.monthly.flatMap((m) => [m.revenueCents, m.costCents]),
@@ -325,6 +331,14 @@ export default async function FirmPnLPage({
         />
       </div>
 
+      {budgetActuals && (
+        <BudgetActualsSection
+          data={budgetActuals}
+          fyLabel={scopeLabel}
+          formatMoney={formatMoney}
+        />
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>Firm waterfall</CardTitle>
@@ -511,6 +525,172 @@ function TotalCard({
           {value}
         </div>
         {sub && <div className="text-[11px] text-ink-3">{sub}</div>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function BudgetActualsSection({
+  data,
+  fyLabel,
+  formatMoney,
+}: {
+  data: FyBudgetActuals;
+  fyLabel: string;
+  formatMoney: (cents: number) => string;
+}) {
+  const rows = [
+    data.topLine.revenue,
+    data.topLine.consultantCost,
+    data.topLine.projectExpense,
+    data.topLine.firmOpex,
+    data.topLine.ebit,
+  ];
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-3">
+        <div>
+          <CardTitle>Budget vs actuals · {fyLabel}</CardTitle>
+          <p className="mt-1 text-xs text-ink-3">
+            Plan set for {fyLabel}; actuals pulled live from invoices, contractor
+            costs, timesheets, and OPEX bills. Positive variance = under budget.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {!data.hasBudget && (
+            <Badge variant="amber" className="text-[10px] uppercase">
+              No budget saved
+            </Badge>
+          )}
+          <Link
+            href="/admin/fy-budget"
+            className="rounded-md border border-line px-3 py-1.5 text-xs text-ink-2 hover:bg-surface-hover hover:text-ink"
+          >
+            {data.hasBudget ? 'Edit budget' : 'Set budget'}
+          </Link>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {/* Top-line variance table */}
+        <div className="overflow-hidden rounded-md border border-line">
+          <table className="w-full text-sm">
+            <thead className="bg-surface-subtle text-xs text-ink-3">
+              <tr>
+                <th className="px-3 py-2 text-left">Line</th>
+                <th className="px-3 py-2 text-right">Budget</th>
+                <th className="px-3 py-2 text-right">Actuals</th>
+                <th className="px-3 py-2 text-right">Variance</th>
+                <th className="px-3 py-2 text-right">Variance %</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {rows.map((r, i) => {
+                const goodWhenUnder = i > 0 && i < 4; // costs — good when actual < budget
+                const goodWhenOver = i === 0 || i === 4; // revenue + EBIT — good when actual > budget
+                const positive = r.varianceCents > 0;
+                const varColour = positive
+                  ? goodWhenUnder ? 'text-status-green' : goodWhenOver ? 'text-status-red' : 'text-ink'
+                  : r.varianceCents < 0
+                    ? goodWhenOver ? 'text-status-green' : goodWhenUnder ? 'text-status-red' : 'text-ink'
+                    : 'text-ink-3';
+                return (
+                  <tr key={r.label}>
+                    <td className="px-3 py-2 font-medium text-ink">{r.label}</td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-ink-2">
+                      {formatMoney(r.plannedCents)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-ink">
+                      {formatMoney(r.actualCents)}
+                    </td>
+                    <td className={`px-3 py-2 text-right font-mono tabular-nums ${varColour}`}>
+                      {formatMoney(r.varianceCents)}
+                    </td>
+                    <td className={`px-3 py-2 text-right font-mono tabular-nums ${varColour}`}>
+                      {r.variancePct !== null ? `${r.variancePct}%` : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* OPEX breakdown by ATO category */}
+        {data.opex.byCategory.length > 0 && (
+          <div>
+            <div className="mb-2 flex items-baseline justify-between">
+              <h3 className="text-sm font-medium text-ink">OPEX by ATO category</h3>
+              <div className="text-xs text-ink-3">
+                {formatMoney(data.opex.totalActualCents)} of {formatMoney(data.opex.totalPlannedCents)} planned
+              </div>
+            </div>
+            <div className="space-y-2">
+              {data.opex.byCategory.map((cat) => (
+                <details key={cat.atoCategory} className="rounded-md border border-line" open>
+                  <summary className="flex cursor-pointer items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-surface-hover">
+                    <span className="font-medium text-ink">{cat.atoCategory}</span>
+                    <span className="flex items-center gap-4 text-xs">
+                      <span className="text-ink-3">
+                        Budget <span className="font-mono tabular-nums text-ink">{formatMoney(cat.plannedCents)}</span>
+                      </span>
+                      <span className="text-ink-3">
+                        Actual <span className="font-mono tabular-nums text-ink">{formatMoney(cat.actualCents)}</span>
+                      </span>
+                      <span
+                        className={`font-mono tabular-nums ${cat.varianceCents >= 0 ? 'text-status-green' : 'text-status-red'}`}
+                      >
+                        {formatMoney(cat.varianceCents)}
+                        {cat.variancePct !== null && ` (${cat.variancePct}%)`}
+                      </span>
+                    </span>
+                  </summary>
+                  {cat.lines.length > 0 ? (
+                    <div className="overflow-hidden border-t border-line">
+                      <table className="w-full text-xs">
+                        <thead className="bg-surface-subtle/40 text-ink-3">
+                          <tr>
+                            <th className="px-3 py-1.5 text-left">Line</th>
+                            <th className="px-3 py-1.5 text-left">Vendor</th>
+                            <th className="px-3 py-1.5 text-left">Cadence</th>
+                            <th className="px-3 py-1.5 text-right">Planned (annual)</th>
+                            <th className="px-3 py-1.5 text-left">Carry over</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-line">
+                          {cat.lines.map((line) => (
+                            <tr key={line.id}>
+                              <td className="px-3 py-1.5 text-ink">{line.label}</td>
+                              <td className="px-3 py-1.5 text-ink-2">{line.vendor ?? '—'}</td>
+                              <td className="px-3 py-1.5 capitalize text-ink-3">
+                                {line.cadence.replace('_', ' ')}
+                              </td>
+                              <td className="px-3 py-1.5 text-right font-mono tabular-nums text-ink">
+                                {formatMoney(line.plannedCents)}
+                              </td>
+                              <td className="px-3 py-1.5">
+                                {line.isCarryOver ? (
+                                  <Badge variant="green" className="text-[10px]">
+                                    carry
+                                  </Badge>
+                                ) : (
+                                  <span className="text-ink-3">—</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="px-3 py-3 text-xs italic text-ink-3">
+                      Actual spend recorded here, no budget lines set.
+                    </div>
+                  )}
+                </details>
+              ))}
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

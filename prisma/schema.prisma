@@ -1795,3 +1795,71 @@ model AssistantMessage {
 
   @@index([threadId, createdAt])
 }
+
+// ============================================================================
+// FY BUDGET (top-line targets + per-line OPEX plan)
+// ============================================================================
+
+/// Per-financial-year plan. TT sets top-line revenue + cost targets
+/// and a line-itemised OPEX budget (grouped by ATO category, seeded
+/// from the master tracker's Vendors & Systems Register). The active
+/// FY tab on /pnl renders these numbers alongside actuals to show
+/// variance in-year.
+model FyBudget {
+  id                        String   @id @default(cuid())
+  /// e.g. 27 → FY27 (Jul 2026 – Jun 2027). Unique across the table.
+  yearEnding                Int      @unique
+  /// All amounts stored in AUD cents ex-GST.
+  revenueTargetCents        Int      @default(0)
+  consultantCostTargetCents Int      @default(0)
+  projectExpenseTargetCents Int      @default(0)
+  /// EBIT = revenue − consultant − projectExpense − OPEX. Stored as
+  /// a target so TT can plug in the number and let the OPEX lines
+  /// balance to it, rather than deriving.
+  ebitTargetCents           Int      @default(0)
+  notes                     String?  @db.Text
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  opexLines                 FyBudgetOpexLine[]
+
+  @@index([yearEnding])
+}
+
+enum FyBudgetCadence {
+  monthly
+  quarterly
+  annual
+  one_off
+  variable
+}
+
+/// Individual OPEX budget line. Grouped by ATO category so /pnl and
+/// tax-time reports can slice consistently. `isCarryOver=true` marks
+/// lines that automatically roll forward each FY (subscriptions,
+/// insurances, salaries) — a follow-up forecast helper walks these on
+/// FY rollover.
+model FyBudgetOpexLine {
+  id                 String          @id @default(cuid())
+  fyBudgetId         String
+  /// Short human label, e.g. "M365 Business Standard" or "Cyber
+  /// insurance renewal". Rendered as the row label on the budget UI.
+  label              String
+  /// ATO tax category — same taxonomy as Expense.category so the
+  /// reconciliation to tax-return time is one lookup.
+  atoCategory        String
+  /// Optional vendor / supplier reference — free-text; ties back to
+  /// the Vendors & Systems Register in the master tracker.
+  vendor             String?
+  plannedAnnualCents Int             @default(0)
+  isCarryOver        Boolean         @default(false)
+  cadence            FyBudgetCadence @default(annual)
+  notes              String?         @db.Text
+  sortOrder          Int             @default(0)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  fyBudget           FyBudget        @relation(fields: [fyBudgetId], references: [id], onDelete: Cascade)
+
+  @@index([fyBudgetId, atoCategory])
+}
