@@ -226,7 +226,11 @@ export async function computeManagerDashboard(
   const cards: ProjectQcCard[] = projects.map((p) => {
     const pnl = pnlByProject.get(p.id)!;
     const totalRev = pnl.revenue.invoiced + pnl.revenue.wip;
-    const totalCost = pnl.cost.timesheet + pnl.cost.expense + pnl.cost.bill;
+    const totalCost =
+      pnl.cost.timesheet +
+      pnl.cost.contractorInvoice +
+      pnl.cost.expense +
+      pnl.cost.bill;
     const exGstCost = pnl.cost.expense + pnl.cost.bill;
     const expensePct =
       p.contractValue > 0

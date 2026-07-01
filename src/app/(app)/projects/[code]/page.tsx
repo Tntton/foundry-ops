@@ -1386,7 +1386,11 @@ function KindPill({ kind }: { kind: CostKind }) {
 
 function ProjectPnLPanel({ pnl }: { pnl: ProjectPnL }) {
   const totalRevenue = pnl.revenue.invoiced + pnl.revenue.wip;
-  const totalCost = pnl.cost.timesheet + pnl.cost.expense + pnl.cost.bill;
+  const totalCost =
+    pnl.cost.timesheet +
+    pnl.cost.contractorInvoice +
+    pnl.cost.expense +
+    pnl.cost.bill;
   const hasActivity = totalRevenue > 0 || totalCost > 0 || pnl.hours > 0;
   const marginPct =
     totalRevenue > 0 ? Math.round((pnl.margin / totalRevenue) * 100) : null;
@@ -1429,8 +1433,8 @@ function ProjectPnLPanel({ pnl }: { pnl: ProjectPnL }) {
               {formatMoney(totalCost)}
             </div>
             <div className="text-xs text-ink-3">
-              {formatMoney(pnl.cost.timesheet)} time · {formatMoney(pnl.cost.expense)} exp ·{' '}
-              {formatMoney(pnl.cost.bill)} bills
+              {formatMoney(pnl.cost.timesheet + pnl.cost.contractorInvoice)} labour ·{' '}
+              {formatMoney(pnl.cost.expense)} exp · {formatMoney(pnl.cost.bill)} bills
             </div>
           </CardContent>
         </Card>
@@ -1724,7 +1728,7 @@ function ProjectOverviewTab({
   // Derived metrics — keep null-safe so the panel renders even before P&L.
   const totalRev = pnl ? pnl.revenue.invoiced + pnl.revenue.wip : 0;
   const totalCost = pnl
-    ? pnl.cost.timesheet + pnl.cost.expense + pnl.cost.bill
+    ? pnl.cost.timesheet + pnl.cost.contractorInvoice + pnl.cost.expense + pnl.cost.bill
     : 0;
   const expensePct =
     pnl && project.contractValue > 0
@@ -1945,7 +1949,7 @@ function ProjectOverviewTab({
             contractValueCents={project.contractValue}
             invoicedCents={pnl.revenue.invoiced}
             wipInvoicesCents={pnl.revenue.wip}
-            costCents={pnl.cost.timesheet + pnl.cost.expense + pnl.cost.bill}
+            costCents={pnl.cost.timesheet + pnl.cost.contractorInvoice + pnl.cost.expense + pnl.cost.bill}
           />
         )}
 
