@@ -904,8 +904,9 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Commit: `feat(TASK-125): public privacy policy page for Meta app publish`
 
 ### TASK-126 — leader dashboard: group actions into columns + per-group hide/snooze
-**status:** doing
+**status:** done
 **depends on:** —
+**note (2026-07-02):** Built. 5 columns from `kind`, per-group Hide + Snooze 7/14/30d inline menu, "Show" chips for suppressed groups, headline counts visible-only. Prefs in `UserPreference.prefs.dashboardActionGroups` (no migration). Pure helpers in `src/server/dashboard-prefs.ts` (18 unit tests), session-checked + audited server action. Typecheck + 295 tests + lint green. NOT runtime-verified — needs a leader login against a live DB (couldn't reach prod from here).
 **context:** TT (2026-07-02): the leader dashboard "actions to clear" strip is a flat, ungrouped list and feels like a mess. Group actions L→R into columns by category, and let a leader hide or snooze whole groups they don't need to action (e.g. all `deal_stale`), managed inline on the dashboard. Decisions (TT): **both** permanent-hide and timed-snooze per group; controls **inline** on the dashboard.
 **design:**
 - 5 groups from the existing `LeaderPendingAction['kind']`: Approvals (bill/expense/invoice/timesheet queues) · Delivery (project_stale, project_missing_milestones) · Business Dev (deal_stale) · Billing (invoice_to_draft) · Personal (self_*).
