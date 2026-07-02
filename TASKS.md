@@ -926,9 +926,10 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **depends on:** —
 **note (2026-07-02):** WhatsApp-issued prefill deep-links were expiring at the 15-min web default. Added `WHATSAPP_PREFILL_TTL_SECONDS` (24h) in [prefill/token.ts](src/server/agents/assistant/prefill/token.ts) and applied it to the timesheet + expense links minted in [whatsapp-router.ts](src/server/integrations/whatsapp-router.ts). Web prefill (same-session) stays 15 min. Test added (valid-at-23h / expired-past-24h). Typecheck + tests + lint green. Commit `feat(TASK-127)` `7189b5a`.
 
-### TASK-128 — WhatsApp prefill: completion reminders + reply-to-confirm fallback
-**status:** todo
+### TASK-128 — WhatsApp prefill: completion reminders
+**status:** done (reminders); reply-to-confirm split to TASK-129
 **depends on:** TASK-127, TASK-302c
+**note (2026-07-02):** Built the reminder half. Reply-to-confirm deferred to [[TASK-129]] (TT chose "reminders only" this pass — it needs a headless financial-write path best done with DB verification). New `WhatsAppPrefillDispatch` model + hand-authored migration (`20260702000000_whatsapp_prefill_dispatch`); dispatch row created on both WhatsApp prefill sends (jti persisted from `signPrefillToken`); pure `dueReminder` (early + last-call, last-call-priority) unit-tested; cron `/api/cron/whatsapp-prefill-reminders` (hourly in vercel.json) sends the nudge, re-sends the link + in-app-browser tip, and marks completion when the target record exists. Typecheck + 307 tests + lint green. **Migration + live WhatsApp send NOT verified locally (no DB) — verify on deploy.** Also fixed stale "15-min link" copy → "link valid 24h".
 **context:** TT (2026-07-02): people receive a prefill link on WhatsApp but sometimes the first tap lands in an in-app browser they can't sign into, so the entry never gets submitted. Send reminders to nudge completion, and offer a browser-free fallback. **Decisions (TT):** reminders fire **both** a few hours after send *and* a last-call shortly before the 24h expiry; the fallback is **reply-to-confirm** — replying `CONFIRM` submits the prefilled timesheet/expense directly. NB: reply-to-confirm intentionally reverses part of TASK-302c (no-auto-write) for these low-value (< $20k) items — approved by TT; the high-value web-only rule is untouched (timesheet/expense aren't in that gate).
 **design:**
 - New model `WhatsAppPrefillDispatch` (migration — applies on deploy; can't verify locally): `id, personId, whatsappNumber, kind, payloadJson, jti, weekIso?, sentAt, expiresAt, completedAt?, earlyReminderAt?, lastCallReminderAt?`. `signPrefillToken` grows an optional `jti` param so the router can persist the same id it embeds.
@@ -943,8 +944,30 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Cron sends at most one early + one last-call, skips completed/expired, marks timestamps; existence check marks completion.
 - [ ] `CONFIRM` applies the prefill via the shared apply path with audit; rejects when no outstanding dispatch; respects capability checks.
 - [ ] Reminder copy includes the browser tip + the reply-to-confirm option.
-- [ ] Typecheck + tests + lint green. (Migration + live WhatsApp behaviour need deploy verification — flag in commit.)
-- [ ] Commit(s): `chore(db): WhatsAppPrefillDispatch` then `feat(TASK-128): WhatsApp prefill reminders + reply-to-confirm`.
+**acceptance (reminders — this task):**
+- [x] Migration + `WhatsAppPrefillDispatch` model; `prisma generate` clean. (seed unchanged; not re-run — no local DB)
+- [x] Dispatch row created on both WhatsApp prefill sends (jti matches the token).
+- [x] Pure `dueReminder` unit-tested (early window, last-call window, already-sent, completed, expired, last-call priority).
+- [x] Cron sends at most one early + one last-call, skips completed/expired, marks timestamps; existence check marks completion.
+- [x] Reminder copy includes the browser tip.
+- [x] Typecheck + tests + lint green. (Migration + live WhatsApp send need deploy verification.)
+- [x] Commits: `chore(db): WhatsAppPrefillDispatch` then `feat(TASK-128): WhatsApp prefill completion reminders`.
+
+### TASK-129 — WhatsApp prefill: reply-to-confirm fallback (deferred from TASK-128)
+**status:** todo
+**depends on:** TASK-128
+**context:** TT (2026-07-02): for people who can't open the link in a real browser, let them reply `CONFIRM` to submit the prefilled timesheet/expense directly. Deferred from TASK-128 because it writes financial/timesheet data headlessly and is best built with a live/staging DB to verify. Reverses part of TASK-302c (no-auto-write) for low-value (< $20k) items — TT-approved; high-value web-only gate untouched.
+**design:**
+- Add `confirm` intent to [classify.ts](src/server/agents/intent/classify.ts) (keywords: confirm, yes, submit).
+- On `confirm`: `findLatestOutstandingDispatch(personId)` (WhatsAppPrefillDispatch, not completed/expired). If none → reply "nothing to confirm."
+- Apply the stored payload via a shared headless write (factor the create+audit from the router's legacy path / the web submit action), full validation + capability checks, `source='agent'`, then `markDispatchCompleted` and reply confirmation.
+- Reminder copy gains the "or reply CONFIRM" line once this ships.
+**acceptance:**
+- [ ] `confirm` intent + keyword tests.
+- [ ] Applies latest outstanding dispatch via shared write path with audit; rejects when none; capability-gated.
+- [ ] Idempotent: a second CONFIRM after completion is a no-op with a clear reply.
+- [ ] Typecheck + tests + lint green; verified against a live/staging DB.
+- [ ] Commit: `feat(TASK-129): WhatsApp reply-to-confirm submits prefill`.
 
 ### TASK-130 — DocuSign integration
 **status:** todo

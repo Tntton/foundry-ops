@@ -105,6 +105,13 @@ function constantTimeEqual(a: Buffer, b: Buffer): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
+/** Mint a fresh token id. Exposed so a caller (e.g. the WhatsApp router)
+ *  can persist the same `jti` it embeds in a link, then correlate a
+ *  later reminder/completion back to the exact dispatch. */
+export function newPrefillJti(): string {
+  return crypto.randomBytes(8).toString('hex');
+}
+
 /**
  * Mint a token. `nowSeconds` is injected for testability (default Date.now).
  */
@@ -115,6 +122,9 @@ export function signPrefillToken<T>(
     payload: T;
     /** Override TTL in seconds. Default `PREFILL_TTL_SECONDS`. */
     ttlSeconds?: number;
+    /** Supply the token id so the caller can persist the same value.
+     *  Defaults to a fresh random id. */
+    jti?: string;
   },
   nowSeconds: number = Math.floor(Date.now() / 1000),
 ): string {
@@ -127,7 +137,7 @@ export function signPrefillToken<T>(
     payload: input.payload,
     iat,
     exp,
-    jti: crypto.randomBytes(8).toString('hex'),
+    jti: input.jti ?? newPrefillJti(),
   };
   const bodyJson = JSON.stringify(body);
   const bodyB64 = base64urlEncode(bodyJson);

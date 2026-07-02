@@ -12,8 +12,10 @@ import { parseTimesheetText } from '@/server/agents/intent/timesheet';
 import { parseAvailabilityText } from '@/server/agents/intent/availability';
 import {
   signPrefillToken,
+  newPrefillJti,
   WHATSAPP_PREFILL_TTL_SECONDS,
 } from '@/server/agents/assistant/prefill/token';
+import { createPrefillDispatch } from '@/server/whatsapp-prefill-dispatch';
 import { startOfWeek, formatIsoDate } from '@/lib/week';
 import { optionalEnv } from '@/server/env';
 import { downloadWhatsAppMedia, sendWhatsAppText } from './whatsapp';
@@ -279,11 +281,16 @@ async function handleTimesheet(
   // Build a signed prefill token + reply with a deep-link to the
   // form. The user taps the link, lands on /timesheet with the row
   // populated and the "Prefilled by Assistant" banner, and submits
-  // via the form's normal flow. No DB row is written here.
+  // via the form's normal flow. No timesheet row is written here — only
+  // a dispatch-tracking row (below) so the reminder cron can nudge them
+  // to finish (TASK-128).
+  const prefillJti = newPrefillJti();
+  const prefillSentMs = Date.now();
   const token = signPrefillToken({
     kind: 'timesheet',
     personId: person.id,
     ttlSeconds: WHATSAPP_PREFILL_TTL_SECONDS,
+    jti: prefillJti,
     payload: {
       entries: [
         {
@@ -316,12 +323,23 @@ async function handleTimesheet(
       source: 'agent',
     });
   });
+  await createPrefillDispatch({
+    personId: person.id,
+    whatsappNumber: message.fromPhone,
+    kind: 'timesheet',
+    linkUrl: url,
+    jti: prefillJti,
+    expiresAt: new Date(prefillSentMs + WHATSAPP_PREFILL_TTL_SECONDS * 1000),
+    projectCode: project.code,
+    entryDateIso: parsed.dateIso,
+    hours: parsed.hours,
+  });
   await setFlow(conversation.id, 'idle', null);
   await reply(
     conversation.id,
     message.fromPhone,
     `📝 Prepped *${parsed.hours}h* on *${project.code}* for ${parsed.dateIso}.
-Tap to review + submit (15-min link):
+Tap to review + submit (link valid 24h):
 ${url}`,
     'assistant_prefill',
     null,
@@ -538,10 +556,13 @@ ${projectLine}`,
     message.text && message.text.trim().length > 0
       ? message.text.trim()
       : `Receipt · ${vendor || 'unknown vendor'} · ${dateIso}`;
+  const prefillJti = newPrefillJti();
+  const prefillSentMs = Date.now();
   const token = signPrefillToken({
     kind: 'expense',
     personId: person.id,
     ttlSeconds: WHATSAPP_PREFILL_TTL_SECONDS,
+    jti: prefillJti,
     payload: {
       dateIso,
       amountDollars: totalDollars,
@@ -576,6 +597,16 @@ ${projectLine}`,
       source: 'agent',
     });
   });
+  await createPrefillDispatch({
+    personId: person.id,
+    whatsappNumber: message.fromPhone,
+    kind: 'expense',
+    linkUrl: url,
+    jti: prefillJti,
+    expiresAt: new Date(prefillSentMs + WHATSAPP_PREFILL_TTL_SECONDS * 1000),
+    entryDateIso: dateIso,
+    amountCents: Math.round(totalDollars * 100),
+  });
   await setFlow(conversation.id, 'idle', null);
   const projectLine = projectCode
     ? `· Tagged to project *${projectCode}*`
@@ -584,7 +615,7 @@ ${projectLine}`,
     conversation.id,
     message.fromPhone,
     `📸 Read *${vendor || 'receipt'}* · *$${totalDollars.toFixed(2)}* on ${dateIso} ${projectLine}.
-Tap to review + submit (15-min link):
+Tap to review + submit (link valid 24h):
 ${url}`,
     'assistant_prefill',
     null,
