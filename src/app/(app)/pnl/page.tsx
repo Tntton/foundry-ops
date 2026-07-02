@@ -236,57 +236,62 @@ export default async function FirmPnLPage({
         })}
       </nav>
 
-      {/* ── Firm earnings to date (cumulative, all FYs) ───────────── */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">
-            Firm earnings — all-time
-            <Badge variant="outline" className="ml-2 align-middle text-[10px] uppercase">
-              cumulative
-            </Badge>
-          </CardTitle>
-          <p className="text-xs text-ink-3">
-            Every FY on record. Does NOT change when you switch tabs — the tiles below
-            do.
-          </p>
-        </CardHeader>
-        <CardContent className="grid grid-cols-2 gap-4 py-3 md:grid-cols-3">
-          <div>
-            <div className="text-[10px] uppercase tracking-wide text-ink-3">
-              All-time revenue invoiced
+      {/* Firm earnings to date — only on the "All time" tab. FY-specific
+          tabs stay purely scoped to their window, no duplicate summary
+          up top. */}
+      {selected === 'all' && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">
+              Firm earnings — all-time
+              <Badge variant="outline" className="ml-2 align-middle text-[10px] uppercase">
+                cumulative
+              </Badge>
+            </CardTitle>
+            <p className="text-xs text-ink-3">
+              Every FY on record. Includes historical backfill (FY21-FY25) + live FY26/FY27 activity.
+            </p>
+          </CardHeader>
+          <CardContent className="grid grid-cols-2 gap-4 py-3 md:grid-cols-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-ink-3">
+                All-time revenue invoiced
+              </div>
+              <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
+                {formatMoney(pnl.cumulative.revenueCents)}
+              </div>
             </div>
-            <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
-              {formatMoney(pnl.cumulative.revenueCents)}
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-ink-3">
+                All-time payments received
+              </div>
+              <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
+                {formatMoney(pnl.cumulative.receivedCents)}
+              </div>
+              <div className="text-[10px] text-ink-3">
+                {pnl.cumulative.revenueCents > 0
+                  ? `${Math.round((pnl.cumulative.receivedCents / pnl.cumulative.revenueCents) * 100)}% collected`
+                  : '—'}
+              </div>
             </div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wide text-ink-3">
-              All-time payments received
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-ink-3">
+                Contracts won (lifetime)
+              </div>
+              <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
+                {formatMoney(pnl.cumulative.contractsWonCents)}
+              </div>
             </div>
-            <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
-              {formatMoney(pnl.cumulative.receivedCents)}
-            </div>
-            <div className="text-[10px] text-ink-3">
-              {pnl.cumulative.revenueCents > 0
-                ? `${Math.round((pnl.cumulative.receivedCents / pnl.cumulative.revenueCents) * 100)}% collected`
-                : '—'}
-            </div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wide text-ink-3">
-              Contracts won (lifetime)
-            </div>
-            <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
-              {formatMoney(pnl.cumulative.contractsWonCents)}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
 
-      {/* Clarifying banner above the FY-scoped KPI grid */}
-      <p className="text-xs text-ink-3">
-        Tiles + waterfall below are scoped to <strong>{scopeLabel}</strong>. Switch tabs above to change window.
-      </p>
+      {/* Scope-clarifier line — only relevant when a specific FY is selected. */}
+      {selected !== 'all' && (
+        <p className="text-xs text-ink-3">
+          Tiles + waterfall below are scoped to <strong>{scopeLabel}</strong>. Switch tabs above to change window.
+        </p>
+      )}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
         <TotalCard
