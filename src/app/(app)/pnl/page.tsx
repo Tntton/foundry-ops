@@ -50,7 +50,9 @@ export default async function FirmPnLPage({
   // Current AU FY based on server today; scope is either that FY, an
   // adjacent one, or "all" (no window).
   const currentFy = auFyOf(new Date());
-  const availableFys = [currentFy - 1, currentFy]; // e.g. FY26 + FY27
+  // Live FY first, then prior FY, then All time — matches how TT reads
+  // the page (default view = what's happening now, drill back for history).
+  const availableFys = [currentFy, currentFy - 1]; // e.g. FY27 + FY26
   const selectedRaw = searchParams.fy ?? String(currentFy);
   const selected: number | 'all' = selectedRaw === 'all'
     ? 'all'

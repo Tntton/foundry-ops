@@ -31,6 +31,10 @@ import { PersonAvatar } from '@/components/person-avatar';
 import { listUserUpdates } from '@/server/user-updates';
 import { listStaffPendingActions } from '@/server/staff-actions';
 import { listLeaderPendingActions } from '@/server/leader-actions';
+import {
+  getDashboardActionPrefs,
+  countVisibleActions,
+} from '@/server/dashboard-prefs';
 import { LatestUpdatesCard } from './dashboard/latest-updates-card';
 import { StaffActionStrip } from './dashboard/staff-action-strip';
 import { LeaderActionStrip } from './dashboard/leader-action-strip';
@@ -180,6 +184,17 @@ export default async function DashboardPage({
     );
   }
 
+  // Leader dashboard. Load this leader's action-group hide/snooze prefs so
+  // the strip can group + suppress, and the headline counts only what's
+  // actually visible. `now` is fixed once so snooze-expiry is stable.
+  const now = new Date();
+  const actionPrefs = leaderPayload
+    ? await getDashboardActionPrefs(session.person.id)
+    : {};
+  const leaderVisibleCount = leaderPayload
+    ? countVisibleActions(leaderPayload.actions, actionPrefs, now)
+    : 0;
+
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -194,8 +209,8 @@ export default async function DashboardPage({
                 partners + admins. Headline now matches the pending-
                 action count when there's work to clear; falls back
                 to a generic "Dashboard" once everything's done. */}
-            {leaderPayload && leaderPayload.actions.length > 0
-              ? `${leaderPayload.actions.length} thing${leaderPayload.actions.length === 1 ? '' : 's'} to clear`
+            {leaderPayload && leaderVisibleCount > 0
+              ? `${leaderVisibleCount} thing${leaderVisibleCount === 1 ? '' : 's'} to clear`
               : leaderRole === 'admin'
                 ? 'Admin dashboard'
                 : leaderRole === 'partner'
@@ -233,6 +248,8 @@ export default async function DashboardPage({
           pending={leaderPayload.actions}
           counts={leaderPayload.counts}
           role={leaderRole}
+          prefs={actionPrefs}
+          now={now}
         />
       )}
 
