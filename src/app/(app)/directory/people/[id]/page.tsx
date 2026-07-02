@@ -33,6 +33,7 @@ import { InactiveToggleButton } from './inactive/inactive-toggle';
 import { InlineField } from './inline-field';
 import { CvUploadPanel } from './cv/cv-upload-panel';
 import { EducationWorkPanel } from './cv/education-work-panel';
+import { MagicLinkButton } from './magic-link/button';
 
 function formatMoney(cents: number): string {
   if (cents === 0) return '—';
@@ -426,6 +427,20 @@ export default async function PersonDetailPage({
             to change it on first sign-in. This message will not reappear — refresh and
             it&apos;s gone.
           </div>
+        </div>
+      )}
+
+      {/* Super-admin escape hatch — issue a magic sign-in link for this
+          person. Emails via Resend + surfaces the URL for copy/paste so
+          it works even when email is down. Every issuance is audited. */}
+      {hasAnyRole(session, ['super_admin']) && (
+        <div className="rounded-md border border-line bg-card px-4 py-3">
+          <div className="text-sm font-medium text-ink">Sign-in link</div>
+          <p className="mb-2 text-xs text-ink-3">
+            Issue a single-use magic link (15-minute TTL) for{' '}
+            <span className="font-mono">{person.email}</span>. Also emailed. Use when Entra sign-in is unavailable or for contractor onboarding.
+          </p>
+          <MagicLinkButton personId={person.id} personEmail={person.email} />
         </div>
       )}
 
