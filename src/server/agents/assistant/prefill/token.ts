@@ -21,6 +21,17 @@ import { requireEnv } from '@/server/env';
  */
 
 export const PREFILL_TTL_SECONDS = 15 * 60; // 15 minutes
+
+/**
+ * WhatsApp-issued prefill links get a much longer TTL than web ones. A web
+ * prefill is consumed in the same session seconds later, so 15 minutes is
+ * ample (and tighter is safer). A WhatsApp link, by contrast, is sent to a
+ * phone and often opened much later — or the first tap lands in an in-app
+ * browser the person can't sign into, so they retry from a real browser
+ * later. 24h covers that without the link going stale. Still person-bound
+ * and non-submitting, so the longer window is low-risk.
+ */
+export const WHATSAPP_PREFILL_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 const KEY_DOMAIN = 'assistant-prefill-v1';
 
 export type PrefillKind =

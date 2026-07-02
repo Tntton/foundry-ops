@@ -3,6 +3,7 @@ import {
   signPrefillToken,
   verifyPrefillToken,
   PREFILL_TTL_SECONDS,
+  WHATSAPP_PREFILL_TTL_SECONDS,
 } from '@/server/agents/assistant/prefill/token';
 
 beforeAll(() => {
@@ -76,6 +77,35 @@ describe('prefill token — sign + verify round-trip', () => {
     );
     expect(verify.ok).toBe(false);
     if (!verify.ok) expect(verify.reason).toBe('expired');
+  });
+
+  it('honours a WhatsApp 24h TTL override — valid at 23h, expired past 24h', () => {
+    const now = 1_700_000_000;
+    expect(WHATSAPP_PREFILL_TTL_SECONDS).toBe(24 * 60 * 60);
+    const token = signPrefillToken(
+      {
+        kind: 'timesheet',
+        personId: 'p_alice',
+        ttlSeconds: WHATSAPP_PREFILL_TTL_SECONDS,
+        payload: { entries: [] },
+      },
+      now,
+    );
+    // Still valid at 23h (would have expired long ago under the 15-min web default).
+    const at23h = verifyPrefillToken(
+      token,
+      { personId: 'p_alice', kind: 'timesheet' },
+      now + 23 * 60 * 60,
+    );
+    expect(at23h.ok).toBe(true);
+    // Expired just past 24h.
+    const past24h = verifyPrefillToken(
+      token,
+      { personId: 'p_alice', kind: 'timesheet' },
+      now + WHATSAPP_PREFILL_TTL_SECONDS + 1,
+    );
+    expect(past24h.ok).toBe(false);
+    if (!past24h.ok) expect(past24h.reason).toBe('expired');
   });
 
   it('rejects a tampered token (signature mismatch)', () => {

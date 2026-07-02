@@ -10,7 +10,10 @@ import { extractIntakeFields } from '@/server/agents/intake-ocr/extract';
 import { classifyIntent } from '@/server/agents/intent/classify';
 import { parseTimesheetText } from '@/server/agents/intent/timesheet';
 import { parseAvailabilityText } from '@/server/agents/intent/availability';
-import { signPrefillToken } from '@/server/agents/assistant/prefill/token';
+import {
+  signPrefillToken,
+  WHATSAPP_PREFILL_TTL_SECONDS,
+} from '@/server/agents/assistant/prefill/token';
 import { startOfWeek, formatIsoDate } from '@/lib/week';
 import { optionalEnv } from '@/server/env';
 import { downloadWhatsAppMedia, sendWhatsAppText } from './whatsapp';
@@ -280,6 +283,7 @@ async function handleTimesheet(
   const token = signPrefillToken({
     kind: 'timesheet',
     personId: person.id,
+    ttlSeconds: WHATSAPP_PREFILL_TTL_SECONDS,
     payload: {
       entries: [
         {
@@ -537,6 +541,7 @@ ${projectLine}`,
   const token = signPrefillToken({
     kind: 'expense',
     personId: person.id,
+    ttlSeconds: WHATSAPP_PREFILL_TTL_SECONDS,
     payload: {
       dateIso,
       amountDollars: totalDollars,
