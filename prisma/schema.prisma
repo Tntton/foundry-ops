@@ -1863,3 +1863,36 @@ model FyBudgetOpexLine {
 
   @@index([fyBudgetId, atoCategory])
 }
+
+/// Tracks a prefill deep-link sent to a person over WhatsApp so a cron
+/// can nudge them to finish (TASK-128). No FK to Person — this is a
+/// lightweight dispatch log keyed by personId (same convention as the
+/// audit trail). Completion is detected by checking whether the target
+/// record now exists (see whatsapp-prefill-dispatch.ts), so we don't
+/// need a hook on the web form submit. Reply-to-confirm is deferred.
+model WhatsAppPrefillDispatch {
+  id                 String    @id @default(cuid())
+  personId           String
+  whatsappNumber     String
+  /// 'timesheet' | 'expense'
+  kind               String
+  /// The exact deep-link we sent; re-sent verbatim in reminders.
+  linkUrl            String    @db.Text
+  /// Token id embedded in linkUrl — correlates reminders/completion.
+  jti                String    @unique
+  // ── Completion-check fields (kind-specific, nullable) ──
+  projectCode        String?
+  entryDateIso       String?
+  hours              Decimal?  @db.Decimal(6, 2)
+  amountCents        BigInt?
+  // ── Lifecycle ──
+  sentAt             DateTime  @default(now())
+  expiresAt          DateTime
+  completedAt        DateTime?
+  earlyReminderAt    DateTime?
+  lastCallReminderAt DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@index([completedAt, expiresAt])
+  @@index([personId, completedAt])
+}
