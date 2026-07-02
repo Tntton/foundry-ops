@@ -892,6 +892,17 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Typecheck + lint green
 - [ ] Commit: `chore(TASK-124): unify WhatsApp Graph API version`
 
+### TASK-125 — public privacy policy page (Meta app publish prerequisite)
+**status:** done
+**depends on:** —
+**context:** Meta requires a publicly crawlable Privacy Policy URL before a WhatsApp app can be flipped to Live/published mode (needed for real inbound messages to reach the webhook). `foundry.health` has no privacy page. Added a public route on the ops app.
+**acceptance:**
+- [x] Public `/privacy` route at [src/app/privacy/page.tsx](src/app/privacy/page.tsx) — placed outside the `(app)` route group so it's reachable without a session (same pattern as `/healthz`; auth is enforced in `(app)/layout.tsx`).
+- [x] Honest, accurate content: internal-tool scope, WhatsApp message/media processing, processors (Meta/Microsoft/Xero/Anthropic), APP/Privacy Act 1988 reference, contact.
+- [x] Typecheck + lint green.
+- [ ] **Follow-up (TT):** have wording reviewed before treating as final legal text (contact address set to `contact@foundry.health`). Set the Meta App → Settings → Basic Privacy Policy URL to `https://ops.foundry.health/privacy` and publish.
+- [ ] Commit: `feat(TASK-125): public privacy policy page for Meta app publish`
+
 ### TASK-130 — DocuSign integration
 **status:** todo
 **depends on:** TASK-010
