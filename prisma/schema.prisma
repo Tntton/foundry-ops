@@ -488,6 +488,11 @@ model Person {
   // In-app assistant — one thread per user concept (only one active at a time).
   // Reset archives the active thread and creates a new one.
   assistantThreads  AssistantThread[]
+  // AP autoharvest — cursor rows this person last toggled on/off from
+  // the /admin/integrations/mail-intake page. The FK carries the actor
+  // for the admin page's "disabled by JN 2d ago" affordance without
+  // joining audit events. Nullable because seed rows land with no actor.
+  mailboxCursorsToggled MailboxPollCursor[] @relation("MailboxPollCursorActor")
 }
 
 // ─── CV-derived entries (education + work history) ────────────────
@@ -1895,4 +1900,51 @@ model WhatsAppPrefillDispatch {
 
   @@index([completedAt, expiresAt])
   @@index([personId, completedAt])
+}
+
+// ============================================================================
+// AP AUTOHARVEST — MAILBOX POLL CURSORS
+// ============================================================================
+//
+// One row per M365 mailbox polled by /api/cron/invoice-autoharvest
+// (TASK-093). Watermark advances only past *successfully* processed
+// Graph messages, so throttled / OCR-failed messages get re-picked on
+// the next fire. Not backed by the generic Integration model because
+// (a) the AP autoharvest polls two mailboxes concurrently, and one
+// IntegrationKind row per kind wouldn't fit, and (b) keeps app-level
+// integration state cleanly separated from per-mailbox watermarks.
+model MailboxPollCursor {
+  id                    String    @id @default(cuid())
+  /// User Principal Name of the mailbox to poll — finance@foundry.health
+  /// (canonical) or trung@foundry.health (transitional). Must match a
+  /// mailbox included in the New-ApplicationAccessPolicy scope group
+  /// (see INTEGRATIONS.md §7), otherwise Graph returns 403.
+  mailboxUpn            String    @unique
+  /// Kill-switch for the cron. When false, the cron skips this mailbox
+  /// entirely on the next fire — used to shut off `trung@` after
+  /// vendor migration completes, without deleting the cursor row (so
+  /// the last watermark + audit history persist).
+  enabled               Boolean   @default(true)
+  /// Graph `receivedDateTime` watermark. Only messages with
+  /// receivedDateTime > this value get processed. Null on first-ever
+  /// run — poller seeds it to `now()` to avoid churning through years
+  /// of mail.
+  lastReceivedDateTime  DateTime?
+  /// Timestamp the cron last completed a fire against this mailbox
+  /// (success OR failure). Powers the /admin/integrations/mail-intake
+  /// staleness display + system-health degraded rollup.
+  lastPollAt            DateTime?
+  /// Last error message from the most recent fire, if any. Cleared on
+  /// the next successful fire. Rendered on the admin page so operators
+  /// see "Graph 403: ApplicationAccessPolicy blocked" without spelunking
+  /// through logs.
+  lastError             String?   @db.Text
+  /// Person who last toggled `enabled` — nullable because seed rows land
+  /// pre-toggle. Nulled again if the referenced Person is deleted so we
+  /// don't cascade-delete cursor state on offboarding.
+  actorPersonId         String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  actor                 Person?   @relation("MailboxPollCursorActor", fields: [actorPersonId], references: [id], onDelete: SetNull)
 }
