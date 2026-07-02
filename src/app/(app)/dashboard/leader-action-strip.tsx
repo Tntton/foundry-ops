@@ -1,5 +1,13 @@
 import Link from 'next/link';
 import type { LeaderPendingAction, LeaderQuickActionsCount } from '@/server/leader-actions';
+import {
+  groupActions,
+  type DashboardActionPrefs,
+  type VisibleGroup,
+  type SuppressedGroup,
+  type ActionGroupKey,
+} from '@/server/dashboard-prefs';
+import { updateActionGroupPref } from './action-prefs-actions';
 import { Card, CardContent } from '@/components/ui/card';
 
 type LeaderRole = 'manager' | 'partner' | 'admin';
@@ -23,6 +31,8 @@ export function LeaderActionStrip({
   pending,
   counts,
   role,
+  prefs,
+  now,
 }: {
   pending: LeaderPendingAction[];
   counts: LeaderQuickActionsCount;
@@ -30,9 +40,17 @@ export function LeaderActionStrip({
    *  tiles to show. Admin sees everything; partner sees up to BD;
    *  manager sees the approval+timesheet tier only. */
   role: LeaderRole;
+  /** This leader's saved hide/snooze state per action group. */
+  prefs: DashboardActionPrefs;
+  /** Evaluation time, passed from the server so snooze-expiry is stable
+   *  across the render. */
+  now: Date;
 }) {
   const showBd = role === 'partner' || role === 'admin';
   const showInvoiceDraft = role === 'partner' || role === 'admin';
+
+  const { visible, suppressed } = groupActions(pending, prefs, now);
+  const visibleCount = visible.reduce((n, g) => n + g.actions.length, 0);
 
   return (
     <div className="space-y-3">

@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
-import { computeFirmPnL } from '@/server/reports/pnl';
+import { computeFirmPnL, computeRevenueByFy } from '@/server/reports/pnl';
 import { computeFyBudgetActuals, type FyBudgetActuals } from '@/server/reports/fy-budget';
 import { auFyOf, auFyLabel, auFyWindow } from '@/lib/au-fy';
 import { Badge } from '@/components/ui/badge';
@@ -66,6 +66,10 @@ export default async function FirmPnLPage({
   const budgetActuals = isActiveFy && typeof selected === 'number'
     ? await computeFyBudgetActuals(selected)
     : null;
+  // Per-FY revenue rollup — only shown on the "All time" tab. Historical
+  // years (FY<26) don't carry cost detail, so the table renders those
+  // rows as revenue-only per TT's "eat what you kill" call.
+  const revenueByFy = selected === 'all' ? await computeRevenueByFy() : null;
   const maxMonthly = Math.max(
     1,
     ...pnl.monthly.flatMap((m) => [m.revenueCents, m.costCents]),
@@ -281,6 +285,83 @@ export default async function FirmPnLPage({
               <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
                 {formatMoney(pnl.cumulative.contractsWonCents)}
               </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Revenue by FY — only on "All time". FY21-25 are shell-backfill
+          with revenue only (no cost detail — TT's "eat what you kill"
+          call, all revenue treated as acquitted). FY26+ carry the full
+          margin picture in the waterfall below. */}
+      {selected === 'all' && revenueByFy && revenueByFy.rows.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">Revenue by financial year</CardTitle>
+            <p className="text-xs text-ink-3">
+              Lifetime revenue split by AU financial year. FY21-25 are historical shell-backfill —
+              in that period we operated eat-what-you-kill with no cost tracking, so 100% of revenue
+              is treated as acquitted. FY26 onwards carries the full cost stack (see waterfall).
+            </p>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm tabular-nums">
+                <thead>
+                  <tr className="border-b border-line-2 text-left text-[11px] uppercase tracking-wide text-ink-3">
+                    <th className="py-2 pr-3 font-medium">FY</th>
+                    <th className="py-2 pr-3 font-medium">Invoices</th>
+                    <th className="py-2 pr-3 text-right font-medium">Revenue</th>
+                    <th className="py-2 pr-3 text-right font-medium">% of lifetime</th>
+                    <th className="py-2 pl-3 font-medium">Basis</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {revenueByFy.rows.map((row) => {
+                    const share = revenueByFy.totalRevenueCents === 0
+                      ? 0
+                      : (row.revenueCents / revenueByFy.totalRevenueCents) * 100;
+                    return (
+                      <tr key={row.yearEnding} className="border-b border-line-1 last:border-b-0">
+                        <td className="py-2 pr-3 font-medium text-ink">
+                          {auFyLabel(row.yearEnding)}
+                        </td>
+                        <td className="py-2 pr-3 text-ink-2">{row.invoices}</td>
+                        <td className="py-2 pr-3 text-right font-semibold text-ink">
+                          {formatMoney(row.revenueCents)}
+                        </td>
+                        <td className="py-2 pr-3 text-right text-ink-2">
+                          {share.toFixed(1)}%
+                        </td>
+                        <td className="py-2 pl-3">
+                          {row.hasCostDetail ? (
+                            <Badge variant="outline" className="text-[10px] uppercase">
+                              Full P&amp;L
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] uppercase text-ink-3">
+                              Revenue only · acquitted
+                            </Badge>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-line-2 text-sm font-semibold">
+                    <td className="py-2 pr-3">Lifetime</td>
+                    <td className="py-2 pr-3 text-ink-2">
+                      {revenueByFy.rows.reduce((s, r) => s + r.invoices, 0)}
+                    </td>
+                    <td className="py-2 pr-3 text-right">
+                      {formatMoney(revenueByFy.totalRevenueCents)}
+                    </td>
+                    <td className="py-2 pr-3 text-right text-ink-2">100.0%</td>
+                    <td className="py-2 pl-3" />
+                  </tr>
+                </tfoot>
+              </table>
             </div>
           </CardContent>
         </Card>

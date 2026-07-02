@@ -903,6 +903,23 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] **Follow-up (TT):** have wording reviewed before treating as final legal text (contact address set to `contact@foundry.health`). Set the Meta App → Settings → Basic Privacy Policy URL to `https://ops.foundry.health/privacy` and publish.
 - [ ] Commit: `feat(TASK-125): public privacy policy page for Meta app publish`
 
+### TASK-126 — leader dashboard: group actions into columns + per-group hide/snooze
+**status:** doing
+**depends on:** —
+**context:** TT (2026-07-02): the leader dashboard "actions to clear" strip is a flat, ungrouped list and feels like a mess. Group actions L→R into columns by category, and let a leader hide or snooze whole groups they don't need to action (e.g. all `deal_stale`), managed inline on the dashboard. Decisions (TT): **both** permanent-hide and timed-snooze per group; controls **inline** on the dashboard.
+**design:**
+- 5 groups from the existing `LeaderPendingAction['kind']`: Approvals (bill/expense/invoice/timesheet queues) · Delivery (project_stale, project_missing_milestones) · Business Dev (deal_stale) · Billing (invoice_to_draft) · Personal (self_*).
+- Persist per-person state in `UserPreference.prefs.dashboardActionGroups` (no migration — reuse existing model). Each group: `{mode:'hidden'}` or `{mode:'snoozed', until: ISO}`; absent = visible. Expired snooze → visible.
+- Pure helpers (group mapping, suppression, merge) unit-tested; thin prisma read/write; server action session-checked + audited (A9).
+**acceptance:**
+- [ ] `src/server/dashboard-prefs.ts` — group defs, total kind→group map, pure `isGroupSuppressed` / `groupActions` / `applyGroupOp`, `get/setDashboardActionGroupPref`.
+- [ ] Server action updates only the caller's own prefs, Zod-validated, writes AuditEvent, `revalidatePath('/')`.
+- [ ] `LeaderActionStrip` renders responsive columns; each header has inline Hide + Snooze (7/14/30d); suppressed groups shown as a slim "Show" chip row.
+- [ ] Dashboard "N to clear" count reflects visible (non-suppressed) actions.
+- [ ] Unit test for the pure helpers (mapping totality, snooze expiry, merge/clear).
+- [ ] Typecheck + lint + tests green. (No migration; runtime verification needs a live DB + leader login — flag in commit.)
+- [ ] Commit: `feat(TASK-126): leader dashboard action groups + hide/snooze`
+
 ### TASK-130 — DocuSign integration
 **status:** todo
 **depends on:** TASK-010

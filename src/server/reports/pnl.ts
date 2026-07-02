@@ -94,6 +94,60 @@ function ym(d: Date): string {
  * `cumulative` totals always ignore the window — they're the "firm
  * earnings to date" figure surfaced on the page's top tile.
  */
+export type RevenueByFyRow = {
+  /** FY year-ending, e.g. 26 for FY26. */
+  yearEnding: number;
+  invoices: number;
+  revenueCents: number;
+  receivedCents: number;
+  /** True for FY26 onwards where we have cost detail in the app; false
+   *  for FY21-25 which are shell-backfilled from the master tracker
+   *  and only carry revenue. Used by the UI to show/hide margin cols. */
+  hasCostDetail: boolean;
+};
+
+/**
+ * Per-FY revenue rollup for the /pnl "All time" tab. Groups every
+ * invoice by AU FY (issueDate) and returns a row per FY plus a total.
+ *
+ * FY21-25 are treated as pre-platform data (revenue-only, all acquitted
+ * assumption — see TT 2026-07-02 decision). FY26 onwards is fully
+ * tracked with costs.
+ */
+export async function computeRevenueByFy(): Promise<{ rows: RevenueByFyRow[]; totalRevenueCents: number; totalReceivedCents: number }> {
+  const invoices = await prisma.invoice.findMany({
+    where: { status: { in: ['approved', 'sent', 'partial', 'paid', 'overdue'] } },
+    select: {
+      amountExGst: true,
+      paymentReceivedAmount: true,
+      issueDate: true,
+    },
+  });
+  const byFy = new Map<number, { invoices: number; revenueCents: number; receivedCents: number }>();
+  for (const inv of invoices) {
+    const fy = inv.issueDate.getMonth() >= 6
+      ? inv.issueDate.getFullYear() + 1
+      : inv.issueDate.getFullYear();
+    const row = byFy.get(fy) ?? { invoices: 0, revenueCents: 0, receivedCents: 0 };
+    row.invoices += 1;
+    row.revenueCents += inv.amountExGst;
+    row.receivedCents += inv.paymentReceivedAmount ?? 0;
+    byFy.set(fy, row);
+  }
+  const rows: RevenueByFyRow[] = Array.from(byFy.entries())
+    .map(([yearEnding, r]) => ({
+      yearEnding,
+      invoices: r.invoices,
+      revenueCents: r.revenueCents,
+      receivedCents: r.receivedCents,
+      hasCostDetail: yearEnding >= 26,
+    }))
+    .sort((a, b) => a.yearEnding - b.yearEnding);
+  const totalRevenueCents = rows.reduce((s, r) => s + r.revenueCents, 0);
+  const totalReceivedCents = rows.reduce((s, r) => s + r.receivedCents, 0);
+  return { rows, totalRevenueCents, totalReceivedCents };
+}
+
 export async function computeFirmPnL(opts?: FirmPnLOpts): Promise<FirmPnL> {
   const dateWindow = opts?.from && opts?.to
     ? { gte: opts.from, lt: opts.to }
