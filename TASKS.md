@@ -954,8 +954,9 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [x] Commits: `chore(db): WhatsAppPrefillDispatch` then `feat(TASK-128): WhatsApp prefill completion reminders`.
 
 ### TASK-129 — WhatsApp prefill: reply-to-confirm fallback (deferred from TASK-128)
-**status:** todo
+**status:** done (PR — needs live/staging-DB verification)
 **depends on:** TASK-128
+**note (2026-07-03):** Built. Added a `confirm` intent (classifier + keyword: confirm/submit/leading-yes, guarded so "yes log 3h…" still routes to timesheet). On `confirm`, `handleConfirm` finds the person's latest outstanding dispatch, pulls the signed token out of its `linkUrl` (`extractPrefillTokenFromUrl`), `verifyPrefillToken`s it (person-bound + kind), and applies the decoded payload via `applyTimesheetConfirm` / `applyExpenseConfirm` — creates **submitted** entries (reach the approval queue, same as a web submit), `source='agent'` audit, then `markDispatchCompleted` (idempotent: a 2nd CONFIRM finds nothing outstanding). No schema change (token already carries the payload). Reminder copy now offers "reply CONFIRM". Pure helpers unit-tested (confirm keyword, token extraction); typecheck + 312 tests + lint green. **Writes financial/timesheet data headlessly — NOT runtime-verified; verify on a live/staging DB before relying on it.** Bills are out of scope (WhatsApp bill links from TASK-132 aren't dispatched, so CONFIRM only applies timesheet/expense).
 **context:** TT (2026-07-02): for people who can't open the link in a real browser, let them reply `CONFIRM` to submit the prefilled timesheet/expense directly. Deferred from TASK-128 because it writes financial/timesheet data headlessly and is best built with a live/staging DB to verify. Reverses part of TASK-302c (no-auto-write) for low-value (< $20k) items — TT-approved; high-value web-only gate untouched.
 **design:**
 - Add `confirm` intent to [classify.ts](src/server/agents/intent/classify.ts) (keywords: confirm, yes, submit).
