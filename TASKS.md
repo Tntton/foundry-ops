@@ -969,6 +969,23 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Typecheck + tests + lint green; verified against a live/staging DB.
 - [ ] Commit: `feat(TASK-129): WhatsApp reply-to-confirm submits prefill`.
 
+### TASK-131 — WhatsApp agent pre-rollout bug audit
+**status:** done (code fixes); config verifications are BLOCKERs for team rollout
+**depends on:** —
+**context:** TT (2026-07-03): audit all WA agent features before wider team deployment. Traced every flow (timesheet / availability / expense-OCR / status / menu / cancel / unknown / registered-person gating / webhook).
+**fixed:**
+- [x] **Re-delivery dedup** — the type comment claimed `providerId` dedupes but nothing did; the webhook awaits slow OCR before 200, so Meta retries a slow receipt → duplicate prefill links + duplicate audit/availability writes. Added an inbound-providerId dedupe guard in `handleIncomingWhatsAppMessage` + `maxDuration=60` on the webhook so OCR finishes before the function is killed.
+- [x] Stale `HELP_TEXT` copy "links last 15 minutes" → "24 hours".
+**BLOCKERS to verify before rollout (config, not code):**
+- [ ] **`ANTHROPIC_API_KEY` set in prod** — without it, timesheet/availability parsing + expense OCR all fail (keyword-only intent + "use the web app" errors). The single biggest rollout gate.
+- [ ] **Model IDs valid** — `claude-sonnet-4-5` (timesheet/availability/OCR) + `claude-haiku-4-5` (classify). Confirm still available on the API for the post-2026 account, else calls fail after retries. Consider `claude-sonnet-5` / current Haiku.
+- [ ] `WhatsAppPrefillDispatch` migration applied + `DIRECT_URL` set (see [[foundry-migrations-manual]]) — else reminders + dispatch tracking stay off (core flow now survives via the best-effort hotfix).
+**follow-up (non-blocking hardening):**
+- [ ] Unique index on `WhatsAppMessage.providerId` (inbound) to make dedup fully race-proof against simultaneous retries (currently best-effort findFirst).
+- [ ] Consider returning 200 immediately + processing async (Inngest) instead of awaiting OCR inline — removes the timeout-retry pressure entirely.
+- [ ] Accepted/minor: keyword-fallback intent ordering (`hours` → timesheet before status) is offline-only + documented in intent-classify.test.ts; availability writes 0-hour weekend rows.
+- [ ] Commit: `fix(TASK-131): WhatsApp re-delivery dedup + stale copy`.
+
 ### TASK-130 — DocuSign integration
 **status:** todo
 **depends on:** TASK-010

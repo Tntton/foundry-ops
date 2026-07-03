@@ -88,7 +88,7 @@ const HELP_TEXT = `Hi! I can help with:
 • *Availability* — say "I'm available 8h Mon–Fri next week"
 • *Expense* — send a receipt photo + (optional) project code → I OCR it and send a prefilled expense link
 • *Status* — ask "how many hours this week"
-Tap-to-submit links last 15 minutes. Type *cancel* anytime to abort.`;
+Tap-to-submit links last 24 hours. Type *cancel* anytime to abort.`;
 
 /**
  * Resolve the inbound phone to a Person. Strips spaces / dashes and
@@ -663,6 +663,24 @@ export async function handleIncomingWhatsAppMessage(
     // Polite refuse — the inactive flag disables all input surfaces.
     // No DB write so the conversation row isn't even created.
     return { ok: false, reason: 'inactive' };
+  }
+
+  // Dedupe Meta re-deliveries. The webhook awaits slow work (media
+  // download + OCR) before returning 200, so a slow first attempt can
+  // exceed Meta's delivery timeout and get retried with the SAME wamid.
+  // Without this guard the retry would OCR again and send a second
+  // prefill link / write duplicate rows. If we've already logged this
+  // inbound providerId, treat the re-delivery as a no-op. (Best-effort:
+  // not fully race-proof against near-simultaneous retries — a unique
+  // index on WhatsAppMessage.providerId would harden it; see TASKS.md.)
+  if (message.providerId) {
+    const alreadyProcessed = await prisma.whatsAppMessage.findFirst({
+      where: { providerId: message.providerId, direction: 'inbound' },
+      select: { id: true },
+    });
+    if (alreadyProcessed) {
+      return { ok: true, reason: 'duplicate delivery — skipped' };
+    }
   }
 
   const conversation = await ensureConversation(person.id);

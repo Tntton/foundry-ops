@@ -21,6 +21,12 @@ import {
  */
 
 export const dynamic = 'force-dynamic';
+// The expense flow awaits media download + Sonnet OCR inline before
+// replying, which can take 10-20s. Give the function room to finish so
+// it isn't killed mid-OCR (a kill would send no reply AND trigger a Meta
+// retry). Re-delivery duplicates are guarded by the providerId dedupe in
+// handleIncomingWhatsAppMessage.
+export const maxDuration = 60;
 
 export async function GET(request: Request): Promise<Response> {
   const url = new URL(request.url);
