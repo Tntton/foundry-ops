@@ -81,20 +81,29 @@ export type CreateDispatchInput = {
 export async function createPrefillDispatch(
   input: CreateDispatchInput,
 ): Promise<void> {
-  await prisma.whatsAppPrefillDispatch.create({
-    data: {
-      personId: input.personId,
-      whatsappNumber: input.whatsappNumber,
-      kind: input.kind,
-      linkUrl: input.linkUrl,
-      jti: input.jti,
-      expiresAt: input.expiresAt,
-      projectCode: input.projectCode ?? null,
-      entryDateIso: input.entryDateIso ?? null,
-      hours: input.hours ?? null,
-      amountCents: input.amountCents != null ? BigInt(input.amountCents) : null,
-    },
-  });
+  // Best-effort: this row only powers the reminder cron. It must NEVER
+  // break the core flow (the user still gets their prefill link). If the
+  // write fails — e.g. the migration hasn't been applied to this
+  // environment yet — log and carry on; the only cost is no reminder.
+  try {
+    await prisma.whatsAppPrefillDispatch.create({
+      data: {
+        personId: input.personId,
+        whatsappNumber: input.whatsappNumber,
+        kind: input.kind,
+        linkUrl: input.linkUrl,
+        jti: input.jti,
+        expiresAt: input.expiresAt,
+        projectCode: input.projectCode ?? null,
+        entryDateIso: input.entryDateIso ?? null,
+        hours: input.hours ?? null,
+        amountCents:
+          input.amountCents != null ? BigInt(input.amountCents) : null,
+      },
+    });
+  } catch (err) {
+    console.error('[whatsapp-prefill-dispatch] create failed (non-fatal):', err);
+  }
 }
 
 /** Active = not completed and not yet expired. The cron's work list. */
