@@ -34,6 +34,21 @@ describe('classifyIntentKeyword — offline fallback', () => {
     expect(classifyIntentKeyword('abort')).toBe('cancel');
   });
 
+  it('matches confirm (reply-to-confirm, TASK-129)', () => {
+    expect(classifyIntentKeyword('CONFIRM')).toBe('confirm');
+    expect(classifyIntentKeyword('confirm')).toBe('confirm');
+    expect(classifyIntentKeyword('yes submit it')).toBe('confirm');
+    expect(classifyIntentKeyword('submit')).toBe('confirm');
+    expect(classifyIntentKeyword('yes')).toBe('confirm');
+    expect(classifyIntentKeyword('yep')).toBe('confirm');
+    expect(classifyIntentKeyword('y')).toBe('confirm');
+  });
+
+  it('does not let a bare affirmation swallow a real request', () => {
+    // "log"/"hours" still win — a confirm affirmation must not shadow them.
+    expect(classifyIntentKeyword('yes log 3h on CAC001')).toBe('timesheet');
+  });
+
   it('returns unknown for unrelated text', () => {
     expect(classifyIntentKeyword('what is the weather today')).toBe('unknown');
     expect(classifyIntentKeyword('')).toBe('unknown');

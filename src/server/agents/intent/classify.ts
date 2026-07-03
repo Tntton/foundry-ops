@@ -18,6 +18,7 @@ export type Intent =
   | 'status_check'
   | 'menu'
   | 'cancel'
+  | 'confirm'
   | 'unknown';
 
 const ALL_INTENTS: readonly Intent[] = [
@@ -27,6 +28,7 @@ const ALL_INTENTS: readonly Intent[] = [
   'status_check',
   'menu',
   'cancel',
+  'confirm',
   'unknown',
 ];
 
@@ -39,6 +41,7 @@ Classify the user's message into ONE of these intents:
   - "status_check"   — asking about their current hours, available time, etc.
   - "menu"           — asking what they can do, listing options
   - "cancel"         — wanting to abort the current flow
+  - "confirm"        — approving / submitting the thing we just prepared (e.g. "confirm", "yes submit", "go ahead")
   - "unknown"        — none of the above
 
 Return ONLY the intent string, nothing else. Just one word.`;
@@ -55,6 +58,16 @@ export function classifyIntentKeyword(text: string): Intent {
   if (/\b(status|how many|this week)\b/.test(lc)) return 'status_check';
   if (/\b(menu|help|options)\b/.test(lc)) return 'menu';
   if (/\b(cancel|stop|abort)\b/.test(lc)) return 'cancel';
+  // Confirm — approving a prepared prefill. Keep the standalone "yes"/"y"
+  // affirmations tight so they don't swallow richer messages.
+  const trimmed = lc.trim();
+  if (
+    /\b(confirm|submit)\b/.test(lc) ||
+    /^(yes|yep|yeah|yup|ok|okay|y)\b/.test(trimmed) ||
+    trimmed === 'y'
+  ) {
+    return 'confirm';
+  }
   return 'unknown';
 }
 

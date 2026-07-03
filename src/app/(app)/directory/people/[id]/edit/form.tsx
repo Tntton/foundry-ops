@@ -77,7 +77,6 @@ export function PersonEditForm({
     () => FOUNDRY_LEVELS.find((l) => l.code === level) ?? FOUNDRY_LEVELS[0]!,
     [level],
   );
-  const currentRateCents = ratesByCode[level] ?? null;
 
   function handleLevelChange(newLevel: LevelCode) {
     setLevel(newLevel);
@@ -183,20 +182,11 @@ export function PersonEditForm({
               onChange={(e) => handleLevelChange(e.target.value as LevelCode)}
               required
             >
-              {FOUNDRY_LEVELS.map((l) => {
-                const cents = ratesByCode[l.code];
-                const rateHint = cents
-                  ? ` · $${(cents / 100).toFixed(0)}/hr`
-                  : l.band === 'Partner'
-                    ? ' · FT rate'
-                    : '';
-                return (
-                  <option key={l.code} value={l.code}>
-                    {l.code} — {l.label}
-                    {rateHint}
-                  </option>
-                );
-              })}
+              {FOUNDRY_LEVELS.map((l) => (
+                <option key={l.code} value={l.code}>
+                  {l.code} — {l.label}
+                </option>
+              ))}
             </Select>
           </Field>
           <Field label="Band" required error={errs['band']}>
@@ -269,15 +259,13 @@ export function PersonEditForm({
             className="w-full rounded-md border border-line bg-surface-elev px-3 py-2 text-sm text-ink shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
           />
         </Field>
+        {/* Card-rate reference intentionally not shown here — the Pay
+             section is the single source of truth for the rate. When
+             the user's rate diverges from the card an "Override" badge
+             appears in Pay with the card rate for context. */}
         <p className="text-xs text-ink-3">
           Selected level: <span className="font-mono">{levelMeta.code}</span> ·{' '}
           <span className="text-ink-2">{levelMeta.label}</span>
-          {currentRateCents !== null && (
-            <>
-              {' '}· current rate card:{' '}
-              <span className="font-mono">${(currentRateCents / 100).toFixed(0)}/hr</span>
-            </>
-          )}
         </p>
       </Section>
 

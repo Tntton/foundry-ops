@@ -43,6 +43,7 @@ const PersonEdit = z
       .trim()
       .max(500)
       .optional()
+      .nullable()
       .or(z.literal('').transform(() => null)),
     rateUnit: z.enum(['hour', 'day']),
     rateDollars: z.coerce.number().min(0).max(10_000),
