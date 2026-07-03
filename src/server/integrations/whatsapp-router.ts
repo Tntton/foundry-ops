@@ -6,7 +6,11 @@ import type {
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/server/db';
 import { writeAudit } from '@/server/audit';
-import { extractIntakeFields } from '@/server/agents/intake-ocr/extract';
+import {
+  extractIntakeFields,
+  type IntakeExtraction,
+} from '@/server/agents/intake-ocr/extract';
+import { decideDocRoute, parseDocChoice } from '@/server/agents/intent/doc-route';
 import { classifyIntent } from '@/server/agents/intent/classify';
 import { parseTimesheetText } from '@/server/agents/intent/timesheet';
 import { parseAvailabilityText } from '@/server/agents/intent/availability';
@@ -419,21 +423,215 @@ async function handleAvailability(
   );
 }
 
+/** Fields carried from OCR into the expense/bill link builders — also the
+ *  shape stashed in conversation.state while awaiting a RECEIPT/BILL reply
+ *  (TASK-132), so we never re-OCR on the clarification turn. */
+type PendingDocFields = {
+  extraction: IntakeExtraction;
+  projectCode: string | null;
+  dateIso: string;
+  totalDollars: number;
+  gstDollars: number;
+  vendor: string;
+  captionText: string | null;
+};
+
+function readPendingDoc(
+  conversation: WhatsAppConversation,
+): PendingDocFields | null {
+  const state = conversation.state;
+  if (!state || typeof state !== 'object') return null;
+  const pending = (state as Record<string, unknown>)['pendingDoc'];
+  return pending ? (pending as PendingDocFields) : null;
+}
+
+/** Mint an expense prefill link (→ /expenses/new) + dispatch + reply. */
+async function sendExpensePrefillLink(
+  person: Person,
+  conversation: WhatsAppConversation,
+  toPhone: string,
+  f: PendingDocFields,
+): Promise<void> {
+  const description =
+    f.captionText && f.captionText.trim().length > 0
+      ? f.captionText.trim()
+      : `Receipt · ${f.vendor || 'unknown vendor'} · ${f.dateIso}`;
+  const prefillJti = newPrefillJti();
+  const prefillSentMs = Date.now();
+  const token = signPrefillToken({
+    kind: 'expense',
+    personId: person.id,
+    ttlSeconds: WHATSAPP_PREFILL_TTL_SECONDS,
+    jti: prefillJti,
+    payload: {
+      dateIso: f.dateIso,
+      amountDollars: f.totalDollars,
+      gstDollars: f.gstDollars > 0 ? f.gstDollars : null,
+      category: f.extraction.category ?? 'other',
+      vendor: f.vendor || null,
+      description,
+      projectCode: f.projectCode ?? null,
+    },
+  });
+  const url = `${publicAppUrl()}/expenses/new?prefill=${encodeURIComponent(token)}`;
+  await prisma.$transaction(async (tx) => {
+    await writeAudit(tx, {
+      actor: { type: 'person', id: person.id },
+      action: 'minted',
+      entity: {
+        type: 'assistant_prefill',
+        id: `${person.id}:whatsapp-expense:${f.dateIso}`,
+        after: {
+          channel: 'whatsapp',
+          kind: 'expense',
+          ocrConfidence: f.extraction.confidence.overall,
+          projectCode: f.projectCode,
+          vendor: f.vendor,
+          totalDollars: f.totalDollars,
+        },
+      },
+      source: 'agent',
+    });
+  });
+  await createPrefillDispatch({
+    personId: person.id,
+    whatsappNumber: toPhone,
+    kind: 'expense',
+    linkUrl: url,
+    jti: prefillJti,
+    expiresAt: new Date(prefillSentMs + WHATSAPP_PREFILL_TTL_SECONDS * 1000),
+    entryDateIso: f.dateIso,
+    amountCents: Math.round(f.totalDollars * 100),
+  });
+  await setFlow(conversation.id, 'idle', null);
+  const projectLine = f.projectCode
+    ? `· Tagged to project *${f.projectCode}*`
+    : '· OPEX (no project)';
+  await reply(
+    conversation.id,
+    toPhone,
+    `📸 Read *${f.vendor || 'receipt'}* · *$${f.totalDollars.toFixed(2)}* on ${f.dateIso} ${projectLine}.
+Tap to review + submit (link valid 24h):
+${url}`,
+    'assistant_prefill',
+    null,
+  );
+}
+
+/** Mint a supplier-bill prefill link (→ /bills/new) + reply. No reminder
+ *  dispatch yet (TASK-128 tracks timesheet/expense only). */
+async function sendBillPrefillLink(
+  person: Person,
+  conversation: WhatsAppConversation,
+  toPhone: string,
+  f: PendingDocFields,
+): Promise<void> {
+  if (f.totalDollars <= 0) {
+    await setFlow(conversation.id, 'idle', null);
+    await reply(
+      conversation.id,
+      toPhone,
+      `🧾 Looks like a supplier bill, but I couldn't read an amount. Enter it manually at ${publicAppUrl()}/bills/new.`,
+    );
+    return;
+  }
+  const invoiceNumber =
+    f.extraction.invoiceNumber && f.extraction.invoiceNumber.trim().length > 0
+      ? f.extraction.invoiceNumber.trim()
+      : `WA-${f.dateIso}`;
+  const dueIso =
+    f.extraction.dueDate ??
+    new Date(
+      new Date(`${f.dateIso}T00:00:00.000Z`).getTime() + 30 * 24 * 3600 * 1000,
+    )
+      .toISOString()
+      .slice(0, 10);
+  const token = signPrefillToken({
+    kind: 'bill',
+    personId: person.id,
+    ttlSeconds: WHATSAPP_PREFILL_TTL_SECONDS,
+    payload: {
+      supplierName: f.vendor || 'Unknown vendor',
+      supplierAbn: f.extraction.supplierAbn ?? null,
+      supplierInvoiceNumber: invoiceNumber,
+      issueDateIso: f.dateIso,
+      dueDateIso: dueIso,
+      amountDollars: f.totalDollars,
+      gstDollars: f.gstDollars > 0 ? f.gstDollars : null,
+      category: f.extraction.category ?? 'other',
+      projectCode: f.projectCode ?? null,
+    },
+  });
+  const url = `${publicAppUrl()}/bills/new?prefill=${encodeURIComponent(token)}`;
+  await prisma.$transaction(async (tx) => {
+    await writeAudit(tx, {
+      actor: { type: 'person', id: person.id },
+      action: 'minted',
+      entity: {
+        type: 'assistant_prefill',
+        id: `${person.id}:whatsapp-bill:${f.dateIso}`,
+        after: {
+          channel: 'whatsapp',
+          kind: 'bill',
+          ocrConfidence: f.extraction.confidence.overall,
+          supplierInvoiceNumber: invoiceNumber,
+          vendor: f.vendor,
+          totalDollars: f.totalDollars,
+        },
+      },
+      source: 'agent',
+    });
+  });
+  await setFlow(conversation.id, 'idle', null);
+  await reply(
+    conversation.id,
+    toPhone,
+    `🧾 Supplier bill from *${f.vendor || 'unknown'}* · *$${f.totalDollars.toFixed(2)}* (inv ${invoiceNumber}).
+Tap to review + submit to accounts payable (link valid 24h):
+${url}`,
+    'assistant_prefill',
+    null,
+  );
+}
+
 /**
- * Expense flow — when an image arrives, run the receipt OCR pipeline,
- * create an Expense in pending_review status, and reply with a summary.
- * If only text arrived, ask for the receipt photo.
+ * Expense/bill flow — when an image arrives, run OCR, then route by
+ * document type (TASK-132): a receipt → Expense prefill, a supplier
+ * invoice → Bill prefill, ambiguous → ask RECEIPT or BILL. If only text
+ * arrived, ask for the receipt photo (or handle a pending clarify reply).
  */
 async function handleExpense(
   person: Person,
   conversation: WhatsAppConversation,
   message: IncomingMessage,
 ): Promise<void> {
+  // Awaiting a RECEIPT/BILL clarification from a prior ambiguous image?
+  // Handle the text reply here without re-OCR. A fresh image supersedes
+  // the pending doc and falls through to a new scan.
+  const pendingDoc = readPendingDoc(conversation);
+  if (pendingDoc && !message.mediaId) {
+    const choice = parseDocChoice(message.text);
+    if (!choice) {
+      await reply(
+        conversation.id,
+        message.fromPhone,
+        "Reply *RECEIPT* if you paid it (expense claim) or *BILL* if it's a supplier invoice to pay.",
+      );
+      return;
+    }
+    if (choice === 'bill') {
+      await sendBillPrefillLink(person, conversation, message.fromPhone, pendingDoc);
+    } else {
+      await sendExpensePrefillLink(person, conversation, message.fromPhone, pendingDoc);
+    }
+    return;
+  }
+
   if (!message.mediaId) {
     await reply(
       conversation.id,
       message.fromPhone,
-      'Send the receipt photo and I\'ll create the expense. Add the project code in the caption (e.g. "PROJ001 — flight").',
+      'Send the receipt photo and I\'ll sort it into an expense claim or a supplier bill. Add a project code in the caption (e.g. "PROJ001 — flight").',
     );
     return;
   }
@@ -549,77 +747,45 @@ ${projectLine}`,
     return;
   }
 
-  // Build a prefill_expense token from the OCR result. Description
-  // falls back to the user's caption when present, otherwise a
-  // placeholder so the form's required-description rule is satisfied.
-  const description =
-    message.text && message.text.trim().length > 0
-      ? message.text.trim()
-      : `Receipt · ${vendor || 'unknown vendor'} · ${dateIso}`;
-  const prefillJti = newPrefillJti();
-  const prefillSentMs = Date.now();
-  const token = signPrefillToken({
-    kind: 'expense',
-    personId: person.id,
-    ttlSeconds: WHATSAPP_PREFILL_TTL_SECONDS,
-    jti: prefillJti,
-    payload: {
-      dateIso,
-      amountDollars: totalDollars,
-      gstDollars: gstDollars > 0 ? gstDollars : null,
-      // The intake-ocr extractor uses the same canonical category enum
-      // as the form — pass through when the model returned one;
-      // otherwise default to 'other' (user can re-pick on the form).
-      category: extracted.data.category ?? 'other',
-      vendor: vendor || null,
-      description,
-      projectCode: projectCode ?? null,
-    },
+  // ─── TASK-132: route by document type ────────────────────────────
+  // A receipt → Expense prefill; a supplier invoice → Bill prefill;
+  // ambiguous → ask RECEIPT or BILL (stashing the OCR result so we don't
+  // re-scan). A caption keyword beats the classifier.
+  const fields: PendingDocFields = {
+    extraction: extracted.data,
+    projectCode,
+    dateIso,
+    totalDollars,
+    gstDollars,
+    vendor,
+    captionText: message.text,
+  };
+  const docConfidence = (
+    extracted.data.confidence as Record<string, number | undefined>
+  )['documentType'];
+  const route = decideDocRoute({
+    documentType: extracted.data.documentType ?? 'unknown',
+    docConfidence,
+    caption: message.text,
   });
-  const url = `${publicAppUrl()}/expenses/new?prefill=${encodeURIComponent(token)}`;
-
-  await prisma.$transaction(async (tx) => {
-    await writeAudit(tx, {
-      actor: { type: 'person', id: person.id },
-      action: 'minted',
-      entity: {
-        type: 'assistant_prefill',
-        id: `${person.id}:whatsapp-expense:${dateIso}`,
-        after: {
-          channel: 'whatsapp',
-          kind: 'expense',
-          ocrConfidence: extracted.data.confidence.overall,
-          projectCode,
-          vendor,
-          totalDollars,
-        },
-      },
-      source: 'agent',
-    });
-  });
-  await createPrefillDispatch({
-    personId: person.id,
-    whatsappNumber: message.fromPhone,
-    kind: 'expense',
-    linkUrl: url,
-    jti: prefillJti,
-    expiresAt: new Date(prefillSentMs + WHATSAPP_PREFILL_TTL_SECONDS * 1000),
-    entryDateIso: dateIso,
-    amountCents: Math.round(totalDollars * 100),
-  });
-  await setFlow(conversation.id, 'idle', null);
-  const projectLine = projectCode
-    ? `· Tagged to project *${projectCode}*`
-    : '· OPEX (no project)';
-  await reply(
-    conversation.id,
-    message.fromPhone,
-    `📸 Read *${vendor || 'receipt'}* · *$${totalDollars.toFixed(2)}* on ${dateIso} ${projectLine}.
-Tap to review + submit (link valid 24h):
-${url}`,
-    'assistant_prefill',
-    null,
-  );
+  if (route === 'bill') {
+    await sendBillPrefillLink(person, conversation, message.fromPhone, fields);
+    return;
+  }
+  if (route === 'clarify') {
+    await setFlow(conversation.id, 'expense', {
+      pendingDoc: fields,
+    } as unknown as Prisma.InputJsonValue);
+    await reply(
+      conversation.id,
+      message.fromPhone,
+      `📸 Got it — is this a *RECEIPT* you paid (→ expense claim), or a supplier *BILL* to pay (→ accounts payable)?
+Reply *RECEIPT* or *BILL*.`,
+    );
+    return;
+  }
+  // route === 'expense'
+  await sendExpensePrefillLink(person, conversation, message.fromPhone, fields);
 }
 
 async function handleStatusCheck(
