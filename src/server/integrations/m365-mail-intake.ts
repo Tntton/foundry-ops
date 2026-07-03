@@ -355,14 +355,32 @@ export async function pollMailbox(opts: {
   }
 
   const result: MailboxPollResult = { ...empty, messagesConsidered: messages.length };
-  let newestReceivedDateTime = startWatermark;
+  // The watermark only advances past messages that reached a TERMINAL
+  // state: created / duplicate / not-an-invoice / permanent extract
+  // failure (the model read it fine but there was no usable amount, etc.,
+  // which we surface via an extract-failure audit and don't retry). A
+  // message whose processing THREW is a *transient* failure — Graph
+  // throttling, an Anthropic 429/529, a network blip — so we hold the
+  // watermark below it and let the next fire re-fetch and retry, rather
+  // than silently dropping a supplier invoice. Messages ordered after a
+  // transient block are re-processed next fire too; the (supplier +
+  // invoiceNumber) dedup prevents double Bills. (Fix: previously the
+  // watermark advanced past every message seen, so a transient blip lost
+  // the invoice forever.)
+  let newestTerminal = startWatermark;
+  let blockedAtTransient = false;
+  const advancePast = (at: Date): void => {
+    if (!blockedAtTransient && at > newestTerminal) newestTerminal = at;
+  };
 
   for (const msg of messages) {
     const msgReceivedAt = new Date(msg.receivedDateTime);
-    if (msgReceivedAt > newestReceivedDateTime) newestReceivedDateTime = msgReceivedAt;
 
     const heuristic = looksLikeInvoice(msg);
-    if (!heuristic.ok) continue;
+    if (!heuristic.ok) {
+      advancePast(msgReceivedAt); // not an invoice — terminal, safe to skip past
+      continue;
+    }
     result.candidatesScanned += 1;
 
     try {
@@ -385,7 +403,10 @@ export async function pollMailbox(opts: {
           reason: outcome.reason,
         });
       }
+      advancePast(msgReceivedAt); // terminal outcome — safe to advance past
     } catch (err) {
+      // Transient failure — hold the watermark; do NOT advance past this.
+      blockedAtTransient = true;
       const reason = (err as Error).message;
       result.errors.push(`${msg.id}: ${reason}`);
       result.extractionsFailed += 1;
@@ -398,16 +419,16 @@ export async function pollMailbox(opts: {
     }
   }
 
-  // Advance the cursor only if we made it through the loop without a
-  // fatal Graph error (per-message failures are OK — the loop continued).
-  // The watermark advances to the newest message we saw, not just the
-  // last one processed, so a rejected message doesn't re-appear next fire.
-  result.advanceCursorTo = newestReceivedDateTime;
+  // Persist the watermark up to the newest terminally-handled message
+  // before any transient block. (The whole poll is wrapped in a try that
+  // records a fatal Graph error + skips this update; per-message transient
+  // failures are handled above by holding `newestTerminal`.)
+  result.advanceCursorTo = newestTerminal;
   await prisma.mailboxPollCursor.update({
     where: { mailboxUpn },
     data: {
       lastPollAt: new Date(),
-      lastReceivedDateTime: newestReceivedDateTime,
+      lastReceivedDateTime: newestTerminal,
       lastError: null,
     },
   });

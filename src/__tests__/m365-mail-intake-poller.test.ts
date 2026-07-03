@@ -206,6 +206,35 @@ describe('pollMailbox', () => {
     );
   });
 
+  it('holds the watermark when a message throws transiently, so it retries next fire', async () => {
+    // m1 (older) hits a transient failure (e.g. Anthropic 529); m2 (newer)
+    // would succeed. The watermark must NOT advance past m1, or m1's invoice
+    // is lost forever — the whole point of the fix.
+    const messages = [
+      candidateMessage('m1', 'Invoice 001', '2026-05-28T10:00:00Z'),
+      candidateMessage('m2', 'Invoice 002', '2026-05-29T10:00:00Z'),
+    ];
+    mockGraph.mockResolvedValueOnce({ value: messages });
+    mockExtract.mockRejectedValueOnce(new Error('anthropic 529 overloaded')); // m1 throws
+    // (default mockResolvedValue → m2 succeeds)
+
+    const res = await pollMailbox({
+      mailboxUpn: 'finance@foundry.health',
+      actorPersonId: 'person-tt',
+    });
+
+    expect(res.errors.length).toBe(1);
+    // Cursor stays at the START watermark (2026-05-27) — not advanced past
+    // the transiently-failed m1 (nor past m2, which sits after the block).
+    expect(mockPrisma.mailboxPollCursor.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          lastReceivedDateTime: new Date('2026-05-27T00:00:00Z'),
+        }),
+      }),
+    );
+  });
+
   it('filters non-candidates before spending OCR tokens', async () => {
     const messages = [
       candidateMessage('m1', 'Invoice 001', '2026-05-28T10:00:00Z'),
