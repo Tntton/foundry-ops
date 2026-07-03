@@ -43,6 +43,29 @@ export function PersonEditForm({
   const [rateDollars, setRateDollars] = useState<string>(
     person.rate > 0 ? (person.rate / 100).toFixed(0) : '0',
   );
+  // Sticky "manual override" flag — server persists this; once true,
+  // Level changes stop auto-snapping the rate. Cleared by "Reset to card
+  // rate" button below, which snaps rate to the level's card value and
+  // flips the flag back to false.
+  const [rateOverride, setRateOverride] = useState<boolean>(person.rateOverride);
+  // Expert-tier secondary rate — only meaningful for expert / fellow
+  // bands. Always editable (super_admin flexibility) but the section
+  // hides unless the band/level suggests it applies.
+  const [expertRateDollars, setExpertRateDollars] = useState<string>(
+    person.expertRate && person.expertRate > 0
+      ? (person.expertRate / 100).toFixed(0)
+      : '',
+  );
+  const [expertRateUnit, setExpertRateUnit] = useState<'hour' | 'day'>(
+    person.expertRateUnit ?? 'hour',
+  );
+  // Agency-contracted contractor fields. Both optional. Markup treated
+  // as a percentage; loaded cost = rate × (1 + markup/100). Displayed
+  // live so the pricing feels concrete.
+  const [agencyName, setAgencyName] = useState<string>(person.agencyName ?? '');
+  const [agencyMarkupPct, setAgencyMarkupPct] = useState<string>(
+    person.agencyMarkupPct !== null ? String(person.agencyMarkupPct) : '',
+  );
   // Leadership tier — partner / MP / AP. Layout hides the FTE
   // field for them since their capacity isn't tracked against a
   // pyramid baseline.
@@ -60,12 +83,57 @@ export function PersonEditForm({
     setLevel(newLevel);
     const meta = FOUNDRY_LEVELS.find((l) => l.code === newLevel);
     if (meta) setBand(meta.band);
-    const cents = ratesByCode[newLevel];
-    if (cents !== undefined) {
-      setRateDollars(String(cents / 100));
-      setRateUnit('hour');
+    // Only auto-snap the rate when there's no manual override in place.
+    // If a super-admin has explicitly set a bespoke rate we DON'T stomp
+    // it just because they nudged the Level dropdown.
+    if (!rateOverride) {
+      const cents = ratesByCode[newLevel];
+      if (cents !== undefined) {
+        setRateDollars(String(cents / 100));
+        setRateUnit('hour');
+      }
     }
   }
+
+  function handleRateChange(next: string) {
+    setRateDollars(next);
+    const currentCards = ratesByCode[level];
+    // Once the user types a rate that differs from the level's card rate
+    // (or types anything when there's no card rate), flip to override
+    // mode so the sticky-lock behaviour engages on the next Level flip.
+    const enteredCents = Math.round(Number(next || '0') * 100);
+    if (currentCards === undefined || enteredCents !== currentCards) {
+      if (!rateOverride) setRateOverride(true);
+    }
+  }
+
+  function resetRateToCard() {
+    const cents = ratesByCode[level];
+    if (cents === undefined) return;
+    setRateDollars(String(cents / 100));
+    setRateUnit('hour');
+    setRateOverride(false);
+  }
+
+  // Fellow / Expert levels trigger the expert-rate section. Also
+  // trigger on the Expert band directly (covers people whose level
+  // code isn't F1/F2/E1/E2 but band was set manually).
+  const showExpertRate =
+    band === 'Expert' ||
+    level === 'F1' ||
+    level === 'F2' ||
+    level === 'E1' ||
+    level === 'E2';
+
+  // Live fully-loaded rate preview for the agency section — helpful
+  // context while typing so TT can see the actual $ he's committing to.
+  const loadedPreviewCents = (() => {
+    const rate = Number(rateDollars || '0');
+    const markup = Number(agencyMarkupPct || '0');
+    if (!Number.isFinite(rate) || rate <= 0) return null;
+    if (!agencyName.trim() || !Number.isFinite(markup) || markup <= 0) return null;
+    return Math.round(rate * (1 + markup / 100) * 100);
+  })();
 
   return (
     <form action={action} className="space-y-6">
@@ -214,6 +282,14 @@ export function PersonEditForm({
       </Section>
 
       <Section title="Pay">
+        {/* Sticky manual-override flag persisted with the form. When
+             true, changing Level won't snap the rate. Hidden input so
+             the value round-trips through the server action. */}
+        <input
+          type="hidden"
+          name="rateOverride"
+          value={rateOverride ? 'true' : 'false'}
+        />
         <FieldRow>
           <Field label="Rate unit" required error={errs['rateUnit']}>
             <Select
@@ -233,21 +309,142 @@ export function PersonEditForm({
             label="Rate (AUD)"
             required
             error={errs['rateDollars']}
-            hint="Auto-fills from rate card when Level changes"
+            hint={
+              rateOverride
+                ? 'Manual override — Level changes will NOT overwrite'
+                : 'Auto-fills from rate card when Level changes'
+            }
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                name="rateDollars"
+                type="number"
+                min="0"
+                max="10000"
+                step="1"
+                value={rateDollars}
+                onChange={(e) => handleRateChange(e.target.value)}
+                required
+                className="max-w-[160px]"
+              />
+              {rateOverride && (
+                <>
+                  <span className="rounded-sm bg-status-amber-soft px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-status-amber">
+                    Override
+                  </span>
+                  {ratesByCode[level] !== undefined && (
+                    <button
+                      type="button"
+                      onClick={resetRateToCard}
+                      className="text-xs text-ink-3 underline hover:text-ink"
+                    >
+                      Reset to card (${((ratesByCode[level] ?? 0) / 100).toFixed(0)})
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          </Field>
+        </FieldRow>
+
+        {showExpertRate && (
+          <>
+            <div className="pt-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-3">
+                Expert / fellow rate
+              </h3>
+              <p className="text-[11px] text-ink-3">
+                Optional secondary rate used when this person is engaged
+                specifically in an expert / fellow capacity. Leave blank
+                if not applicable.
+              </p>
+            </div>
+            <FieldRow>
+              <Field label="Expert rate unit" error={errs['expertRateUnit']}>
+                <Select
+                  name="expertRateUnit"
+                  value={expertRateUnit}
+                  onChange={(e) => setExpertRateUnit(e.target.value as 'hour' | 'day')}
+                >
+                  {RATE_UNITS.map((u) => (
+                    <option key={u.value} value={u.value}>
+                      {u.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field
+                label="Expert rate (AUD)"
+                error={errs['expertRateDollars']}
+                hint="Blank = not applicable"
+              >
+                <Input
+                  name="expertRateDollars"
+                  type="number"
+                  min="0"
+                  max="10000"
+                  step="1"
+                  value={expertRateDollars}
+                  onChange={(e) => setExpertRateDollars(e.target.value)}
+                  className="max-w-[160px]"
+                />
+              </Field>
+            </FieldRow>
+          </>
+        )}
+
+        <div className="pt-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-3">
+            Agency (optional)
+          </h3>
+          <p className="text-[11px] text-ink-3">
+            For contractors placed through a talent agency. When agency
+            name is set, downstream cost calcs uplift the rate by the
+            markup % to arrive at the fully-loaded firm cost.
+          </p>
+        </div>
+        <FieldRow>
+          <Field
+            label="Agency name"
+            error={errs['agencyName']}
+            hint="Leave blank if direct"
           >
             <Input
-              name="rateDollars"
+              name="agencyName"
+              type="text"
+              maxLength={200}
+              value={agencyName}
+              onChange={(e) => setAgencyName(e.target.value)}
+              placeholder="e.g. Chandler Macleod"
+            />
+          </Field>
+          <Field
+            label="Agency markup (%)"
+            error={errs['agencyMarkupPct']}
+            hint="e.g. 30 = +30% on top of rate"
+          >
+            <Input
+              name="agencyMarkupPct"
               type="number"
               min="0"
-              max="10000"
-              step="1"
-              value={rateDollars}
-              onChange={(e) => setRateDollars(e.target.value)}
-              required
-              className="max-w-[160px]"
+              max="200"
+              step="0.5"
+              value={agencyMarkupPct}
+              onChange={(e) => setAgencyMarkupPct(e.target.value)}
+              disabled={!agencyName.trim()}
+              className="max-w-[140px]"
             />
           </Field>
         </FieldRow>
+        {loadedPreviewCents !== null && (
+          <p className="text-xs text-ink-3">
+            Fully-loaded cost preview:{' '}
+            <span className="font-mono text-ink">
+              ${(loadedPreviewCents / 100).toFixed(0)}/{rateUnit === 'hour' ? 'hr' : 'day'}
+            </span>{' '}
+            (rate × {(1 + Number(agencyMarkupPct) / 100).toFixed(2)}).
+          </p>
+        )}
       </Section>
 
       <Section title="Company">

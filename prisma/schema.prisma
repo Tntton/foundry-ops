@@ -389,6 +389,29 @@ model Person {
   rateUnit        RateUnit
   rate            Int        // cost rate in AUD cents
   billRate        Int?       // charge rate in AUD cents (optional)
+  // Sticky "rate has been manually overridden" flag. When true, the
+  // Person Edit form will NOT auto-snap `rate` to the rate-card value
+  // when the Level dropdown changes — so a super-admin can hold a
+  // consultant at a bespoke rate without every level flip stomping it.
+  // Set automatically when the entered rate differs from the level's
+  // card rate at save time; cleared by clicking "Reset to card rate".
+  rateOverride    Boolean    @default(false)
+  // Optional second cost rate used when this person is engaged in an
+  // expert / fellow capacity (e.g. E1/E2 experts and F1/F2 fellows
+  // pricing at a premium above their standard T-tier rate). Null when
+  // not applicable. Downstream billing / project cost tools pick
+  // between `rate` and `expertRate` based on how the person is
+  // staffed on a given engagement.
+  expertRate      Int?
+  expertRateUnit  RateUnit?
+  // Agency (contractor via a talent agency — Chandler Macleod,
+  // TalentQuest etc.). When `agencyName` is set, the person is
+  // considered agency-contracted and downstream cost calcs uplift
+  // their rate by `agencyMarkupPct` to arrive at the "fully-loaded"
+  // firm cost. Both fields optional; markup is a percentage (30.00 =
+  // +30%). Use `loadedCostCents(person, hours)` helper to compute.
+  agencyName        String?
+  agencyMarkupPct   Decimal? @db.Decimal(5, 2)
   roles           Role[]
   startDate       DateTime
   endDate         DateTime?  // null = active (terminal — once set, person has left)

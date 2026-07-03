@@ -173,6 +173,12 @@ export type PersonDetail = PersonListRow & {
   bankBsb: string | null; // encrypted blob — never render; test for presence only
   bankAcc: string | null;
   headshotUrl: string | null;
+  // Rate flexibility (see prisma/schema.prisma Person model).
+  rateOverride: boolean;
+  expertRate: number | null;
+  expertRateUnit: 'hour' | 'day' | null;
+  agencyName: string | null;
+  agencyMarkupPct: number | null;
 };
 
 export async function getPerson(id: string): Promise<PersonDetail | null> {
@@ -214,6 +220,11 @@ export async function getPerson(id: string): Promise<PersonDetail | null> {
       bankAcc: true,
       headshotUrl: true,
       lastLoginAt: true,
+      rateOverride: true,
+      expertRate: true,
+      expertRateUnit: true,
+      agencyName: true,
+      agencyMarkupPct: true,
     },
   });
   if (!p) return null;
@@ -255,5 +266,10 @@ export async function getPerson(id: string): Promise<PersonDetail | null> {
     bankAcc: p.bankAcc,
     headshotUrl: p.headshotUrl,
     lastLoginAt: p.lastLoginAt,
+    rateOverride: p.rateOverride,
+    expertRate: p.expertRate,
+    expertRateUnit: p.expertRateUnit,
+    agencyName: p.agencyName,
+    agencyMarkupPct: p.agencyMarkupPct !== null ? Number(p.agencyMarkupPct) : null,
   };
 }

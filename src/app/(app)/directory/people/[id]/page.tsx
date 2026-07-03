@@ -846,8 +846,41 @@ export default async function PersonDetailPage({
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm">
-                  <Field label="Rate">{formatRateCents(person.rate, person.rateUnit)}</Field>
+                  <Field label="Rate">
+                    {formatRateCents(person.rate, person.rateUnit)}
+                    {person.rateOverride && (
+                      <span className="ml-2 rounded-sm bg-status-amber-soft px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-status-amber">
+                        Manual override
+                      </span>
+                    )}
+                  </Field>
                   <Field label="Unit">{person.rateUnit === 'hour' ? 'Hourly' : 'Daily'}</Field>
+                  {person.expertRate !== null && person.expertRate > 0 && person.expertRateUnit && (
+                    <Field label="Expert rate">
+                      {formatRateCents(person.expertRate, person.expertRateUnit)}
+                      <span className="ml-2 text-[11px] text-ink-3">
+                        (applied when engaged in expert / fellow capacity)
+                      </span>
+                    </Field>
+                  )}
+                  {person.agencyName && (
+                    <>
+                      <Field label="Agency">
+                        <span>{person.agencyName}</span>
+                        {person.agencyMarkupPct !== null && person.agencyMarkupPct > 0 && (
+                          <span className="ml-2 text-[11px] text-ink-3">
+                            +{person.agencyMarkupPct}% markup · fully-loaded ≈{' '}
+                            <span className="font-mono text-ink-2">
+                              {formatRateCents(
+                                Math.round(person.rate * (1 + person.agencyMarkupPct / 100)),
+                                person.rateUnit,
+                              )}
+                            </span>
+                          </span>
+                        )}
+                      </Field>
+                    </>
+                  )}
                 </CardContent>
               </Card>
               {canEdit && (

@@ -46,6 +46,34 @@ const PersonEdit = z
       .or(z.literal('').transform(() => null)),
     rateUnit: z.enum(['hour', 'day']),
     rateDollars: z.coerce.number().min(0).max(10_000),
+    // Sticky "rate has been manually overridden" flag. When the entered
+    // rate matches the level's card rate this stays false; once it
+    // diverges (either by super-admin choice or because rate card has
+    // moved and person's rate hasn't), we stamp true so future level
+    // flips don't stomp the bespoke value. Client-side controls the
+    // clear (a "Reset to card rate" button).
+    rateOverride: z.coerce.boolean(),
+    // Second cost rate — used when this person is engaged in an
+    // expert / fellow capacity. Optional; blank = not applicable.
+    expertRateDollars: z
+      .union([z.coerce.number().min(0).max(10_000), z.literal('').transform(() => null)])
+      .nullable()
+      .optional(),
+    expertRateUnit: z.enum(['hour', 'day']).nullable().optional(),
+    // Optional agency (contractor via a talent agency). Name is the
+    // trigger — if blank, everything agency-related is treated as
+    // absent. Markup is a percentage (30 = +30% on top of rate).
+    agencyName: z
+      .string()
+      .trim()
+      .max(200)
+      .optional()
+      .or(z.literal('').transform(() => null))
+      .nullable(),
+    agencyMarkupPct: z
+      .union([z.coerce.number().min(0).max(200), z.literal('').transform(() => null)])
+      .nullable()
+      .optional(),
     // Contractor's company website (their consulting business). The
     // logo is auto-resolved from this; staff/partners typically leave
     // it blank.
@@ -92,6 +120,11 @@ export async function updatePerson(
     mailingAddress: formData.get('mailingAddress') || null,
     rateUnit: formData.get('rateUnit'),
     rateDollars: formData.get('rateDollars'),
+    rateOverride: formData.get('rateOverride') === 'on' || formData.get('rateOverride') === 'true',
+    expertRateDollars: formData.get('expertRateDollars') || '',
+    expertRateUnit: (formData.get('expertRateUnit') || null) as 'hour' | 'day' | null,
+    agencyName: formData.get('agencyName') || null,
+    agencyMarkupPct: formData.get('agencyMarkupPct') || '',
     website: formData.get('website') || null,
     roles: formData.getAll('roles'),
   };
@@ -111,6 +144,20 @@ export async function updatePerson(
 
   const data = parsed.data;
   const nextRate = Math.round(data.rateDollars * 100);
+  const nextExpertRate =
+    typeof data.expertRateDollars === 'number'
+      ? Math.round(data.expertRateDollars * 100)
+      : null;
+  // If no expert rate value, force unit to null too so we don't leave a
+  // dangling unit on a null rate.
+  const nextExpertRateUnit = nextExpertRate === null ? null : data.expertRateUnit ?? 'hour';
+  // Agency name is the trigger — no name = clear markup too, otherwise
+  // strays could sit on a person no longer through an agency.
+  const nextAgencyName = data.agencyName ?? null;
+  const nextAgencyMarkup =
+    nextAgencyName && typeof data.agencyMarkupPct === 'number'
+      ? data.agencyMarkupPct
+      : null;
   // Leadership (Partner / MP / AP) + contractors don't need an FTE
   // number — their capacity is variable / per-project.
   const fteToStore =
@@ -145,6 +192,11 @@ export async function updatePerson(
     mailingAddress: existing.mailingAddress,
     rateUnit: existing.rateUnit,
     rate: existing.rate,
+    rateOverride: existing.rateOverride,
+    expertRate: existing.expertRate,
+    expertRateUnit: existing.expertRateUnit,
+    agencyName: existing.agencyName,
+    agencyMarkupPct: existing.agencyMarkupPct !== null ? Number(existing.agencyMarkupPct) : null,
     website: existing.website,
     domain: existing.domain,
     logoUrl: existing.logoUrl,
@@ -163,6 +215,11 @@ export async function updatePerson(
     mailingAddress: data.mailingAddress ?? null,
     rateUnit: data.rateUnit,
     rate: nextRate,
+    rateOverride: data.rateOverride,
+    expertRate: nextExpertRate,
+    expertRateUnit: nextExpertRateUnit,
+    agencyName: nextAgencyName,
+    agencyMarkupPct: nextAgencyMarkup,
     website: companyAssets.website,
     domain: companyAssets.domain,
     logoUrl: companyAssets.logoUrl,
@@ -186,6 +243,11 @@ export async function updatePerson(
           mailingAddress: data.mailingAddress ?? null,
           rateUnit: data.rateUnit,
           rate: nextRate,
+          rateOverride: data.rateOverride,
+          expertRate: nextExpertRate,
+          expertRateUnit: nextExpertRateUnit,
+          agencyName: nextAgencyName,
+          agencyMarkupPct: nextAgencyMarkup,
           website: companyAssets.website,
           domain: companyAssets.domain,
           logoUrl: companyAssets.logoUrl,
