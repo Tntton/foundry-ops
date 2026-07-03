@@ -986,6 +986,27 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Accepted/minor: keyword-fallback intent ordering (`hours` → timesheet before status) is offline-only + documented in intent-classify.test.ts; availability writes 0-hour weekend rows.
 - [ ] Commit: `fix(TASK-131): WhatsApp re-delivery dedup + stale copy`.
 
+### TASK-132 — WhatsApp: classify document type (receipt vs supplier invoice) and route
+**status:** todo
+**depends on:** TASK-128, TASK-302b (bill prefill)
+**context:** TT (2026-07-03): a user should be able to just send an image and have the agent work out the intended action. Intent auto-detection already works (bare image → expense OCR; free-text → classified). The gap: **every image is currently treated as a personal receipt → Expense.** A supplier *invoice* sent for AP gets mislogged as an expense instead of routed to Bills. Add document-type classification so the agent picks the right flow.
+**what already exists (reuse, don't rebuild):** `PrefillKind` has `'bill'`; [prefill-bill.ts](src/server/agents/assistant/tools/prefill-bill.ts) builds a `/bills/new?prefill=` link; the intake-OCR extractor already reads supplier-invoice fields (`invoiceNumber`, `supplierAbn`, payment terms). Only the *classification + branch* is missing.
+**design:**
+- Add `documentType: 'receipt' | 'supplier_invoice' | 'unknown'` to the intake-OCR extraction (schema + prompt). Signals: an invoice number + ABN + payment terms → supplier_invoice; card/EFTPOS receipt with no invoice number → receipt.
+- In the WhatsApp image handler, branch on `documentType`:
+  - `receipt` → existing expense prefill link (`/expenses/new?prefill=`).
+  - `supplier_invoice` → **bill** prefill link (`/bills/new?prefill=`), reusing the bill payload/token (kind `'bill'`). Submission still goes through the normal Bill approval flow on the web (high-value web-only rule intact — nothing auto-approves).
+  - `unknown` / low confidence → reply "Is this a receipt you paid, or a supplier bill? Reply *RECEIPT* or *BILL*" and stash the OCR result in `WhatsAppConversation.state` so the follow-up routes without re-OCR.
+- Caption override: if the caption contains "bill"/"invoice" or "receipt", honour it over the classifier.
+- Dispatch tracking (TASK-128) records the correct `kind` per branch.
+**acceptance:**
+- [ ] `documentType` added to intake-OCR + unit test on the classifier prompt shape / fixture receipts vs invoices.
+- [ ] Image handler routes receipt→expense, supplier_invoice→bill; ambiguous → RECEIPT/BILL clarify with state stashed (no double OCR on the reply).
+- [ ] Caption override honoured.
+- [ ] Bill path produces a valid `/bills/new?prefill=` deep-link; no auto-write; audit `source='agent'`.
+- [ ] Typecheck + tests + lint green; live smoke: send a supplier invoice → get a Bill link; send a receipt → get an Expense link; send an ambiguous doc → get the RECEIPT/BILL prompt.
+- [ ] Commit: `feat(TASK-132): WhatsApp document-type routing (receipt vs bill)`.
+
 ### TASK-130 — DocuSign integration
 **status:** todo
 **depends on:** TASK-010
