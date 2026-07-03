@@ -978,7 +978,7 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [x] Stale `HELP_TEXT` copy "links last 15 minutes" → "24 hours".
 **BLOCKERS to verify before rollout (config, not code):**
 - [ ] **`ANTHROPIC_API_KEY` set in prod** — without it, timesheet/availability parsing + expense OCR all fail (keyword-only intent + "use the web app" errors). The single biggest rollout gate.
-- [ ] **Model IDs valid** — `claude-sonnet-4-5` (timesheet/availability/OCR) + `claude-haiku-4-5` (classify). Confirm still available on the API for the post-2026 account, else calls fail after retries. Consider `claude-sonnet-5` / current Haiku.
+- [x] **Model IDs valid** — verified 2026-07-03 against the current model catalog: `claude-haiku-4-5` is current/active; `claude-sonnet-4-5` is legacy-but-active (not deprecated, won't 404). Both resolve; match A4. No swap needed. *Optional future enhancement:* modernise `claude-sonnet-4-5` → `claude-sonnet-5` (near-Opus extraction quality) — a real migration (adaptive thinking on by default, new tokenizer, sampling-param rejection), but current calls set none of those params so it'd be low-risk.
 - [ ] `WhatsAppPrefillDispatch` migration applied + `DIRECT_URL` set (see [[foundry-migrations-manual]]) — else reminders + dispatch tracking stay off (core flow now survives via the best-effort hotfix).
 **follow-up (non-blocking hardening):**
 - [ ] Unique index on `WhatsAppMessage.providerId` (inbound) to make dedup fully race-proof against simultaneous retries (currently best-effort findFirst).
