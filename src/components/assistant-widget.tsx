@@ -70,8 +70,10 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-const PLACEHOLDER =
-  "Hey — I'm the Foundry Ops assistant. Ask me what's on my plate, what you've logged this week, or which screen does X. I keep answers short.";
+// Opening greeting. Kept short so the widget feels immediately ready
+// rather than presenting a wall of intro copy. Answers are short by
+// prompt design; users don't need the meta explanation.
+const GREETING = 'What can I help with?';
 
 /**
  * Floating in-app assistant. Lives at the bottom-right of every authed
@@ -612,8 +614,10 @@ export function AssistantWidget() {
             className="flex-1 overflow-y-auto px-3 py-3 text-sm"
           >
             {messages.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-line bg-surface-elev px-3 py-4 text-center text-xs text-ink-3">
-                {PLACEHOLDER}
+              <div className="flex justify-start">
+                <div className="max-w-[90%] rounded-lg bg-surface-elev px-3 py-2 text-xs text-ink">
+                  {GREETING}
+                </div>
               </div>
             ) : (
               <ul className="flex flex-col gap-3">

@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { countUnreadUpdates } from '@/server/user-updates';
 import { Sidebar } from '@/components/shell/sidebar';
@@ -7,6 +8,8 @@ import { MobileNavProvider } from '@/components/shell/mobile-nav';
 import { FeedbackWidget } from '@/components/feedback-widget';
 import { AssistantWidget } from '@/components/assistant-widget';
 import { PeriodAutoRefresh } from '@/components/shell/period-refresh';
+import { OnboardingWizard } from '@/components/onboarding-wizard';
+import { onboardingFor, resolvePrimaryRole } from '@/server/onboarding';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
@@ -29,6 +32,24 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     unreadUpdates = await countUnreadUpdates(session.person.id);
   } catch (err) {
     console.error('[layout.unreadUpdates] failed (badge will show 0):', err);
+  }
+
+  // First-login onboarding tour. Runs when the person has never
+  // dismissed it. Defensive try/catch so a missing column (pre-
+  // migration) or DB blip never blocks the shell — worst case the
+  // tour just doesn't render.
+  let onboardingProfile: ReturnType<typeof onboardingFor> | null = null;
+  try {
+    const row = await prisma.person.findUnique({
+      where: { id: session.person.id },
+      select: { onboardingCompletedAt: true },
+    });
+    if (row && row.onboardingCompletedAt === null) {
+      const primary = resolvePrimaryRole(session.person.roles);
+      onboardingProfile = onboardingFor(primary, session.person.firstName);
+    }
+  } catch (err) {
+    console.error('[layout.onboarding] read failed (tour will not render):', err);
   }
   const activeOverlayRoles = session.viewAsRoles ?? null;
   const isViewing =
@@ -94,6 +115,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <FeedbackWidget />
         {/* In-app AI assistant — bottom-right primary widget. */}
         <AssistantWidget />
+        {/* First-login onboarding tour — role-scoped. Renders only when
+             Person.onboardingCompletedAt is null; the wizard's own
+             action stamps that field so it won't re-appear next visit. */}
+        {onboardingProfile && <OnboardingWizard profile={onboardingProfile} />}
       </div>
     </MobileNavProvider>
   );

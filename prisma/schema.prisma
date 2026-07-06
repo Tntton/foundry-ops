@@ -428,6 +428,12 @@ model Person {
   // people view so admins can spot accounts that were provisioned
   // but never opened. Null = "Not yet logged in".
   lastLoginAt     DateTime?
+  // Stamped when the first-login onboarding tour is completed (or
+  // skipped — from the user's POV it's the same thing: don't show me
+  // again). Null = tour has never been dismissed. The tour is scoped
+  // to the person's highest role at that time; if roles change later,
+  // an admin can null this field to re-trigger for the new capability.
+  onboardingCompletedAt DateTime?
 
   // Payroll (encrypted at rest — see CLAUDE.md security notes).
   // International-friendly: `bankCountry` selects the field convention.
