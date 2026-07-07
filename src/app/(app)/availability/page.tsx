@@ -247,6 +247,15 @@ export default async function AvailabilityPage({
       )
       .map((p) => p.id),
   );
+  // The person's own projects sort first — both in the table below and
+  // in every project dropdown the editor renders, so the code they
+  // want is almost always the first option.
+  const sortedProjects = activeProjects.slice().sort((a, b) => {
+    const aMine = onProjectIds.has(a.id) ? 0 : 1;
+    const bMine = onProjectIds.has(b.id) ? 0 : 1;
+    if (aMine !== bMine) return aMine - bMine;
+    return a.code.localeCompare(b.code);
+  });
 
   return (
     <div className="space-y-6">
@@ -301,7 +310,8 @@ export default async function AvailabilityPage({
             <p className="text-sm text-ink-3">No active projects.</p>
           </CardContent>
         ) : (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-sm">
             <thead className="bg-surface-subtle text-[10px] uppercase tracking-wide text-ink-3">
               <tr className="border-b border-line">
                 <th className="px-4 py-2 text-left">Project</th>
@@ -314,7 +324,7 @@ export default async function AvailabilityPage({
               </tr>
             </thead>
             <tbody>
-              {activeProjects.map((p) => {
+              {sortedProjects.map((p) => {
                 const onThisProject = onProjectIds.has(p.id);
                 const stageVariant: 'amber' | 'green' | 'blue' | 'outline' =
                   p.stage === 'kickoff'
@@ -385,6 +395,7 @@ export default async function AvailabilityPage({
               })}
             </tbody>
           </table>
+          </div>
         )}
       </Card>
 
@@ -422,6 +433,11 @@ export default async function AvailabilityPage({
         </div>
       ) : (
         <AvailabilityEditor
+          // Remount when the person or their regular-days schedule
+          // changes so the grid re-seeds its pre-filled defaults
+          // immediately after a regular-days save (the editor holds
+          // cell state in useState, which ignores prop updates).
+          key={`${target.id}:${JSON.stringify(regularDays)}`}
           personId={target.id}
           targetFirstName={
             target.id === session.person.id ? 'You' : target.firstName
@@ -429,7 +445,7 @@ export default async function AvailabilityPage({
           weeklyCapacityHours={targetCapacityHours}
           weeks={editorWeeks}
           initialCells={initialCells}
-          allocatableProjects={activeProjects.map((p) => ({
+          allocatableProjects={sortedProjects.map((p) => ({
             id: p.id,
             code: p.code,
             name: p.name,

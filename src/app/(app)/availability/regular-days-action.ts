@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
+import { hasCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
 
 export type RegularDaysFormState =
@@ -37,6 +38,10 @@ export async function saveRegularDays(
 ): Promise<RegularDaysFormState> {
   const session = await getSession();
   if (!session) return { status: 'error', message: 'Not signed in' };
+  // Same capability the /availability page gates on.
+  if (!hasCapability(session, 'timesheet.submit')) {
+    return { status: 'error', message: 'Not authorized' };
+  }
 
   const parsed = Schema.safeParse({
     personId: formData.get('personId'),

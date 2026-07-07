@@ -4,14 +4,24 @@ import { revalidateScheduleSurfaces } from '@/server/revalidate-schedule';
 import { z } from 'zod';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
-import { writeAudit } from '@/server/audit';
+import { hasCapability } from '@/server/capabilities';
 import { upsertAvailabilityForPerson } from '@/server/availability';
 import { prisma } from '@/server/db';
+import { addDays, startOfWeek } from '@/lib/week';
 
 export type AvailabilityFormState =
   | { status: 'idle' }
   | { status: 'error'; message: string }
-  | { status: 'success'; cellsWritten: number };
+  | {
+      status: 'success';
+      cellsWritten: number;
+      cellsCleared: number;
+      /** Project codes that failed to resolve (archived / renamed between
+       *  page load and save). Their cells were saved as unallocated —
+       *  surfaced so the user knows the tag was dropped, not silently
+       *  swallowed. */
+      droppedCodes: string[];
+    };
 
 const Schema = z.object({
   personId: z.string().min(1),
@@ -40,6 +50,11 @@ export async function submitAvailabilityForecast(
 ): Promise<AvailabilityFormState> {
   const session = await getSession();
   if (!session) return { status: 'error', message: 'Not signed in' };
+  // Same capability the page gates on — the handler must enforce it
+  // too (deny-by-default; never trust the client).
+  if (!hasCapability(session, 'timesheet.submit')) {
+    return { status: 'error', message: 'Not authorized' };
+  }
 
   const personId = String(formData.get('personId') ?? '');
   const cellsRaw = formData.get('cells');
@@ -63,6 +78,21 @@ export async function submitAvailabilityForecast(
       status: 'error',
       message: valid.error.issues[0]?.message ?? 'Invalid input',
     };
+  }
+
+  // Date-window guard: the editor only renders startOfWeek(now)..+8w;
+  // accept a little headroom (16w) but reject anything outside it so a
+  // crafted payload can't write forecast rows years into the future.
+  const windowStart = startOfWeek(new Date());
+  const windowEnd = addDays(windowStart, 16 * 7);
+  for (const c of valid.data.cells) {
+    const d = new Date(`${c.dateIso}T00:00:00.000Z`);
+    if (Number.isNaN(d.getTime()) || d < windowStart || d >= windowEnd) {
+      return {
+        status: 'error',
+        message: `Date ${c.dateIso} is outside the editable window.`,
+      };
+    }
   }
 
   const isSelf = personId === session.person.id;
@@ -107,44 +137,36 @@ export async function submitAvailabilityForecast(
     });
     for (const p of projects) projectByCode.set(p.code, p.id);
   }
-  const cellsForUpsert = valid.data.cells.map((c) => ({
-    dateIso: c.dateIso,
-    hours: c.hours,
-    notes: c.notes ?? null,
-    projectId:
-      typeof c.projectCode === 'string' && c.projectCode.length > 0
-        ? (projectByCode.get(c.projectCode) ?? null)
-        : null,
-  }));
+  // Track any code that didn't resolve (archived between page load
+  // and save, or a stale option) so the save result can say the tag
+  // was dropped rather than silently saving the cell as unallocated.
+  const droppedCodes = new Set<string>();
+  const cellsForUpsert = valid.data.cells.map((c) => {
+    const hasCode = typeof c.projectCode === 'string' && c.projectCode.length > 0;
+    const resolved = hasCode ? projectByCode.get(c.projectCode as string) : undefined;
+    if (hasCode && resolved === undefined) droppedCodes.add(c.projectCode as string);
+    return {
+      dateIso: c.dateIso,
+      hours: c.hours,
+      notes: c.notes ?? null,
+      projectId: resolved ?? null,
+    };
+  });
 
-  const result = await upsertAvailabilityForPerson(personId, cellsForUpsert);
+  // Audit is written inside the same transaction as the mutation (A9).
+  const result = await upsertAvailabilityForPerson(personId, cellsForUpsert, {
+    actorId: session.person.id,
+    via: isSelf ? 'self_availability_forecast' : 'admin_availability_forecast',
+  });
   if (!result.ok) return { status: 'error', message: result.error };
-
-  // Audit summary — payload kept bounded; we log size, not contents.
-  try {
-    await prisma.$transaction(async (tx) => {
-      await writeAudit(tx, {
-        actor: { type: 'person', id: session.person.id },
-        action: 'updated',
-        entity: {
-          type: 'person',
-          id: personId,
-          after: {
-            via: isSelf
-              ? 'self_availability_forecast'
-              : 'admin_availability_forecast',
-            cellsWritten: result.cellsWritten,
-          },
-        },
-        source: 'web',
-      });
-    });
-  } catch (err) {
-    console.error('[availability.submit] audit failed:', err);
-  }
 
   // Reconcile every dependent schedule surface (per-person, project,
   // firm) so dashboards / heatmaps / utilisation all re-render.
   revalidateScheduleSurfaces({ personId });
-  return { status: 'success', cellsWritten: result.cellsWritten };
+  return {
+    status: 'success',
+    cellsWritten: result.cellsWritten,
+    cellsCleared: result.cellsCleared,
+    droppedCodes: [...droppedCodes],
+  };
 }

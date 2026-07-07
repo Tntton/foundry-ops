@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
 import {
   submitAvailabilityForecast,
   type AvailabilityFormState,
@@ -102,18 +102,76 @@ export function AvailabilityEditor({
   });
   const [pending, startTransition] = useTransition();
   const [state, setState] = useState<AvailabilityFormState>({ status: 'idle' });
+  // Bulk-fill project selection (the one-shot "fill all weeks" control).
+  const [bulkProjectCode, setBulkProjectCode] = useState<string>('');
 
   const dailyCapacityPlaceholder =
     weeklyCapacityHours > 0 ? Math.round(weeklyCapacityHours / 5) : 0;
 
+  // ── Dirty tracking ────────────────────────────────────────────────
+  // Snapshot the initial serialized state once; any divergence = dirty.
+  // While dirty, beforeunload warns on navigation (covers the person
+  // picker's GET-form submit and the back-link too, since both are
+  // full navigations).
+  const initialSnapshot = useMemo(() => {
+    const h: Record<string, string> = {};
+    for (const c of initialCells) h[c.dateIso] = c.hours !== null ? String(c.hours) : '';
+    const n: Record<string, string> = {};
+    for (let w = 0; w < weeks.length; w += 1) {
+      const monday = initialCells[w * 7];
+      if (monday) n[weeks[w]!.weekStartIso] = monday.notes ?? '';
+    }
+    const p: Record<string, string> = {};
+    for (const c of initialCells) {
+      p[c.dateIso] =
+        c.projectId && projectIdToCode[c.projectId] ? projectIdToCode[c.projectId]! : '';
+    }
+    return JSON.stringify({ h, n, p });
+  }, [initialCells, weeks, projectIdToCode]);
+  const isDirty =
+    JSON.stringify({ h: hours, n: weekNotes, p: cellProjectCode }) !== initialSnapshot &&
+    state.status !== 'success';
+  useEffect(() => {
+    if (!isDirty) return;
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      e.preventDefault();
+      // Chrome requires returnValue to be set for the prompt to show.
+      e.returnValue = '';
+    }
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isDirty]);
+
+  // Any edit invalidates a stale "Saved" banner so feedback always
+  // reflects the current grid, not the last save.
+  function touch() {
+    setState((s) => (s.status === 'idle' ? s : { status: 'idle' }));
+  }
   function setHourCell(dateIso: string, raw: string) {
+    touch();
     setHours((prev) => ({ ...prev, [dateIso]: raw }));
   }
   function setWeekNote(weekStartIso: string, raw: string) {
+    touch();
     setWeekNotes((prev) => ({ ...prev, [weekStartIso]: raw }));
   }
   function setCellProject(dateIso: string, code: string) {
+    touch();
     setCellProjectCode((prev) => ({ ...prev, [dateIso]: code }));
+  }
+
+  /**
+   * Distribute integer `total` hours across Mon-Fri with floor +
+   * remainder pushed onto later weekdays, so the days sum back to the
+   * total exactly. Shared by fan-out and bulk fill.
+   */
+  function weekdaySplit(total: number): number[] {
+    const clamped = Math.max(0, Math.min(24 * 5, Math.round(total)));
+    const base = Math.floor(clamped / 5);
+    const remainder = clamped % 5;
+    const days = [base, base, base, base, base];
+    for (let i = 0; i < remainder; i += 1) days[4 - i]! += 1;
+    return days;
   }
 
   /**
@@ -123,48 +181,49 @@ export function AvailabilityEditor({
    * the week back to unallocated.
    */
   function applyProjectToWeek(weekIndex: number, code: string) {
+    touch();
     const rowCells = initialCells.slice(weekIndex * 7, weekIndex * 7 + 7);
+    // Derive the target cells from current state BEFORE the setState
+    // call — never read one state map inside another's updater.
+    const targets = rowCells.filter((c) => {
+      const h = (hours[c.dateIso] ?? '').trim();
+      return h !== '' && Number(h) > 0;
+    });
     setCellProjectCode((prev) => {
       const next = { ...prev };
-      for (const c of rowCells) {
-        const h = (hours[c.dateIso] ?? '').trim();
-        // Only stamp cells with hours > 0; empty / zero days stay
-        // untagged so we don't create phantom allocations.
-        if (h === '' || Number(h) <= 0) continue;
-        next[c.dateIso] = code;
-      }
+      for (const c of targets) next[c.dateIso] = code;
       return next;
     });
   }
 
   /**
-   * Distribute `total` integer hours across Mon-Fri as evenly as possible,
-   * pushing remainder onto the later weekdays so the cells add back up
-   * exactly. Sat/Sun stay at 0. Used when the staff member just types a
-   * weekly total instead of doing day-by-day allocation.
+   * Weekly-total fan-out. Weekend hours are PRESERVED — the typed
+   * total is treated as the whole week, so we distribute
+   * (total - weekend) across Mon-Fri. Clearing the total blanks the
+   * weekdays but leaves deliberately-entered weekend hours alone.
    */
   function fanOutWeek(weekIndex: number, raw: string) {
+    touch();
     const rowCells = initialCells.slice(weekIndex * 7, weekIndex * 7 + 7);
+    const weekdayCells = rowCells.slice(0, 5);
+    const weekendCells = rowCells.slice(5);
+    const weekendSum = weekendCells.reduce((s, c) => {
+      const v = Number((hours[c.dateIso] ?? '').trim());
+      return s + (Number.isFinite(v) ? v : 0);
+    }, 0);
     setHours((prev) => {
       const next = { ...prev };
       const trimmed = raw.trim();
       if (trimmed === '') {
-        // Empty total → blank all 7 day cells.
-        for (const c of rowCells) next[c.dateIso] = '';
+        for (const c of weekdayCells) next[c.dateIso] = '';
         return next;
       }
       const parsed = Number(trimmed);
       if (!Number.isFinite(parsed)) return prev;
-      // Cap at 24h × 5 weekdays so we don't blow past per-day max.
-      const total = Math.max(0, Math.min(24 * 5, Math.round(parsed)));
-      const base = Math.floor(total / 5);
-      const remainder = total % 5;
-      // [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
-      const days = [base, base, base, base, base, 0, 0];
-      // Push remainder onto the later weekdays (Fri, Thu, Wed, …).
-      for (let i = 0; i < remainder; i += 1) days[4 - i]! += 1;
-      for (let d = 0; d < 7; d += 1) {
-        const c = rowCells[d];
+      const weekdayTotal = Math.max(0, Math.round(parsed) - weekendSum);
+      const days = weekdaySplit(weekdayTotal);
+      for (let d = 0; d < 5; d += 1) {
+        const c = weekdayCells[d];
         if (!c) continue;
         next[c.dateIso] = String(days[d]);
       }
@@ -172,26 +231,45 @@ export function AvailabilityEditor({
     });
   }
 
-  function applyWeekdayDefault() {
-    // Quick-fill: 1/5 of weekly capacity into Mon–Fri, 0 into Sat/Sun,
-    // ONLY for cells that are currently blank. Doesn't overwrite manual
-    // entries.
-    if (dailyCapacityPlaceholder === 0) return;
-    setHours((prev) => {
-      const next = { ...prev };
-      for (const c of initialCells) {
-        const d = new Date(`${c.dateIso}T00:00:00.000Z`);
-        const dow = d.getUTCDay(); // 0 = Sun, 6 = Sat
-        const isWeekend = dow === 0 || dow === 6;
-        if ((next[c.dateIso] ?? '').trim() === '') {
-          next[c.dateIso] = isWeekend ? '0' : String(dailyCapacityPlaceholder);
-        }
+  /**
+   * One-shot bulk fill: for every week, fill blank weekday cells so the
+   * week reaches capacity (floor+remainder split — sums exactly to
+   * capacity, unlike the old flat-8h fill that overshot 38h to 40h),
+   * then stamp the chosen project (or Free) on every hours-bearing
+   * cell across all weeks. The canonical "38h on GEN003 for 8 weeks"
+   * declaration becomes: pick project → click Fill → Save.
+   */
+  function bulkFillAllWeeks() {
+    touch();
+    if (weeklyCapacityHours === 0) return;
+    const nextHours: Record<string, string> = { ...hours };
+    for (let w = 0; w < weeks.length; w += 1) {
+      const rowCells = initialCells.slice(w * 7, w * 7 + 7);
+      const weekdayCells = rowCells.slice(0, 5);
+      const hasAnyHours = rowCells.some((c) => {
+        const v = (nextHours[c.dateIso] ?? '').trim();
+        return v !== '' && Number(v) > 0;
+      });
+      // Don't rewrite weeks the person has already shaped by hand.
+      if (hasAnyHours) continue;
+      const days = weekdaySplit(weeklyCapacityHours);
+      for (let d = 0; d < 5; d += 1) {
+        const c = weekdayCells[d];
+        if (!c) continue;
+        nextHours[c.dateIso] = String(days[d]);
       }
-      return next;
-    });
+    }
+    const nextProjects: Record<string, string> = { ...cellProjectCode };
+    for (const c of initialCells) {
+      const v = (nextHours[c.dateIso] ?? '').trim();
+      if (v !== '' && Number(v) > 0) nextProjects[c.dateIso] = bulkProjectCode;
+    }
+    setHours(nextHours);
+    setCellProjectCode(nextProjects);
   }
 
   function clearAll() {
+    touch();
     const blankH: Record<string, string> = {};
     for (const c of initialCells) blankH[c.dateIso] = '';
     setHours(blankH);
@@ -237,10 +315,12 @@ export function AvailabilityEditor({
     setState({ status: 'idle' });
     const cells = initialCells.map((c, idx) => {
       const rawH = (hours[c.dateIso] ?? '').trim();
+      // Whole hours only — the DB column is Int, so send integers and
+      // never let the server silently round a value the user typed.
       const h =
         rawH === ''
           ? null
-          : Math.max(0, Math.min(24, Number(rawH) || 0));
+          : Math.round(Math.max(0, Math.min(24, Number(rawH) || 0)));
       // Week note rides on Monday only; Tue–Sun get notes=null so any
       // legacy per-day notes get wiped on save.
       const isMonday = idx % 7 === 0;
@@ -287,8 +367,15 @@ export function AvailabilityEditor({
     return total;
   }
 
-  // Highlight today's cell to anchor the grid visually.
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // Highlight today's cell to anchor the grid visually. Local date,
+  // not UTC — toISOString() would highlight yesterday until ~10-11am
+  // in AU/NZ timezones.
+  const todayIso = (() => {
+    const d = new Date();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${m}-${day}`;
+  })();
 
   return (
     <div className="space-y-3 rounded-lg border border-line bg-card p-4">
@@ -309,15 +396,31 @@ export function AvailabilityEditor({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {dailyCapacityPlaceholder > 0 && (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={applyWeekdayDefault}
-            >
-              Fill weekdays ({dailyCapacityPlaceholder}h)
-            </Button>
+          {weeklyCapacityHours > 0 && (
+            <div className="flex items-center gap-1 rounded-md border border-line bg-surface-elev px-1.5 py-1">
+              <select
+                value={bulkProjectCode}
+                onChange={(e) => setBulkProjectCode(e.target.value)}
+                className="h-6 rounded border-0 bg-transparent text-[11px] text-ink-2 focus:outline-none"
+                aria-label="Project for bulk fill"
+              >
+                <option value="">Free (unallocated)</option>
+                {allocatableProjects.map((p) => (
+                  <option key={p.id} value={p.code}>
+                    {p.code}
+                  </option>
+                ))}
+              </select>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={bulkFillAllWeeks}
+                title={`Fill every empty week to ${weeklyCapacityHours}h across Mon-Fri and tag all hours${bulkProjectCode ? ` to ${bulkProjectCode}` : ' as Free'}`}
+              >
+                Fill all {weeks.length} weeks ({weeklyCapacityHours}h)
+              </Button>
+            </div>
           )}
           <Button type="button" size="sm" variant="ghost" onClick={clearAll}>
             Clear
@@ -388,7 +491,7 @@ export function AvailabilityEditor({
                           type="number"
                           min={0}
                           max={24}
-                          step={0.5}
+                          step={1}
                           placeholder={String(dailyCapacityPlaceholder)}
                           value={hours[c.dateIso] ?? ''}
                           onChange={(e) =>
@@ -469,6 +572,7 @@ export function AvailabilityEditor({
                       />
                       <select
                         value="__prompt"
+                        disabled={total === 0}
                         onChange={(e) => {
                           const v = e.target.value;
                           if (v === '__prompt') return;
@@ -477,9 +581,13 @@ export function AvailabilityEditor({
                           const code = v === '__free' ? '' : v;
                           applyProjectToWeek(weekIndex, code);
                         }}
-                        className="h-7 w-24 shrink-0 rounded border border-line bg-surface-elev px-1 text-[10px] text-ink-3 focus:border-brand"
+                        className="h-7 w-24 shrink-0 rounded border border-line bg-surface-elev px-1 text-[10px] text-ink-3 focus:border-brand disabled:cursor-not-allowed disabled:opacity-50"
                         aria-label={`Apply project to week of ${w.label}`}
-                        title="Apply this project to every hours-bearing day in the week"
+                        title={
+                          total === 0
+                            ? 'Type hours into this week first, then tag them to a project'
+                            : 'Apply this project to every hours-bearing day in the week'
+                        }
                       >
                         <option value="__prompt" disabled>
                           Apply to week…
@@ -509,8 +617,19 @@ export function AvailabilityEditor({
         {state.status === 'success' && (
           <span className="mr-auto text-xs text-status-green">
             Saved · {state.cellsWritten}{' '}
-            {state.cellsWritten === 1 ? 'day' : 'days'}.
+            {state.cellsWritten === 1 ? 'day' : 'days'}
+            {state.cellsCleared > 0 && <> · cleared {state.cellsCleared}</>}.
+            {state.droppedCodes.length > 0 && (
+              <span className="ml-1 text-status-amber">
+                {state.droppedCodes.join(', ')}{' '}
+                {state.droppedCodes.length === 1 ? 'is' : 'are'} no longer
+                active — those hours were saved as Free.
+              </span>
+            )}
           </span>
+        )}
+        {state.status === 'idle' && isDirty && (
+          <span className="mr-auto text-xs text-ink-3">Unsaved changes</span>
         )}
         <Button type="button" size="sm" onClick={save} disabled={pending}>
           {pending ? 'Saving…' : 'Save availability'}

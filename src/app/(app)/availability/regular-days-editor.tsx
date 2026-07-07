@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   saveRegularDays,
   type RegularDaysFormState,
@@ -61,6 +62,7 @@ export function RegularDaysEditor({
   }));
   const [pending, startTransition] = useTransition();
   const [state, setState] = useState<RegularDaysFormState>({ status: 'idle' });
+  const router = useRouter();
 
   const totalRegular = DAYS.reduce((s, d) => {
     const n = Number(hours[d.key] ?? 0);
@@ -80,6 +82,9 @@ export function RegularDaysEditor({
     startTransition(async () => {
       const result = await saveRegularDays({ status: 'idle' }, fd);
       setState(result);
+      // Soft-refresh so the availability grid below re-seeds its
+      // pre-filled defaults immediately — no manual reload needed.
+      if (result.status === 'success') router.refresh();
     });
   }
 
@@ -163,7 +168,7 @@ export function RegularDaysEditor({
         )}
         {state.status === 'success' && (
           <span className="mr-auto text-xs text-status-green">
-            Saved · grid will reflect on next reload.
+            Saved · grid defaults updated.
           </span>
         )}
         <Button type="button" size="sm" onClick={save} disabled={pending}>

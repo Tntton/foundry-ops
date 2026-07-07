@@ -1,5 +1,6 @@
 import { prisma } from '@/server/db';
 import { addDays, startOfWeek } from '@/lib/week';
+import { writeAudit } from '@/server/audit';
 
 export type BandwidthCell = {
   weekStart: Date;
@@ -410,7 +411,7 @@ export async function loadAvailabilityForPerson(
 }
 
 export type AvailabilityUpsertResult =
-  | { ok: true; cellsWritten: number }
+  | { ok: true; cellsWritten: number; cellsCleared: number }
   | { ok: false; error: string };
 
 /**
@@ -430,38 +431,78 @@ export async function upsertAvailabilityForPerson(
     /** Project the hours are earmarked to; null / undefined = unallocated. */
     projectId?: string | null;
   }>,
+  /** When provided, an AuditEvent is written INSIDE the same transaction
+   *  as the mutation (locked decision A9). */
+  audit?: { actorId: string; via: string },
 ): Promise<AvailabilityUpsertResult> {
-  if (cells.length === 0) return { ok: true, cellsWritten: 0 };
-  let written = 0;
-  try {
-    for (const c of cells) {
-      const date = new Date(`${c.dateIso}T00:00:00.000Z`);
-      if (Number.isNaN(date.getTime())) continue;
-      const cleanedNotes =
-        typeof c.notes === 'string' && c.notes.trim().length > 0
-          ? c.notes.trim().slice(0, 500)
-          : null;
-      const projectId =
-        typeof c.projectId === 'string' && c.projectId.length > 0
-          ? c.projectId
-          : null;
-      if (c.hours === null && cleanedNotes === null) {
-        await prisma.availabilityForecast.deleteMany({
-          where: { personId, date },
-        });
-        continue;
-      }
-      const hours = Math.max(0, Math.min(24, Math.round(c.hours ?? 0)));
-      await prisma.availabilityForecast.upsert({
-        where: { personId_date: { personId, date } },
-        update: { hours, notes: cleanedNotes, projectId },
-        create: { personId, date, hours, notes: cleanedNotes, projectId },
-      });
-      written += 1;
+  if (cells.length === 0) return { ok: true, cellsWritten: 0, cellsCleared: 0 };
+
+  // Pre-process outside the transaction: split into clears vs writes,
+  // reject nothing here (validation is the action's job) but skip
+  // unparseable dates explicitly.
+  const clears: Date[] = [];
+  const writes: Array<{ date: Date; hours: number; notes: string | null; projectId: string | null }> = [];
+  for (const c of cells) {
+    const date = new Date(`${c.dateIso}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime())) continue;
+    const cleanedNotes =
+      typeof c.notes === 'string' && c.notes.trim().length > 0
+        ? c.notes.trim().slice(0, 500)
+        : null;
+    const projectId =
+      typeof c.projectId === 'string' && c.projectId.length > 0
+        ? c.projectId
+        : null;
+    if (c.hours === null && cleanedNotes === null) {
+      clears.push(date);
+      continue;
     }
-  } catch (err) {
-    console.error('[availability.upsert] failed:', err);
-    return { ok: false, error: 'Save failed — try again.' };
+    writes.push({
+      date,
+      hours: Math.max(0, Math.min(24, Math.round(c.hours ?? 0))),
+      notes: cleanedNotes,
+      projectId,
+    });
   }
-  return { ok: true, cellsWritten: written };
+
+  // Single transaction: one bulk delete for every cleared day + the
+  // upserts + the audit row. A mid-save failure rolls the whole
+  // forecast back instead of leaving a half-written week (previously
+  // this was a 56-statement sequential loop with no transaction).
+  try {
+    let cleared = 0;
+    let written = 0;
+    await prisma.$transaction(async (tx) => {
+      if (clears.length > 0) {
+        const del = await tx.availabilityForecast.deleteMany({
+          where: { personId, date: { in: clears } },
+        });
+        cleared = del.count;
+      }
+      for (const w of writes) {
+        await tx.availabilityForecast.upsert({
+          where: { personId_date: { personId, date: w.date } },
+          update: { hours: w.hours, notes: w.notes, projectId: w.projectId },
+          create: { personId, date: w.date, hours: w.hours, notes: w.notes, projectId: w.projectId },
+        });
+        written += 1;
+      }
+      if (audit) {
+        await writeAudit(tx, {
+          actor: { type: 'person', id: audit.actorId },
+          action: 'updated',
+          entity: {
+            type: 'person',
+            id: personId,
+            after: { via: audit.via, cellsWritten: written, cellsCleared: cleared },
+          },
+          source: 'web',
+        });
+      }
+    });
+    return { ok: true, cellsWritten: written, cellsCleared: cleared };
+  } catch (err) {
+    console.error('[availability.upsert] failed (rolled back):', err);
+    return { ok: false, error: 'Save failed — nothing was changed. Try again.' };
+  }
 }
