@@ -6,6 +6,14 @@ export type BandwidthCell = {
   /** Sum of submitted forecast hours across the 7 days. null when no
    *  AvailabilityForecast row exists for any day in the week. */
   forecastHours: number | null;
+  /** Portion of forecastHours earmarked against a specific Project
+   *  (AvailabilityForecast.projectId !== null). 0 when nothing is
+   *  allocated yet, even if forecast is submitted. */
+  allocatedForecastHours: number;
+  /** Portion of forecastHours with no Project attached - spare
+   *  bandwidth the resource planning team can staff. This is the
+   *  headline number for "who has room this week". */
+  unallocatedForecastHours: number;
   /** Sum of timesheet entries for the week. */
   bookedHours: number;
   /** Forecast preferred when present; falls back to booked actuals so
@@ -41,6 +49,13 @@ export type BandwidthHeatmap = {
     overbookedCells: number;
     underutilisedCount: number;
     firmAvgUtilisationPct: number | null;
+    /** Sum of unallocated forecast hours across every (person × week)
+     *  in the window - the headline "how much spare capacity is on
+     *  the market" number. */
+    unallocatedForecastHours: number;
+    /** Sum of allocated-to-project forecast hours across the window.
+     *  Combined with unallocated, gives the total forecast commitment. */
+    allocatedForecastHours: number;
   };
 };
 
@@ -95,7 +110,7 @@ export async function computeBandwidthHeatmap(
   });
   const dailyForecasts = await prisma.availabilityForecast.findMany({
     where: { date: { gte: rangeStart, lt: rangeEnd } },
-    select: { personId: true, date: true, hours: true },
+    select: { personId: true, date: true, hours: true, projectId: true },
   });
   const entries = await prisma.timesheetEntry.findMany({
     where: { date: { gte: rangeStart, lt: rangeEnd } },
@@ -126,10 +141,17 @@ export async function computeBandwidthHeatmap(
     }
   }
   // Per-(person, day) override map so we can tell explicit-vs-default.
-  const explicitByPersonDay = new Map<string, number>();
+  // Also captures projectId per cell so the weekly split (allocated
+  // vs unallocated) can be computed downstream. Regular-days fallback
+  // hours are always treated as unallocated (there's no project
+  // context on the regular-days schedule).
+  const explicitByPersonDay = new Map<
+    string,
+    { hours: number; projectId: string | null }
+  >();
   for (const f of dailyForecasts) {
     const k = `${f.personId}|${f.date.toISOString().slice(0, 10)}`;
-    explicitByPersonDay.set(k, f.hours);
+    explicitByPersonDay.set(k, { hours: f.hours, projectId: f.projectId });
   }
 
   // Aggregate per-day forecasts → weekly totals per (person, weekStart),
@@ -139,7 +161,10 @@ export async function computeBandwidthHeatmap(
   // submitted a forecast".
   const fcKey = (p: string, w: Date) =>
     `${p}|${w.toISOString().slice(0, 10)}`;
-  const forecastByKey = new Map<string, { hours: number; cellCount: number }>();
+  const forecastByKey = new Map<
+    string,
+    { hours: number; cellCount: number; allocatedHours: number; unallocatedHours: number }
+  >();
   // Walk every (person × day) in the horizon so we can apply regular-
   // days fallback uniformly.
   for (const p of people) {
@@ -147,13 +172,24 @@ export async function computeBandwidthHeatmap(
       const d = addDays(rangeStart, i);
       const iso = d.toISOString().slice(0, 10);
       const explicit = explicitByPersonDay.get(`${p.id}|${iso}`);
-      const hours =
-        explicit !== undefined ? explicit : regularHoursFor(p, d);
+      const hours = explicit !== undefined ? explicit.hours : regularHoursFor(p, d);
       if (hours <= 0 && explicit === undefined) continue;
       const ws = startOfWeek(d);
       const k = fcKey(p.id, ws);
-      const cur = forecastByKey.get(k) ?? { hours: 0, cellCount: 0 };
+      const cur =
+        forecastByKey.get(k) ??
+        { hours: 0, cellCount: 0, allocatedHours: 0, unallocatedHours: 0 };
       cur.hours += hours;
+      // Split allocated vs unallocated:
+      //   - Explicit row with projectId → allocated
+      //   - Explicit row without projectId, OR regular-days fallback → unallocated
+      // Regular-days is treated as unallocated because the schedule
+      // has no project context - it's just "I usually work Tue/Wed".
+      if (explicit !== undefined && explicit.projectId) {
+        cur.allocatedHours += hours;
+      } else {
+        cur.unallocatedHours += hours;
+      }
       // Only mark "has forecast" when the person actually has at least
       // one explicit row OR a non-zero regular schedule.
       if (explicit !== undefined || hours > 0) cur.cellCount += 1;
@@ -206,6 +242,8 @@ export async function computeBandwidthHeatmap(
       return {
         weekStart: w.weekStart,
         forecastHours,
+        allocatedForecastHours: fc?.allocatedHours ?? 0,
+        unallocatedForecastHours: fc?.unallocatedHours ?? 0,
         bookedHours: booked,
         effectiveHours: effective,
         capacityHours: weeklyCapacity,
@@ -251,6 +289,13 @@ export async function computeBandwidthHeatmap(
       ? Math.round(utilSamples.reduce((s, p) => s + p, 0) / utilSamples.length)
       : null;
 
+  const unallocatedForecastHours = rows
+    .flatMap((r) => r.cells)
+    .reduce((s, c) => s + c.unallocatedForecastHours, 0);
+  const allocatedForecastHours = rows
+    .flatMap((r) => r.cells)
+    .reduce((s, c) => s + c.allocatedForecastHours, 0);
+
   return {
     weeks,
     rows,
@@ -259,6 +304,8 @@ export async function computeBandwidthHeatmap(
       overbookedCells,
       underutilisedCount,
       firmAvgUtilisationPct,
+      unallocatedForecastHours,
+      allocatedForecastHours,
     },
   };
 }

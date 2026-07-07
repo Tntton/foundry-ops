@@ -434,6 +434,8 @@ export default async function ResourcePlanningPage({
         rows={forecastRows}
         totalActive={heatmap.rows.length}
         projectsByPerson={projectsByPerson}
+        unallocatedForecastHours={heatmap.totals.unallocatedForecastHours}
+        allocatedForecastHours={heatmap.totals.allocatedForecastHours}
       />
 
       {/* ── Pool — bench + contractors bucketed by allocation ─────── */}
@@ -737,12 +739,21 @@ function BandwidthHeatmapCard({
   rows,
   totalActive,
   projectsByPerson,
+  unallocatedForecastHours,
+  allocatedForecastHours,
 }: {
   weeks: Array<{ weekStart: Date; label: string }>;
   rows: BandwidthRow[];
   totalActive: number;
   projectsByPerson: Map<string, ProjectChipForRow[]>;
+  unallocatedForecastHours: number;
+  allocatedForecastHours: number;
 }) {
+  const totalForecast = unallocatedForecastHours + allocatedForecastHours;
+  const freePct =
+    totalForecast > 0
+      ? Math.round((unallocatedForecastHours / totalForecast) * 100)
+      : 0;
   return (
     <Card className="p-0">
       <CardHeader className="flex flex-row items-end justify-between gap-2">
@@ -751,14 +762,58 @@ function BandwidthHeatmapCard({
           <p className="text-[11px] text-ink-3">
             Hours per week from each staff member&apos;s availability
             forecast. {rows.length} of {totalActive} active staff have
-            submitted. Cell colour shows utilisation against capacity; the
-            right-hand column lists what they&apos;re currently working on.
+            submitted. Cell colour shows utilisation against capacity.
+            The green bar under each cell is the fraction earmarked to
+            a project; the muted portion is unallocated (spare
+            bandwidth ready to staff).
           </p>
         </div>
         <span className="hidden text-[11px] text-ink-3 md:inline">
           green 70–95% · amber 95–105% · red &gt;105% · blue &lt;70%
         </span>
       </CardHeader>
+
+      {/* Split summary — headline "how much spare bandwidth is on the
+           market this window" number, sits between header and table so
+           you see it before you scroll into the grid. */}
+      {totalForecast > 0 && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line bg-surface-subtle/60 px-6 py-3 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-ink-3">Forecast hours across window:</span>
+            <span className="font-semibold tabular-nums text-ink">
+              {Math.round(totalForecast)}h
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-sm bg-brand" aria-hidden />
+            <span className="text-ink-3">Allocated to projects</span>
+            <span className="font-semibold tabular-nums text-ink">
+              {Math.round(allocatedForecastHours)}h
+            </span>
+            <span className="text-ink-3">({100 - freePct}%)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-sm bg-ink-4/40" aria-hidden />
+            <span className="text-ink-3">Free · ready to allocate</span>
+            <span className="font-semibold tabular-nums text-ink">
+              {Math.round(unallocatedForecastHours)}h
+            </span>
+            <span className="text-ink-3">({freePct}%)</span>
+          </div>
+          {/* Full-width proportion bar so the split reads at a glance
+               even without hovering into a cell. */}
+          <div
+            aria-hidden
+            className="ml-auto flex h-1.5 w-40 overflow-hidden rounded-sm bg-ink-4/30"
+            title={`Allocated ${Math.round(allocatedForecastHours)}h · Free ${Math.round(unallocatedForecastHours)}h`}
+          >
+            <div
+              className="h-full bg-brand"
+              style={{ width: `${100 - freePct}%` }}
+            />
+          </div>
+        </div>
+      )}
       {rows.length === 0 ? (
         <CardContent>
           <p className="text-sm text-ink-3">
@@ -925,12 +980,24 @@ function BandwidthCellView({
       </div>
     );
   }
+  // Split-bar underneath the numbers: shows what portion of the
+  // week's forecast hours is committed to a project (Foundry green)
+  // vs unallocated (muted grey). Only rendered when a forecast is
+  // present with a non-zero split; keeps the cell quiet otherwise.
+  const totalForecast = cell.hasForecast ? (cell.forecastHours ?? 0) : 0;
+  const allocPct =
+    totalForecast > 0
+      ? Math.round((cell.allocatedForecastHours / totalForecast) * 100)
+      : 0;
+  const showSplitBar =
+    cell.hasForecast && totalForecast > 0 && cell.allocatedForecastHours + cell.unallocatedForecastHours > 0;
+
   return (
     <div
       className={`mx-auto flex h-9 w-12 flex-col items-center justify-center rounded ${styles.bg}`}
       title={
         cell.hasForecast
-          ? `Forecast ${cell.effectiveHours}h · ${cell.utilisationPct ?? '—'}%`
+          ? `Forecast ${cell.effectiveHours}h · ${cell.utilisationPct ?? '—'}%\nAllocated: ${cell.allocatedForecastHours}h · Free: ${cell.unallocatedForecastHours}h`
           : `Booked ${cell.effectiveHours}h · ${cell.utilisationPct ?? '—'}%`
       }
     >
@@ -941,6 +1008,17 @@ function BandwidthCellView({
         <span className={`text-[9px] tabular-nums ${styles.text}`}>
           {cell.utilisationPct}%
         </span>
+      )}
+      {showSplitBar && (
+        <div
+          aria-hidden
+          className="mt-0.5 flex h-[3px] w-9 overflow-hidden rounded-sm bg-ink-4/40"
+        >
+          <div
+            className="h-full bg-brand"
+            style={{ width: `${allocPct}%` }}
+          />
+        </div>
       )}
     </div>
   );
