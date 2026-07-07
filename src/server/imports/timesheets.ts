@@ -371,7 +371,26 @@ export async function commitTimesheetImport(
         });
         overwritten += 1;
       } else {
-        await tx.timesheetEntry.create({ data });
+        // Upsert on the unique (person, project, date) key — the
+        // duplicate detection above ran at preview time and can be
+        // stale by commit time (another import / WhatsApp entry).
+        await tx.timesheetEntry.upsert({
+          where: {
+            personId_projectId_date: {
+              personId: data.personId,
+              projectId: data.projectId,
+              date: data.date,
+            },
+          },
+          create: data,
+          update: {
+            hours: data.hours,
+            description: data.description,
+            status: data.status,
+            approvedById: data.approvedById,
+            approvedAt: data.approvedAt,
+          },
+        });
         inserted += 1;
       }
     }

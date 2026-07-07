@@ -6,7 +6,7 @@ import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
 import { getAvailabilityForecast } from '@/server/timesheet';
 import { loadAvailabilityForPerson } from '@/server/availability';
-import { addDays, startOfWeek } from '@/lib/week';
+import { addDays, startOfWeek, todayInFirmTz } from '@/lib/week';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -176,7 +176,7 @@ export default async function AvailabilityPage({
   const EDITOR_WEEKS = 8;
   const SCHEDULE_WEEKS = 4;
   const forecast = await getAvailabilityForecast(target.id, SCHEDULE_WEEKS);
-  const horizonStart = startOfWeek(new Date());
+  const horizonStart = startOfWeek(todayInFirmTz());
   const initialCells = await loadAvailabilityForPerson(
     target.id,
     EDITOR_WEEKS,

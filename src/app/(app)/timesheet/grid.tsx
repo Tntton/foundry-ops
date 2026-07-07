@@ -80,6 +80,13 @@ export function TimesheetGrid({
     if (i > 0 && d.getUTCDay() === 1) weekBoundaries.add(i);
   });
 
+  // Raw text drafts per cell while the user is typing. A controlled
+  // number input that re-renders from the PARSED value made "0.5"
+  // untypeable (the leading "0" parsed to 0 → rendered '' → cleared
+  // the field). We show the raw text while focused and sync back to
+  // the parsed number on blur.
+  const [rawCell, setRawCell] = useState<Record<string, string>>({});
+
   function setHours(projectId: string, dayIdx: number, hours: number) {
     setRows((prev) =>
       prev.map((r) =>
@@ -279,9 +286,24 @@ export function TimesheetGrid({
                           min="0"
                           max="24"
                           step="0.5"
-                          value={c.hours === 0 ? '' : String(c.hours)}
-                          onChange={(e) =>
-                            setHours(r.projectId, i, parseFloat(e.target.value || '0'))
+                          inputMode="decimal"
+                          value={
+                            rawCell[`${r.projectId}::${i}`] ??
+                            (c.hours === 0 ? '' : String(c.hours))
+                          }
+                          onChange={(e) => {
+                            setRawCell((prev) => ({
+                              ...prev,
+                              [`${r.projectId}::${i}`]: e.target.value,
+                            }));
+                            setHours(r.projectId, i, parseFloat(e.target.value || '0'));
+                          }}
+                          onBlur={() =>
+                            setRawCell((prev) => {
+                              const next = { ...prev };
+                              delete next[`${r.projectId}::${i}`];
+                              return next;
+                            })
                           }
                           disabled={!editable}
                           placeholder="0"
@@ -381,16 +403,12 @@ export function TimesheetGrid({
               );
             });
           })()}
-          <span className="inline-flex items-center gap-1 rounded-full border border-status-green bg-status-green-soft px-2 py-0.5 text-status-green">
-            <span className="inline-block h-1 w-1 rounded-full bg-status-green" />
-            All rows have project codes
-          </span>
-          <span className="inline-flex items-center gap-1 rounded-full border border-line bg-card px-2 py-0.5 text-ink-3">
-            autosaves on blur
-          </span>
         </div>
-        <span className="font-mono text-[11px] text-ink-3">
-          Bulk paste from Excel? Just Ctrl+V in any cell →
+        {/* Truthful save-model hint — hours live in the browser until
+            Save/Submit is clicked. (Previous chips advertised autosave
+            + Excel paste that were never implemented.) */}
+        <span className="text-[11px] text-ink-3">
+          Changes save when you click Save draft or Submit.
         </span>
       </div>
 
@@ -538,7 +556,9 @@ function StatusBadge({ status }: { status: TimesheetRow['status'] }) {
     submitted: { label: 'submitted', variant: 'amber' },
     approved: { label: 'approved', variant: 'green' },
     billed: { label: 'billed', variant: 'blue' },
-    mixed: { label: 'mixed', variant: 'red' },
+    // "Mixed" is the NORMAL state for a row spanning weeks (last week
+    // approved + this week draft) — neutral, not error-red.
+    mixed: { label: 'mixed', variant: 'outline' },
   };
   const s = map[status];
   return <Badge variant={s.variant}>{s.label}</Badge>;

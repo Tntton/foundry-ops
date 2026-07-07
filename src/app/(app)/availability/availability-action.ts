@@ -7,7 +7,7 @@ import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { upsertAvailabilityForPerson } from '@/server/availability';
 import { prisma } from '@/server/db';
-import { addDays, startOfWeek } from '@/lib/week';
+import { addDays, startOfWeek, todayInFirmTz } from '@/lib/week';
 
 export type AvailabilityFormState =
   | { status: 'idle' }
@@ -83,7 +83,7 @@ export async function submitAvailabilityForecast(
   // Date-window guard: the editor only renders startOfWeek(now)..+8w;
   // accept a little headroom (16w) but reject anything outside it so a
   // crafted payload can't write forecast rows years into the future.
-  const windowStart = startOfWeek(new Date());
+  const windowStart = startOfWeek(todayInFirmTz());
   const windowEnd = addDays(windowStart, 16 * 7);
   for (const c of valid.data.cells) {
     const d = new Date(`${c.dateIso}T00:00:00.000Z`);

@@ -1018,6 +1018,13 @@ model TimesheetEntry {
   project          Project  @relation(fields: [projectId], references: [id])
   billedInvoice    Invoice? @relation(fields: [billedInvoiceId], references: [id])
 
+  // One entry per person × project × day. Every writer (web grid,
+  // WhatsApp, CSV import, reconcile confirm) upserts on this key so a
+  // retry / double-tap / two-tab race can't double-count hours into
+  // utilisation + P&L. Duplicates were possible before 2026-07-07;
+  // the migration deduped (keeping the most recently updated row)
+  // before adding the constraint.
+  @@unique([personId, projectId, date])
   @@index([personId, date])
   @@index([projectId, date])
 }

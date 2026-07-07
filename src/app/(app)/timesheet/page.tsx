@@ -19,6 +19,7 @@ import {
   startOfFourWeekBlock,
   startOfWeek,
   weekDates as weekDatesFn,
+  todayInFirmTz,
 } from '@/lib/week';
 import { PersonAvatar } from '@/components/person-avatar';
 import { PrefillBanner } from '@/components/prefill-banner';
@@ -42,7 +43,10 @@ export default async function TimesheetPage({
   const session = await getSession();
   if (!session || !hasCapability(session, 'timesheet.submit')) notFound();
 
-  const view: 'month' | 'week' = searchParams.view === 'week' ? 'week' : 'month';
+  // Week view is the default — staff log weekly, and the 28-column
+  // month grid forced a toggle-click (or a long horizontal scroll)
+  // on every visit. Month stays one click away for reviewers.
+  const view: 'month' | 'week' = searchParams.view === 'month' ? 'month' : 'week';
   const isSuperAdmin = hasAnyRole(session, ['super_admin']);
   const isAdminGroup = hasAnyRole(session, ['super_admin', 'admin']);
   const isManagerOrLead = hasAnyRole(session, ['manager', 'partner']);
@@ -316,7 +320,7 @@ export default async function TimesheetPage({
     return `/timesheet${qs ? `?${qs}` : ''}`;
   })();
 
-  const currentWeekStart = startOfWeek(new Date());
+  const currentWeekStart = startOfWeek(todayInFirmTz());
   const [hourlyUtilisation, approvalHistory] = await Promise.all([
     getHourlyUtilisationForWeek(target.id, currentWeekStart),
     getApprovalHistoryForPerson(target.id, 4),
@@ -487,9 +491,12 @@ export default async function TimesheetPage({
         </>
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      {/* QuickAddCard removed (QC 2026-07-07): its GET form did a full
+          navigation that silently discarded unsaved grid hours, and no
+          code ever read the `q` param — a pure data-loss trap. The
+          assistant's prefill path covers natural-language entry. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <UtilisationCard hours={hourlyUtilisation} />
-        <QuickAddCard targetPersonId={target.id} view={view} />
         <ApprovalHistoryCard history={approvalHistory} />
       </div>
 
@@ -547,60 +554,6 @@ function UtilisationCard({
         )}
       </div>
     </div>
-  );
-}
-
-function QuickAddCard({
-  targetPersonId,
-  view,
-}: {
-  targetPersonId: string;
-  view: 'week' | 'month';
-}) {
-  // Single-line natural-language quick-add — the inline parser
-  // (parseQuickAddInput in @/server/timesheet) reads `project · day
-  // · hours`, optionally prefixed with a `bd` modifier. The card
-  // copy USED to claim "Quick-add via ⌘K" but the global palette
-  // doesn't intercept this input today — that was a misleading
-  // affordance. Renamed to "Quick-add" + retitled the hint to
-  // "Tab to fill" so the user understands it's an in-form input,
-  // not a launcher trigger.
-  return (
-    <form
-      action="/timesheet"
-      method="get"
-      className="rounded-lg border border-line bg-card p-4"
-    >
-      <input type="hidden" name="personId" value={targetPersonId} />
-      <input type="hidden" name="view" value={view} />
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] font-medium uppercase tracking-wide text-ink-3">
-          Quick-add
-        </div>
-        <div className="text-[10px] text-ink-4">type · enter to submit</div>
-      </div>
-      <input
-        name="q"
-        placeholder="e.g. IFM001 thu 8"
-        className="mt-2 w-full rounded-md border border-line bg-surface-subtle px-3 py-2 font-mono text-sm text-ink focus:border-brand focus:outline-none"
-      />
-      <div className="mt-2 space-y-1.5 text-[11px] text-ink-3">
-        <div className="flex items-center gap-1">
-          <span>→</span>
-          <span>
-            <span className="font-mono text-ink-2">IFM001 thu 8</span> · project
-            · day · hours
-          </span>
-        </div>
-        <div className="flex items-center gap-1">
-          <span>→</span>
-          <span>
-            <span className="font-mono text-ink-2">bd pnc002 tue 2h</span> · BD
-            modifier optional
-          </span>
-        </div>
-      </div>
-    </form>
   );
 }
 

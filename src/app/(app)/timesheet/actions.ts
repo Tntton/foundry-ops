@@ -9,7 +9,7 @@ import { requireCapability } from '@/server/capabilities';
 import { hasAnyRole } from '@/server/roles';
 import { writeAudit, computeDelta } from '@/server/audit';
 import { emitUserUpdateMany } from '@/server/user-updates';
-import { addDays, parseIsoDate, startOfWeek } from '@/lib/week';
+import { addDays, parseIsoDate, startOfWeek, todayInFirmTz } from '@/lib/week';
 import { revalidateScheduleSurfaces } from '@/server/revalidate-schedule';
 
 // Snap hours to the nearest 0.5 — the granularity the timesheet grid uses.
@@ -97,7 +97,7 @@ export async function saveTimesheet(
   const rangeStartIso = String(formData.get('rangeStart') ?? formData.get('weekStart') ?? '');
   const rangeStart = rangeStartIso
     ? parseIsoDate(rangeStartIso)
-    : startOfWeek(new Date());
+    : startOfWeek(todayInFirmTz());
   const dayCount = Math.max(
     1,
     Math.min(31, Number(formData.get('dayCount') ?? 7) || 7),
@@ -359,12 +359,35 @@ export async function saveTimesheet(
             `${row.projectId}|${date.toISOString().slice(0, 10)}`,
           );
         }
+        // Upsert on the (personId, projectId, date) unique key — the
+        // pre-transaction read above can race (two tabs, a retry, a
+        // WhatsApp log landing mid-save). With the DB constraint in
+        // place, the race resolves to one row instead of a duplicate
+        // that the grid hides but P&L counts twice.
         ops.push(
-          prisma.timesheetEntry.create({
-            data: {
+          prisma.timesheetEntry.upsert({
+            where: {
+              personId_projectId_date: {
+                personId: targetPersonId,
+                projectId: row.projectId,
+                date,
+              },
+            },
+            create: {
               personId: targetPersonId,
               projectId: row.projectId,
               date,
+              hours,
+              description: row.description,
+              status: nextStatus,
+              ...(stampApproval
+                ? {
+                    approvedById: session.person.id,
+                    approvedAt: autoApproveStamp,
+                  }
+                : {}),
+            },
+            update: {
               hours,
               description: row.description,
               status: nextStatus,

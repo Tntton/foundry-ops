@@ -248,14 +248,27 @@ async function handleTimesheet(
   if (legacyAutoDraftEnabled()) {
     // ─── Legacy path — auto-write the draft entry (pre-302c) ──────
     const created = await prisma.$transaction(async (tx) => {
-      const entry = await tx.timesheetEntry.create({
-        data: {
+      // Upsert on the (person, project, date) unique key — re-sent
+      // WhatsApp messages / webhook re-deliveries must not double-log.
+      const entry = await tx.timesheetEntry.upsert({
+        where: {
+          personId_projectId_date: {
+            personId: person.id,
+            projectId: project.id,
+            date,
+          },
+        },
+        create: {
           personId: person.id,
           projectId: project.id,
           date,
           hours: new Prisma.Decimal(parsed.hours),
           description: parsed.description ?? null,
           status: 'draft',
+        },
+        update: {
+          hours: new Prisma.Decimal(parsed.hours),
+          description: parsed.description ?? null,
         },
         select: { id: true },
       });
@@ -685,11 +698,25 @@ async function applyTimesheetConfirm(
         skipped.push(entry.projectCode);
         continue;
       }
-      const created = await tx.timesheetEntry.create({
-        data: {
+      // Upsert — a double-tapped YES / webhook re-delivery lands on
+      // the same (person, project, date) row instead of duplicating.
+      const created = await tx.timesheetEntry.upsert({
+        where: {
+          personId_projectId_date: {
+            personId: person.id,
+            projectId: project.id,
+            date: new Date(`${entry.dateIso}T00:00:00.000Z`),
+          },
+        },
+        create: {
           personId: person.id,
           projectId: project.id,
           date: new Date(`${entry.dateIso}T00:00:00.000Z`),
+          hours: new Prisma.Decimal(entry.hours),
+          description: entry.notes ?? null,
+          status: 'submitted',
+        },
+        update: {
           hours: new Prisma.Decimal(entry.hours),
           description: entry.notes ?? null,
           status: 'submitted',

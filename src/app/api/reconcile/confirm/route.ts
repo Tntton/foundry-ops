@@ -492,8 +492,17 @@ async function applyCsvTimesheets(session: Session, raw: unknown): Promise<Respo
       }
       let created = 0;
       for (const r of rows) {
-        await tx.timesheetEntry.create({
-          data: {
+        // Upsert on the unique day-key — a re-confirmed import (retry
+        // after timeout, double-click) updates instead of duplicating.
+        await tx.timesheetEntry.upsert({
+          where: {
+            personId_projectId_date: {
+              personId: r.personId,
+              projectId: r.projectId,
+              date: new Date(r.dateISO),
+            },
+          },
+          create: {
             personId: r.personId,
             projectId: r.projectId,
             date: new Date(r.dateISO),
@@ -502,6 +511,13 @@ async function applyCsvTimesheets(session: Session, raw: unknown): Promise<Respo
             // Super-admin imports are pre-approved historical entries
             // — same semantics as the manual /admin/import/timesheets
             // flow + saveTimesheet's super-admin auto-approve path.
+            status: 'approved',
+            approvedById: session.person.id,
+            approvedAt: now,
+          },
+          update: {
+            hours: r.hours,
+            description: r.description,
             status: 'approved',
             approvedById: session.person.id,
             approvedAt: now,

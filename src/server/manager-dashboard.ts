@@ -1,6 +1,6 @@
 import { prisma } from '@/server/db';
 import type { Session } from '@/server/roles';
-import { addDays, startOfWeek } from '@/lib/week';
+import { addDays, startOfWeek, todayInFirmTz } from '@/lib/week';
 import { computeProjectPnL } from '@/server/projects/pnl';
 
 export type ProjectQcCard = {
@@ -210,7 +210,7 @@ export async function computeManagerDashboard(
   }
 
   // Timesheet lag: people on each project with no entries this week.
-  const weekStart = startOfWeek(new Date());
+  const weekStart = startOfWeek(todayInFirmTz());
   const weekEnd = addDays(weekStart, 7);
   const lastTsForLag = await prisma.timesheetEntry.findMany({
     where: {

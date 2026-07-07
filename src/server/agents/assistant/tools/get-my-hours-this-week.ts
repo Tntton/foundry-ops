@@ -1,5 +1,5 @@
 import { prisma } from '@/server/db';
-import { startOfWeek, addDays } from '@/lib/week';
+import { startOfWeek, addDays, todayInFirmTz } from '@/lib/week';
 import type { ToolDefinition } from './types';
 
 export const getMyHoursThisWeek: ToolDefinition = {
@@ -14,7 +14,7 @@ export const getMyHoursThisWeek: ToolDefinition = {
   },
   async run(ctx) {
     const personId = ctx.session.person.id;
-    const monday = startOfWeek(new Date());
+    const monday = startOfWeek(todayInFirmTz());
     const sunday = addDays(monday, 7);
     const entries = await prisma.timesheetEntry.findMany({
       where: { personId, date: { gte: monday, lt: sunday } },

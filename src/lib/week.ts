@@ -3,6 +3,24 @@
  * All dates normalised to midnight UTC on the given calendar day.
  */
 
+/**
+ * "Today" as a calendar date in the firm timezone (Australia/Sydney),
+ * normalised to UTC midnight. Server `new Date()` runs in UTC, which is
+ * still *yesterday* until ~10-11am AEST — so anchoring "this week" on
+ * raw `new Date()` lands staff on LAST week's grid every Monday
+ * morning. Use this wherever "today" means the firm's calendar day.
+ */
+export function todayInFirmTz(): Date {
+  // en-CA renders as YYYY-MM-DD, which parses cleanly below.
+  const iso = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Australia/Sydney',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  return new Date(`${iso}T00:00:00.000Z`);
+}
+
 export function startOfWeek(date: Date): Date {
   const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   const dow = d.getUTCDay(); // 0 Sun … 6 Sat
@@ -26,9 +44,9 @@ export function formatIsoDate(date: Date): string {
 }
 
 export function parseIsoDate(s: string | undefined): Date {
-  if (!s) return startOfWeek(new Date());
+  if (!s) return startOfWeek(todayInFirmTz());
   const d = new Date(`${s}T00:00:00.000Z`);
-  return Number.isNaN(d.getTime()) ? startOfWeek(new Date()) : d;
+  return Number.isNaN(d.getTime()) ? startOfWeek(todayInFirmTz()) : d;
 }
 
 export function formatDayLabel(date: Date): string {
