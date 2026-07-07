@@ -205,12 +205,23 @@ export default async function ExpenseDetailPage({
                 <Badge variant="amber" className="capitalize">
                   Pending · {pendingApproval.requiredRole.replace('_', ' ')} gate
                 </Badge>
-                <Link
-                  href="/approvals"
-                  className="block text-xs text-brand hover:underline"
-                >
-                  Open queue →
-                </Link>
+                {/* /approvals notFounds the staff role — only link
+                    people who can actually open the queue. Staff get a
+                    plain-language "what happens next" line instead. */}
+                {hasAnyRole(session, ['super_admin', 'admin', 'partner', 'manager']) ? (
+                  <Link
+                    href="/approvals"
+                    className="block text-xs text-brand hover:underline"
+                  >
+                    Open queue →
+                  </Link>
+                ) : (
+                  <p className="text-xs text-ink-3">
+                    Awaiting {pendingApproval.requiredRole.replace('_', ' ')}{' '}
+                    approval — you&apos;ll be reimbursed in the next pay run
+                    after it&apos;s approved.
+                  </p>
+                )}
               </div>
             ) : (
               <span className="text-ink-3">Not yet submitted for approval</span>

@@ -35,12 +35,23 @@ export function NewExpenseForm({
   const [state, action] = useFormState<NewExpenseState, FormData>(submitExpense, {
     status: 'idle',
   });
-  const [amount, setAmount] = useState(initialValues?.amountDollars ?? '0.00');
+  // Amount starts blank (placeholder shows the format) — a literal
+  // "0.00" had to be selected and deleted before typing.
+  const [amount, setAmount] = useState(initialValues?.amountDollars ?? '');
+  // GST is controlled with a touched flag: auto-recomputes (total ÷ 11)
+  // only until the user edits it manually. The previous key-remount
+  // hack silently reverted a manual GST correction (e.g. GST-free
+  // airfare component) the moment the total changed.
+  const [gst, setGst] = useState(initialValues?.gstDollars ?? '');
+  const [gstTouched, setGstTouched] = useState(Boolean(initialValues?.gstDollars));
   const errs = state.status === 'error' ? state.fieldErrors ?? {} : {};
 
   const today = new Date().toISOString().slice(0, 10);
-  const autoGst = (Number(amount) / 11).toFixed(2);
-  const gstDefault = initialValues?.gstDollars ?? autoGst;
+  const gstValue = gstTouched
+    ? gst
+    : amount
+      ? (Number(amount) / 11).toFixed(2)
+      : '';
 
   return (
     <form action={action} className="space-y-6">
@@ -102,17 +113,24 @@ export function NewExpenseForm({
               name="amountDollars"
               type="number"
               min="0.01"
+              max="100000"
               step="0.01"
+              inputMode="decimal"
               required
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.00"
               className="max-w-[180px]"
             />
           </Field>
           <Field
             label="GST (AUD)"
             error={errs['gstDollars']}
-            hint="Auto-calc = total ÷ 11; override if needed"
+            hint={
+              gstTouched
+                ? 'Manual — no longer auto-calculated'
+                : 'Auto-calc = total ÷ 11; edit to override'
+            }
             required
           >
             <Input
@@ -120,9 +138,14 @@ export function NewExpenseForm({
               type="number"
               min="0"
               step="0.01"
+              inputMode="decimal"
               required
-              defaultValue={gstDefault}
-              key={gstDefault /* reset when total changes */}
+              value={gstValue}
+              onChange={(e) => {
+                setGst(e.target.value);
+                setGstTouched(true);
+              }}
+              placeholder="0.00"
               className="max-w-[180px]"
             />
           </Field>

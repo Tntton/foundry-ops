@@ -4,6 +4,7 @@ import type { ExpenseStatus } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { listExpenses } from '@/server/expenses';
+import { EXPENSE_CATEGORIES } from '@/lib/expense-categories';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -50,14 +51,10 @@ const STATUS_OPTIONS: readonly ExpenseStatus[] = [
   'reimbursed',
   'batched_for_payment',
 ];
-const CATEGORY_OPTIONS = [
-  'travel',
-  'meals',
-  'office',
-  'tools',
-  'subscriptions',
-  'other',
-] as const;
+// Canonical category set — the old local list ('meals', 'office', …)
+// didn't match stored values ('meals_entertainment', 'office_supplies'
+// …), so most filters silently returned zero rows.
+const CATEGORY_OPTIONS = EXPENSE_CATEGORIES.map((c) => c.value);
 
 export default async function ExpensesPage({
   searchParams,
@@ -68,6 +65,7 @@ export default async function ExpensesPage({
     q?: string;
     scope?: string;
     view?: string;
+    submitted?: string;
   };
 }) {
   const session = await getSession();
@@ -81,6 +79,7 @@ export default async function ExpensesPage({
   )
     ? searchParams.category
     : undefined;
+  const submittedId = searchParams.submitted;
   const q = searchParams.q?.trim() ?? '';
   const canSeeAll = hasCapability(session, 'expense.approve.under_2k');
   const scope: 'mine' | 'all' =
@@ -176,6 +175,21 @@ export default async function ExpensesPage({
         </div>
       </header>
 
+      {/* Post-submit confirmation — the new-expense action redirects
+          here with ?submitted=<id> so the filer gets explicit feedback
+          instead of a bare list. */}
+      {submittedId && (
+        <div className="rounded-md border border-status-green bg-status-green-soft px-4 py-3 text-sm text-status-green">
+          Expense submitted for approval.{' '}
+          <Link
+            href={`/expenses/${submittedId}`}
+            className="underline underline-offset-2 hover:opacity-80"
+          >
+            View it →
+          </Link>
+        </div>
+      )}
+
       <div
         role="tablist"
         aria-label="Expense view"
@@ -253,9 +267,9 @@ export default async function ExpensesPage({
             className="h-9 rounded-md border border-line bg-surface-elev px-2 text-sm text-ink"
           >
             <option value="">Any</option>
-            {CATEGORY_OPTIONS.map((c) => (
-              <option key={c} value={c}>
-                {c}
+            {EXPENSE_CATEGORIES.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
               </option>
             ))}
           </select>

@@ -630,7 +630,14 @@ async function createCostFromExtraction(
       // one transaction so the AP queue picks it up immediately. Mirrors
       // /expenses/new but seeded with OCR fields. The actor IS the person
       // claiming reimbursement.
+      //
+      // GUARD: extraction failed or read $0 → land as DRAFT with no
+      // approval row. A $0 "submitted" expense used to hit the approval
+      // queue with no way for the filer to correct the amount — pure
+      // noise for the approver, dead-end for the filer. Drafts open on
+      // /expenses/[id] where the owner can fix + submit.
       const expenseCategory = mapToExpenseCategory(extractedCategory);
+      const extractionUsable = extractionMeta['ok'] === true && amountTotal > 0;
       const requiredRole = await resolveRequiredRole('expense', amountTotal);
       const expense = await prisma.$transaction(async (tx) => {
         const e = await tx.expense.create({
@@ -644,35 +651,37 @@ async function createCostFromExtraction(
             vendor: extractedSupplier,
             description: payload.fileName,
             receiptSharepointUrl: attachmentUrl,
-            status: 'submitted',
+            status: extractionUsable ? 'submitted' : 'draft',
           },
         });
-        const approval = await tx.approval.create({
-          data: {
+        if (extractionUsable) {
+          const approval = await tx.approval.create({
+            data: {
+              subjectType: 'expense',
+              subjectId: e.id,
+              requestedById: actorPersonId,
+              requiredRole,
+              thresholdContext: {
+                amount_cents: amountTotal,
+                threshold_cents: 200_000,
+              },
+              channel: 'web',
+            },
+            select: { id: true },
+          });
+          await notifyApproversOfNewApproval(tx, {
+            approvalId: approval.id,
             subjectType: 'expense',
             subjectId: e.id,
-            requestedById: actorPersonId,
             requiredRole,
-            thresholdContext: {
-              amount_cents: amountTotal,
-              threshold_cents: 200_000,
-            },
-            channel: 'web',
-          },
-          select: { id: true },
-        });
-        await notifyApproversOfNewApproval(tx, {
-          approvalId: approval.id,
-          subjectType: 'expense',
-          subjectId: e.id,
-          requiredRole,
-          requestedById: actorPersonId,
-          amountCents: amountTotal,
-          summary: `${extractedSupplier ?? 'Receipt'} · $${(amountTotal / 100).toFixed(0)}`,
-        });
+            requestedById: actorPersonId,
+            amountCents: amountTotal,
+            summary: `${extractedSupplier ?? 'Receipt'} · $${(amountTotal / 100).toFixed(0)}`,
+          });
+        }
         await writeAudit(tx, {
           actor: { type: 'person', id: actorPersonId },
-          action: 'submitted',
+          action: extractionUsable ? 'submitted' : 'created',
           entity: {
             type: 'expense',
             id: e.id,
@@ -683,6 +692,7 @@ async function createCostFromExtraction(
               amount: amountTotal,
               gst: extractedGstCents,
               category: expenseCategory,
+              status: extractionUsable ? 'submitted' : 'draft',
               extraction: extractionMeta,
             },
           },

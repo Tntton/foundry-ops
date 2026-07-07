@@ -78,11 +78,23 @@ export async function listExpenses(
     ...(searchFilter ?? {}),
   } as const;
 
+  // Explicit select — `include` returns every scalar column, which
+  // drags the receipt attachment (currently a base64 data: URI until
+  // SharePoint upload lands) into the 200-row list payload. The list
+  // only needs the summary fields.
   const rows = await prisma.expense.findMany({
     where,
     orderBy: { date: 'desc' },
     take: 200,
-    include: {
+    select: {
+      id: true,
+      date: true,
+      amount: true,
+      gst: true,
+      category: true,
+      vendor: true,
+      description: true,
+      status: true,
       project: { select: { id: true, code: true, name: true } },
       person: { select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true } },
     },

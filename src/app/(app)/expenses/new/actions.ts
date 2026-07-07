@@ -87,6 +87,7 @@ export async function submitExpense(
     rebillableDefault = proj?.defaultExpensesRebillable ?? false;
   }
 
+  let createdExpenseId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
       const expense = await tx.expense.create({
@@ -145,6 +146,7 @@ export async function submitExpense(
         },
         source: 'web',
       });
+      createdExpenseId = expense.id;
     });
   } catch (err) {
     console.error('[expense.submit] failed:', err);
@@ -153,5 +155,9 @@ export async function submitExpense(
 
   revalidatePath('/expenses');
   revalidatePath('/approvals');
-  redirect('/expenses');
+  // ?submitted= drives the green confirmation banner on the list page
+  // — a bare redirect gave no feedback that the expense landed.
+  redirect(
+    createdExpenseId ? `/expenses?submitted=${createdExpenseId}` : '/expenses',
+  );
 }

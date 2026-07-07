@@ -32,7 +32,11 @@ const ALLOWED_MIME = new Set([
   'image/webp',
 ]);
 const ALLOWED_EXT = ['.pdf', '.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp'];
-const MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB
+// 8 MB hard cap: files ship as base64 through a server action whose
+// body limit is 12 MB (next.config.mjs). Base64 inflates ~33%, so
+// anything much past 8 MB passes client checks then dies mid-upload
+// with an opaque error. Reject up-front with a clear message instead.
+const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8 MB
 const MAX_FILES = 10;
 const CONCURRENCY = 3; // parallel OCR calls — keep under Sonnet rate limits
 
@@ -81,7 +85,7 @@ function classify(file: File): { ok: boolean; kind: FileKind; reason?: string } 
     return {
       ok: false,
       kind: 'unknown',
-      reason: `${(file.size / 1024 / 1024).toFixed(1)} MB — max 25 MB`,
+      reason: `${(file.size / 1024 / 1024).toFixed(1)} MB — max 8 MB`,
     };
   }
   const lowerName = file.name.toLowerCase();
@@ -476,7 +480,7 @@ export function IntakeDropzone({
             Drop PDFs or photos here · up to {MAX_FILES} at a time
           </div>
           <div className="mt-1 text-xs text-ink-3">
-            PDF · PNG · JPEG · HEIC · WebP up to 25 MB each · paste from
+            PDF · PNG · JPEG · HEIC · WebP up to 8 MB each · paste from
             clipboard · forward to email · sync from{' '}
             <span className="font-mono">/Invoices/Inbox/</span>
           </div>
