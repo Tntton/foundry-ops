@@ -271,6 +271,9 @@ export type AvailabilityDayCell = {
   hours: number | null;
   /** Free-text comment; null when not set. */
   notes: string | null;
+  /** Project the hours are earmarked to. Null = unallocated (available
+   *  bandwidth ready to be staffed). */
+  projectId: string | null;
 };
 
 /** Read the existing per-day forecast for a person across `weeks` weeks.
@@ -289,7 +292,7 @@ export async function loadAvailabilityForPerson(
   const [rows, person] = await Promise.all([
     prisma.availabilityForecast.findMany({
       where: { personId, date: { gte: start, lt: end } },
-      select: { date: true, hours: true, notes: true },
+      select: { date: true, hours: true, notes: true, projectId: true },
     }),
     prisma.person.findUnique({
       where: { id: personId },
@@ -308,7 +311,7 @@ export async function loadAvailabilityForPerson(
   const byDay = new Map(
     rows.map((r) => [
       r.date.toISOString().slice(0, 10),
-      { hours: r.hours, notes: r.notes ?? null },
+      { hours: r.hours, notes: r.notes ?? null, projectId: r.projectId ?? null },
     ]),
   );
   // Mon=0..Sun=6 lookup for the regular schedule.
@@ -344,6 +347,7 @@ export async function loadAvailabilityForPerson(
         dateIso: iso,
         hours: stored.hours,
         notes: stored.notes,
+        projectId: stored.projectId,
       });
     } else {
       const inherited = regularHoursFor(d);
@@ -351,6 +355,7 @@ export async function loadAvailabilityForPerson(
         dateIso: iso,
         hours: person?.regularDaysEnabled ? inherited : null,
         notes: null,
+        projectId: null,
       });
     }
   }
@@ -371,7 +376,13 @@ export type AvailabilityUpsertResult =
  */
 export async function upsertAvailabilityForPerson(
   personId: string,
-  cells: Array<{ dateIso: string; hours: number | null; notes?: string | null }>,
+  cells: Array<{
+    dateIso: string;
+    hours: number | null;
+    notes?: string | null;
+    /** Project the hours are earmarked to; null / undefined = unallocated. */
+    projectId?: string | null;
+  }>,
 ): Promise<AvailabilityUpsertResult> {
   if (cells.length === 0) return { ok: true, cellsWritten: 0 };
   let written = 0;
@@ -383,6 +394,10 @@ export async function upsertAvailabilityForPerson(
         typeof c.notes === 'string' && c.notes.trim().length > 0
           ? c.notes.trim().slice(0, 500)
           : null;
+      const projectId =
+        typeof c.projectId === 'string' && c.projectId.length > 0
+          ? c.projectId
+          : null;
       if (c.hours === null && cleanedNotes === null) {
         await prisma.availabilityForecast.deleteMany({
           where: { personId, date },
@@ -392,8 +407,8 @@ export async function upsertAvailabilityForPerson(
       const hours = Math.max(0, Math.min(24, Math.round(c.hours ?? 0)));
       await prisma.availabilityForecast.upsert({
         where: { personId_date: { personId, date } },
-        update: { hours, notes: cleanedNotes },
-        create: { personId, date, hours, notes: cleanedNotes },
+        update: { hours, notes: cleanedNotes, projectId },
+        create: { personId, date, hours, notes: cleanedNotes, projectId },
       });
       written += 1;
     }

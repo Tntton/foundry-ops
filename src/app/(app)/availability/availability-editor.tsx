@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import {
   submitAvailabilityForecast,
   type AvailabilityFormState,
@@ -11,6 +11,15 @@ export type AvailabilityDayInput = {
   dateIso: string; // YYYY-MM-DD
   hours: number | null;
   notes: string | null;
+  /** Project the hours are earmarked to. Null = unallocated (open for
+   *  the resource-planning team to slot into a project later). */
+  projectId: string | null;
+};
+
+export type AllocatableProject = {
+  id: string;
+  code: string;
+  name: string;
 };
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -36,6 +45,7 @@ export function AvailabilityEditor({
   targetFirstName,
   weeklyCapacityHours,
   initialCells,
+  allocatableProjects,
 }: {
   personId: string;
   /** One entry per week (default 8). Used for the row labels. */
@@ -45,6 +55,10 @@ export function AvailabilityEditor({
   weeklyCapacityHours: number;
   /** weeks.length × 7 cells, ordered week-major, day-minor. */
   initialCells: AvailabilityDayInput[];
+  /** Active (non-archived) projects the person can allocate hours to.
+   *  Filtered server-side to what makes sense (their team-mates on
+   *  their own projects, or the full firm list for admins). */
+  allocatableProjects: AllocatableProject[];
 }) {
   // Per-day hours, stored as strings so blank stays blank rather than
   // coercing to "0".
@@ -66,6 +80,26 @@ export function AvailabilityEditor({
     }
     return out;
   });
+  // Per-cell project allocation. Value is the project code (string) or
+  // empty string for "unallocated". Seeded from initialCells; when the
+  // user types hours into a blank cell we default it to unallocated so
+  // the resource-planning team can see spare bandwidth. Fan-out and
+  // apply-default helpers propagate the same code across weekdays.
+  const projectIdToCode = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const p of allocatableProjects) m[p.id] = p.code;
+    return m;
+  }, [allocatableProjects]);
+  const [cellProjectCode, setCellProjectCode] = useState<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const c of initialCells) {
+      out[c.dateIso] =
+        c.projectId && projectIdToCode[c.projectId]
+          ? projectIdToCode[c.projectId]!
+          : '';
+    }
+    return out;
+  });
   const [pending, startTransition] = useTransition();
   const [state, setState] = useState<AvailabilityFormState>({ status: 'idle' });
 
@@ -77,6 +111,30 @@ export function AvailabilityEditor({
   }
   function setWeekNote(weekStartIso: string, raw: string) {
     setWeekNotes((prev) => ({ ...prev, [weekStartIso]: raw }));
+  }
+  function setCellProject(dateIso: string, code: string) {
+    setCellProjectCode((prev) => ({ ...prev, [dateIso]: code }));
+  }
+
+  /**
+   * Set the same project on every hours-bearing cell in a given week
+   * row. Quick way to say "all my Mon-Fri hours this week are on
+   * GEN003" without touching each day individually. Empty code sets
+   * the week back to unallocated.
+   */
+  function applyProjectToWeek(weekIndex: number, code: string) {
+    const rowCells = initialCells.slice(weekIndex * 7, weekIndex * 7 + 7);
+    setCellProjectCode((prev) => {
+      const next = { ...prev };
+      for (const c of rowCells) {
+        const h = (hours[c.dateIso] ?? '').trim();
+        // Only stamp cells with hours > 0; empty / zero days stay
+        // untagged so we don't create phantom allocations.
+        if (h === '' || Number(h) <= 0) continue;
+        next[c.dateIso] = code;
+      }
+      return next;
+    });
   }
 
   /**
@@ -140,6 +198,9 @@ export function AvailabilityEditor({
     const blankN: Record<string, string> = {};
     for (const w of weeks) blankN[w.weekStartIso] = '';
     setWeekNotes(blankN);
+    const blankP: Record<string, string> = {};
+    for (const c of initialCells) blankP[c.dateIso] = '';
+    setCellProjectCode(blankP);
   }
 
   function reset() {
@@ -156,6 +217,16 @@ export function AvailabilityEditor({
         const monday = initialCells[w * 7];
         if (!monday) continue;
         out[weeks[w]!.weekStartIso] = monday.notes ?? '';
+      }
+      return out;
+    });
+    setCellProjectCode(() => {
+      const out: Record<string, string> = {};
+      for (const c of initialCells) {
+        out[c.dateIso] =
+          c.projectId && projectIdToCode[c.projectId]
+            ? projectIdToCode[c.projectId]!
+            : '';
       }
       return out;
     });
@@ -177,10 +248,16 @@ export function AvailabilityEditor({
       const wIso = weeks[weekIndex]?.weekStartIso;
       const note =
         isMonday && wIso ? (weekNotes[wIso] ?? '').trim() : '';
+      // Project code sent as short-form; server resolves to Project.id.
+      // Cells with no hours drop the project link so we never store a
+      // dangling "GEN003, 0 hours" allocation.
+      const code = (cellProjectCode[c.dateIso] ?? '').trim();
+      const projectCode = h && h > 0 && code.length > 0 ? code : null;
       return {
         dateIso: c.dateIso,
         hours: h,
         notes: note === '' ? null : note,
+        projectCode,
       };
     });
     const fd = new FormData();
@@ -223,12 +300,12 @@ export function AvailabilityEditor({
               : `${targetFirstName}'s availability · next ${weeks.length} weeks`}
           </h3>
           <p className="text-[11px] text-ink-3">
-            Hours you expect to work each day — or just type a weekly
-            total in the right-hand column and we&apos;ll fan it out
-            across Mon-Fri (you can still tweak individual days after).
-            One short note per week for context — OOO half-day, client
-            onsite, conference, school run, etc. Drives the firm-wide
-            bandwidth heatmap.
+            Hours you expect to work each day, or type a weekly total
+            in the right-hand column and we&apos;ll fan it out across
+            Mon-Fri. Under each day, tag the hours to a specific project
+            code or leave them as <span className="font-medium text-ink-2">Free</span> so
+            resource planning can see spare bandwidth to allocate. One
+            short week note for context (OOO, onsite, conference, etc).
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -297,10 +374,13 @@ export function AvailabilityEditor({
                     const c = rowCells[dayIndex];
                     if (!c) return <td key={dayIndex} />;
                     const isToday = c.dateIso === todayIso;
+                    const cellHours = (hours[c.dateIso] ?? '').trim();
+                    const hasHours = cellHours !== '' && Number(cellHours) > 0;
+                    const projectCode = cellProjectCode[c.dateIso] ?? '';
                     return (
                       <td
                         key={c.dateIso}
-                        className={`px-1 py-1.5 align-middle text-center ${
+                        className={`px-1 py-1.5 align-top text-center ${
                           isToday ? 'bg-brand-soft/40' : ''
                         }`}
                       >
@@ -317,6 +397,30 @@ export function AvailabilityEditor({
                           className="h-7 w-14 rounded border border-line bg-surface-elev px-1 text-center text-xs tabular-nums text-ink focus:border-brand"
                           aria-label={`Hours for ${c.dateIso}`}
                         />
+                        {hasHours && (
+                          <select
+                            value={projectCode}
+                            onChange={(e) => setCellProject(c.dateIso, e.target.value)}
+                            className={`mt-1 h-6 w-14 rounded border px-0.5 text-center text-[10px] tabular-nums focus:border-brand ${
+                              projectCode
+                                ? 'border-brand text-brand'
+                                : 'border-line bg-surface-elev text-ink-3'
+                            }`}
+                            aria-label={`Project for ${c.dateIso}`}
+                            title={
+                              projectCode
+                                ? `Allocated to ${projectCode}`
+                                : 'Unallocated - available bandwidth'
+                            }
+                          >
+                            <option value="">Free</option>
+                            {allocatableProjects.map((p) => (
+                              <option key={p.id} value={p.code}>
+                                {p.code}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                       </td>
                     );
                   })}
@@ -351,17 +455,43 @@ export function AvailabilityEditor({
                     />
                   </td>
                   <td className="px-2 py-1.5">
-                    <input
-                      type="text"
-                      maxLength={200}
-                      placeholder="OOO Wed AM, client onsite, conference…"
-                      value={weekNotes[w.weekStartIso] ?? ''}
-                      onChange={(e) =>
-                        setWeekNote(w.weekStartIso, e.target.value)
-                      }
-                      className="h-7 w-full rounded border border-line bg-surface-elev px-1.5 text-[11px] text-ink-2 focus:border-brand"
-                      aria-label={`Note for week of ${w.label}`}
-                    />
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="text"
+                        maxLength={200}
+                        placeholder="OOO Wed AM, client onsite, conference…"
+                        value={weekNotes[w.weekStartIso] ?? ''}
+                        onChange={(e) =>
+                          setWeekNote(w.weekStartIso, e.target.value)
+                        }
+                        className="h-7 min-w-0 flex-1 rounded border border-line bg-surface-elev px-1.5 text-[11px] text-ink-2 focus:border-brand"
+                        aria-label={`Note for week of ${w.label}`}
+                      />
+                      <select
+                        value="__prompt"
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === '__prompt') return;
+                          // Sentinel value for "clear allocation" — separate
+                          // from the disabled prompt so we can tell them apart.
+                          const code = v === '__free' ? '' : v;
+                          applyProjectToWeek(weekIndex, code);
+                        }}
+                        className="h-7 w-24 shrink-0 rounded border border-line bg-surface-elev px-1 text-[10px] text-ink-3 focus:border-brand"
+                        aria-label={`Apply project to week of ${w.label}`}
+                        title="Apply this project to every hours-bearing day in the week"
+                      >
+                        <option value="__prompt" disabled>
+                          Apply to week…
+                        </option>
+                        <option value="__free">Free (unallocated)</option>
+                        {allocatableProjects.map((p) => (
+                          <option key={p.id} value={p.code}>
+                            {p.code}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </td>
                 </tr>
               );

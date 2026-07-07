@@ -21,6 +21,9 @@ const Schema = z.object({
         dateIso: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         hours: z.union([z.number().min(0).max(24), z.null()]),
         notes: z.union([z.string().max(500), z.null()]).optional(),
+        /** Optional project code (short-form). Server resolves to
+         *  Project.id after validating it exists + isn't archived. */
+        projectCode: z.union([z.string().max(40), z.null()]).optional(),
       }),
     )
     .max(112), // 16 weeks × 7 days max headroom
@@ -86,7 +89,35 @@ export async function submitAvailabilityForecast(
     };
   }
 
-  const result = await upsertAvailabilityForPerson(personId, valid.data.cells);
+  // Resolve project codes → project ids. Pull only what's referenced in
+  // the payload; archived projects are excluded so a stale forecast
+  // cell can't hold onto a dead code.
+  const codes = Array.from(
+    new Set(
+      valid.data.cells
+        .map((c) => c.projectCode)
+        .filter((c): c is string => typeof c === 'string' && c.length > 0),
+    ),
+  );
+  const projectByCode = new Map<string, string>();
+  if (codes.length > 0) {
+    const projects = await prisma.project.findMany({
+      where: { code: { in: codes }, stage: { not: 'archived' } },
+      select: { id: true, code: true },
+    });
+    for (const p of projects) projectByCode.set(p.code, p.id);
+  }
+  const cellsForUpsert = valid.data.cells.map((c) => ({
+    dateIso: c.dateIso,
+    hours: c.hours,
+    notes: c.notes ?? null,
+    projectId:
+      typeof c.projectCode === 'string' && c.projectCode.length > 0
+        ? (projectByCode.get(c.projectCode) ?? null)
+        : null,
+  }));
+
+  const result = await upsertAvailabilityForPerson(personId, cellsForUpsert);
   if (!result.ok) return { status: 'error', message: result.error };
 
   // Audit summary — payload kept bounded; we log size, not contents.

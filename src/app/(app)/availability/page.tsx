@@ -429,6 +429,11 @@ export default async function AvailabilityPage({
           weeklyCapacityHours={targetCapacityHours}
           weeks={editorWeeks}
           initialCells={initialCells}
+          allocatableProjects={activeProjects.map((p) => ({
+            id: p.id,
+            code: p.code,
+            name: p.name,
+          }))}
         />
       )}
 

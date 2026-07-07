@@ -586,13 +586,22 @@ model AvailabilityForecast {
   date         DateTime  @db.Date // the day this entry applies to
   hours        Int       // expected hours that day (0 = explicitly off)
   notes        String?
+  // Optional project the hours are earmarked against. Null means the
+  // hours are "unallocated" - i.e. the person has committed to being
+  // available but nothing is scheduled against them yet, so they show
+  // up in resource-planning as spare bandwidth ready to allocate. The
+  // FK is SetNull on delete so archiving a project auto-frees up any
+  // pending forecast cells rather than orphaning them.
+  projectId    String?
   submittedAt  DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
   person       Person    @relation(fields: [personId], references: [id])
+  project      Project?  @relation("AvailabilityForecastProject", fields: [projectId], references: [id], onDelete: SetNull)
 
   @@unique([personId, date])
   @@index([date])
+  @@index([projectId])
 }
 
 model Client {
@@ -726,6 +735,7 @@ model Project {
   checklists                 ProjectChecklist[]
   budget                     ProjectBudget?
   partnerContributions       ProjectPartnerContribution[]
+  availabilityForecasts      AvailabilityForecast[]     @relation("AvailabilityForecastProject")
 }
 
 // ── Partner contribution attribution ────────────────────────────────
