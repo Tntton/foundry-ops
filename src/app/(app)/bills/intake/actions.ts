@@ -1,5 +1,6 @@
 'use server';
 
+import { randomBytes } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
@@ -10,6 +11,7 @@ import { hasCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
 import { notifyApproversOfNewApproval } from '@/server/user-updates';
 import { resolveRequiredRole } from '@/server/approval-policies';
+import { uploadReceiptToSharePoint } from '@/server/integrations/sharepoint-receipts';
 
 /**
  * The intake dropzone is shared between two cost types:
@@ -577,10 +579,53 @@ async function createCostFromExtraction(
   const dueDate =
     extractedDueDate ?? new Date(extractedIssueDate.getTime() + 30 * 24 * 3600 * 1000);
   const amountTotal = extractedAmountCents ?? 0;
-  const attachmentUrl =
-    payload.fileBase64 && payload.fileMime
-      ? `data:${payload.fileMime};base64,${payload.fileBase64}`
-      : `pending-upload://${payload.fileName}`;
+
+  // Upload the raw file to SharePoint under the corporate FY archive
+  // (TASK-042b / 046b). Replaces the previous `data:base64` inline
+  // string that bloated the DB row. Graceful degradation: if Graph is
+  // down or SHAREPOINT_SITE_URL isn't set, fall back to the base64
+  // string for the current row and log the failure so backfill picks
+  // it up later.
+  let attachmentUrl: string;
+  let attachmentDriveItemId: string | null = null;
+  let uploadWarning: string | null = null;
+  const actor = await prisma.person.findUnique({
+    where: { id: actorPersonId },
+    select: { initials: true },
+  });
+  const initials = actor?.initials ?? '??';
+  if (payload.fileBase64 && payload.fileMime) {
+    try {
+      const buffer = Buffer.from(payload.fileBase64, 'base64');
+      const shortId = randomBytes(4).toString('hex');
+      const upload = await uploadReceiptToSharePoint({
+        kind: kind === 'bill' ? 'bill' : 'expense',
+        date: extractedIssueDate,
+        vendor: extractedSupplier,
+        amountCents: amountTotal,
+        ownerInitials: initials,
+        id: shortId,
+        buffer,
+        mimeType: payload.fileMime,
+        originalFilename: payload.fileName,
+      });
+      if (upload) {
+        attachmentUrl = upload.webUrl;
+        attachmentDriveItemId = upload.driveItemId;
+      } else {
+        // Graph not configured — fall through to legacy inline base64.
+        // Backfill script will migrate these when SharePoint comes up.
+        attachmentUrl = `data:${payload.fileMime};base64,${payload.fileBase64}`;
+        uploadWarning = 'SharePoint not configured; stored inline for backfill';
+      }
+    } catch (err) {
+      console.error('[intake.upload] SharePoint upload failed:', err);
+      attachmentUrl = `data:${payload.fileMime};base64,${payload.fileBase64}`;
+      uploadWarning = `SharePoint upload failed: ${(err as Error).message.slice(0, 120)}`;
+    }
+  } else {
+    attachmentUrl = `pending-upload://${payload.fileName}`;
+  }
 
   let subjectId: string;
   try {
@@ -592,6 +637,7 @@ async function createCostFromExtraction(
             supplierInvoiceNumber: extractedInvoiceNumber,
             receivedVia: 'upload',
             attachmentSharepointUrl: attachmentUrl,
+            attachmentDriveItemId,
             issueDate: extractedIssueDate,
             dueDate,
             amountTotal,
@@ -618,6 +664,8 @@ async function createCostFromExtraction(
               gst: extractedGstCents,
               category: extractedCategory,
               extraction: extractionMeta,
+              attachmentDriveItemId,
+              uploadWarning,
             },
           },
           source: 'web',
@@ -651,6 +699,7 @@ async function createCostFromExtraction(
             vendor: extractedSupplier,
             description: payload.fileName,
             receiptSharepointUrl: attachmentUrl,
+            receiptDriveItemId: attachmentDriveItemId,
             status: extractionUsable ? 'submitted' : 'draft',
           },
         });
@@ -694,6 +743,8 @@ async function createCostFromExtraction(
               category: expenseCategory,
               status: extractionUsable ? 'submitted' : 'draft',
               extraction: extractionMeta,
+              receiptDriveItemId: attachmentDriveItemId,
+              uploadWarning,
             },
           },
           source: 'web',

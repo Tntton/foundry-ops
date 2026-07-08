@@ -243,7 +243,14 @@ export default async function ExpenseDetailPage({
             )}
             {expense.receiptSharepointUrl && (
               <Row label="Receipt">
-                <ReceiptPreview url={expense.receiptSharepointUrl} />
+                <ReceiptPreview
+                  url={expense.receiptSharepointUrl}
+                  proxyUrl={
+                    expense.receiptDriveItemId
+                      ? `/api/attachments/expense/${expense.id}`
+                      : null
+                  }
+                />
               </Row>
             )}
             <Row label="Source">
@@ -270,12 +277,50 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 /**
- * Render a receipt URL inline. OCR-created expenses stash the raw file on
- * the receipt URL as a `data:` URI — browsers can render those directly
- * (PDF in iframe, images in <img>). SharePoint URLs fall through to the
- * standard "Open →" link since we can't iframe them without SSO.
+ * Render a receipt inline for the approvals / audit view.
+ *
+ * Three modes, in priority order:
+ *   1. `proxyUrl` present → SharePoint-backed receipt (TASK-042b).
+ *      Render the proxy route `/api/attachments/{kind}/{id}` in an
+ *      iframe so approvers get the file without leaving Foundry Ops.
+ *      "Open in SharePoint" secondary link falls back to the parent
+ *      record's webUrl for deep audit.
+ *   2. `data:` URL → legacy inline base64 (pre-042b intake uploads).
+ *      Renders PDF in iframe / image via <img>; will be migrated to
+ *      SharePoint by the backfill script.
+ *   3. Otherwise → generic "Open →" link (external SharePoint URL
+ *      the user pasted without an in-app upload).
  */
-function ReceiptPreview({ url }: { url: string }) {
+function ReceiptPreview({
+  url,
+  proxyUrl,
+}: {
+  url: string;
+  proxyUrl: string | null;
+}) {
+  // Priority 1: proxied SharePoint receipt.
+  if (proxyUrl) {
+    return (
+      <div className="space-y-2">
+        <div className="overflow-hidden rounded-md border border-line bg-card">
+          <iframe
+            src={proxyUrl}
+            title="Receipt"
+            className="h-[560px] w-full"
+          />
+        </div>
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs text-ink-3 hover:text-brand"
+        >
+          Open in SharePoint →
+        </a>
+      </div>
+    );
+  }
+  // Priority 2: inline data-URL (legacy).
   const isDataUrl = url.startsWith('data:');
   const dataMime = isDataUrl ? url.slice(5, url.indexOf(';')) : null;
   const isPdfData = isDataUrl && dataMime === 'application/pdf';
@@ -304,6 +349,7 @@ function ReceiptPreview({ url }: { url: string }) {
       </div>
     );
   }
+  // Priority 3: external SharePoint URL, no driveItemId (pasted link).
   return (
     <a
       href={url}

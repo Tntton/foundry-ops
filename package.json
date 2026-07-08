@@ -23,6 +23,7 @@
     "db:reset": "prisma migrate reset --force --schema=prisma/schema.prisma",
     "migrate:emails": "tsx --env-file=.env.local scripts/migrate_emails.ts",
     "merge:aliases": "tsx --env-file=.env.local scripts/merge_alias_duplicates.ts",
+    "backfill:receipts": "tsx --env-file=.env.local scripts/backfill_receipts_to_sharepoint.ts",
     "postinstall": "prisma generate --schema=prisma/schema.prisma"
   },
   "prisma": {

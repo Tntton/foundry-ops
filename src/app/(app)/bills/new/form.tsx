@@ -173,8 +173,19 @@ export function NewBillForm({
 
       <Section title="Attachment">
         <Field
-          label="SharePoint URL (optional)"
-          hint="Paste the file link after uploading to SharePoint — in-app upload ships later"
+          label="Upload file (PDF / JPG / PNG)"
+          hint="Filed automatically to the corporate FY archive in SharePoint. Optional — if you already have a SharePoint link, paste it below instead."
+        >
+          <input
+            name="attachment"
+            type="file"
+            accept="application/pdf,image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif"
+            className="block w-full text-sm text-ink file:mr-3 file:rounded-md file:border file:border-line file:bg-surface-elev file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-ink-2 hover:file:bg-surface-subtle"
+          />
+        </Field>
+        <Field
+          label="Or paste an existing SharePoint URL"
+          hint="Skip if you uploaded a file above — one of the two is enough."
         >
           <Input name="attachmentSharepointUrl" type="url" placeholder="https://…" />
         </Field>

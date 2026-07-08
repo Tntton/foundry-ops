@@ -1,5 +1,6 @@
 'use server';
 
+import { randomBytes } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
@@ -9,6 +10,19 @@ import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
 import { notifyApproversOfNewApproval } from '@/server/user-updates';
 import { resolveRequiredRole } from '@/server/approval-policies';
+import { uploadReceiptToSharePoint } from '@/server/integrations/sharepoint-receipts';
+
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const ALLOWED_ATTACHMENT_MIME = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+]);
 
 // Bills + expenses share the canonical category list — both post into
 // Xero as expense lines, both follow the same ATO deductibility splits.
@@ -79,6 +93,55 @@ export async function createBill(
   const amountCents = Math.round(data.amountDollars * 100);
   const gstCents = Math.round(data.gstDollars * 100);
 
+  // Attachment upload takes precedence over the pasted-URL field —
+  // if both are supplied, we archive the uploaded file to SharePoint
+  // and ignore the URL (the URL was the pre-042b workaround). Upload
+  // failure is soft: bill saves without an attachment link and audit
+  // records the warning.
+  let attachmentUrl: string | null = data.attachmentSharepointUrl ?? null;
+  let attachmentDriveItemId: string | null = null;
+  let uploadWarning: string | null = null;
+  const attachmentFile = formData.get('attachment');
+  if (attachmentFile instanceof File && attachmentFile.size > 0) {
+    if (attachmentFile.size > MAX_ATTACHMENT_BYTES) {
+      return {
+        status: 'error',
+        message: 'Attachment too large — max 20MB.',
+      };
+    }
+    const mimeType = attachmentFile.type || 'application/octet-stream';
+    if (!ALLOWED_ATTACHMENT_MIME.has(mimeType.toLowerCase())) {
+      return {
+        status: 'error',
+        message: `Attachment format not accepted — use PDF, JPG, PNG, GIF, WEBP, or HEIC. Got ${mimeType}.`,
+      };
+    }
+    try {
+      const buffer = Buffer.from(await attachmentFile.arrayBuffer());
+      const shortId = randomBytes(4).toString('hex');
+      const upload = await uploadReceiptToSharePoint({
+        kind: 'bill',
+        date: data.issueDate,
+        vendor: data.supplierName,
+        amountCents,
+        ownerInitials: session.person.initials,
+        id: shortId,
+        buffer,
+        mimeType,
+        originalFilename: attachmentFile.name,
+      });
+      if (upload) {
+        attachmentUrl = upload.webUrl;
+        attachmentDriveItemId = upload.driveItemId;
+      } else {
+        uploadWarning = 'SharePoint not configured — bill saved without an attachment link.';
+      }
+    } catch (err) {
+      console.error('[bill.create] SharePoint upload failed:', err);
+      uploadWarning = `SharePoint upload failed: ${(err as Error).message.slice(0, 120)}`;
+    }
+  }
+
   const nextStatus = data.intent === 'submit' ? 'pending_review' : 'pending_review';
   // MVP: 'draft' state isn't in BillStatus enum — intent=draft still saves as
   // pending_review but without an Approval row; intent=submit also creates the Approval.
@@ -104,7 +167,8 @@ export async function createBill(
           costCentre: data.costCentre,
           receivedVia: 'manual',
           status: nextStatus,
-          attachmentSharepointUrl: data.attachmentSharepointUrl,
+          attachmentSharepointUrl: attachmentUrl,
+          attachmentDriveItemId,
         },
       });
 
@@ -144,6 +208,8 @@ export async function createBill(
             category: bill.category,
             projectId: bill.projectId,
             status: bill.status,
+            attachmentDriveItemId,
+            uploadWarning,
           },
         },
         source: 'web',
