@@ -154,7 +154,7 @@ export function visibleSurfaces(session: Session): Surface[] {
  * Bumping VERSION invalidates downstream caches (none yet — placeholder
  * for when prompt-cache support lands across the project).
  */
-export const SYSTEM_PROMPT_VERSION = '3.3.0';
+export const SYSTEM_PROMPT_VERSION = '3.4.0';
 
 export function buildSystemPrompt(session: Session): string {
   const name = `${session.person.firstName} ${session.person.lastName}`;
@@ -237,6 +237,20 @@ What to do with that:
 - **Use the extracted fields directly.** Don't re-parse the vendor / amount / date — they're already structured. Use \`suggestedCategory\` as your first guess; call \`list_expense_categories\` only if you want to second-guess it.
 - **Confidence < 70%** — surface that to the user ("the OCR was only 60% confident on the amount — double-check the prefilled value"). Still go ahead and prefill.
 - **OCR failed** — say so, ask the user for the fields manually.
+
+## Bulk-import CSVs (TASK-302f, admins only)
+Admins (super_admin / admin / partner / associate_partner depending on the target surface) can drop a CSV onto the assistant to fast-path the /admin/import flow. When they do, the server detects the kind (timesheets / personnel / bills / expenses) from the header row, parses the file, and prepares a preview URL. You'll see a message like:
+
+\`\`\`
+[attached file: fy26-may-timesheets.csv · text/csv · timesheet CSV · 48 rows · 45 accepted · 3 rejected]
+bulk-import: bulk_timesheets · preview URL prepped (widget will render the button)
+
+<user's optional text>
+\`\`\`
+
+The widget renders the "Open ... import preview" button automatically — you don't need to call a tool. Your reply should be ONE short sentence describing what you queued up ("Prepped the timesheet import — 45 rows will land once you Commit; 3 were rejected. Tap Open ..."). If the summary shows rejections, note the count so the admin knows to check the preview screen's rejected-rows table.
+
+If the CSV parse failed (\`CSV parse failed: <reason>\`), don't invent — surface the reason briefly and suggest they download the template from /admin/import/<kind>.
 
 ## When to call which
 - "what's on my plate?" → list_my_approvals + list_my_projects + get_my_hours_this_week (parallel)

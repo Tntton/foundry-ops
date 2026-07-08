@@ -12,6 +12,7 @@ import {
   ASSISTANT_MAX_TURNS,
 } from '@/server/agents/assistant/threads';
 import { extractIntakeFields } from '@/server/agents/intake-ocr/extract';
+import { dispatchBulkCsv } from '@/server/agents/assistant/bulk-csv';
 import { writeAudit } from '@/server/audit';
 
 // Streaming responses must not be cached at the edge.
@@ -26,7 +27,24 @@ const BodySchema = z.object({
 // Multipart upload limits (TASK-302e).
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10MB hard ceiling
 const OCR_MAX_BYTES = 8 * 1024 * 1024; // 8MB practical ceiling for Claude vision
-const ALLOWED_MIMES = ['application/pdf', 'image/jpeg', 'image/png', 'image/heic', 'image/webp'];
+const OCR_MIMES = ['application/pdf', 'image/jpeg', 'image/png', 'image/heic', 'image/webp'];
+// CSV surface (TASK-302f) — admins drop bulk-import CSVs onto the
+// assistant + get routed to the /admin/import preview. Excel exports a
+// CSV as `application/vnd.ms-excel` sometimes, and browsers occasionally
+// mis-detect .csv as `text/plain`; accept the whole family, per-kind
+// capability gating happens downstream in dispatchBulkCsv.
+const CSV_MIMES = [
+  'text/csv',
+  'application/csv',
+  'application/vnd.ms-excel',
+  'text/plain',
+];
+const ALLOWED_MIMES = [...OCR_MIMES, ...CSV_MIMES];
+
+function isCsvUpload(mimeType: string, filename: string): boolean {
+  if (CSV_MIMES.includes(mimeType)) return true;
+  return filename.toLowerCase().endsWith('.csv');
+}
 
 type AttachmentSummary = {
   filename: string;
@@ -169,12 +187,48 @@ export async function POST(req: Request): Promise<Response> {
 
   const history = await listThreadMessages(thread.id);
 
-  // Run OCR on the attachment BEFORE we persist + stream so the
-  // extracted fields can join the user message Claude sees.
+  // Process the attachment BEFORE we persist + stream so the
+  // extracted fields (or bulk-CSV dispatch result) can join the user
+  // message Claude sees. Two branches:
+  //   - CSVs (TASK-302f) → dispatchBulkCsv → prefill card for the
+  //     admin-import preview URL
+  //   - PDFs / images (TASK-302e) → extractIntakeFields → prefill_expense
+  //     or prefill_bill via the model's tool loop
   let attachmentSummary: AttachmentSummary | null = null;
+  let bulkPrefillCard:
+    | { surface: string; url: string; summary: string }
+    | null = null;
   let composedUserMessage = userMessage;
   if (attachment) {
-    if (attachment.size > OCR_MAX_BYTES) {
+    if (isCsvUpload(attachment.mimeType, attachment.name)) {
+      // ── CSV path (TASK-302f) ────────────────────────────────────────
+      const csvText = attachment.bytes.toString('utf8');
+      const result = await dispatchBulkCsv({
+        session,
+        csvText,
+        fileName: attachment.name,
+      });
+      if (result.ok) {
+        attachmentSummary = {
+          filename: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.size,
+          summary: result.summary,
+        };
+        bulkPrefillCard = {
+          surface: `bulk_${result.kind}`,
+          url: result.url,
+          summary: result.summary,
+        };
+      } else {
+        attachmentSummary = {
+          filename: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.size,
+          summary: `CSV parse failed: ${result.error}`,
+        };
+      }
+    } else if (attachment.size > OCR_MAX_BYTES) {
       attachmentSummary = {
         filename: attachment.name,
         mimeType: attachment.mimeType,
@@ -222,12 +276,11 @@ export async function POST(req: Request): Promise<Response> {
     // Inline the extraction so Claude has structured context in the
     // user message itself (history rehydration on later turns picks
     // this up too).
-    const fieldsBlock =
-      attachmentSummary.fields
-        ? JSON.stringify(attachmentSummary.fields)
-        : '(extraction failed)';
+    const contextBlock = bulkPrefillCard
+      ? `bulk-import: ${bulkPrefillCard.surface} · preview URL prepped (widget will render the button)`
+      : `extraction: ${attachmentSummary.fields ? JSON.stringify(attachmentSummary.fields) : '(extraction failed)'}`;
     composedUserMessage = `[attached file: ${attachment.name} · ${attachment.mimeType} · ${attachmentSummary.summary}]
-extraction: ${fieldsBlock}
+${contextBlock}
 
 ${userMessage}`.trim();
 
@@ -286,6 +339,23 @@ ${userMessage}`.trim();
               sizeBytes: attachmentSummary.sizeBytes,
               summary: attachmentSummary.summary,
               fields: attachmentSummary.fields ?? null,
+            })}\n\n`,
+          ),
+        );
+      }
+      // Bulk-CSV path (TASK-302f) — the dispatcher already built the
+      // preview URL; emit a prefill_card so the widget renders the
+      // "Open bulk-import preview" button alongside the assistant's text.
+      // (For OCR/receipt uploads the prefill_card comes from the
+      // model's prefill_* tool call further down the stream.)
+      if (bulkPrefillCard) {
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              kind: 'prefill_card',
+              surface: bulkPrefillCard.surface,
+              url: bulkPrefillCard.url,
+              summary: bulkPrefillCard.summary,
             })}\n\n`,
           ),
         );

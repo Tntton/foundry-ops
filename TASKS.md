@@ -1331,7 +1331,24 @@ A secondary, smaller surface of `propose_*` tools handles low-field one-shot act
 - [ ] Commit: `feat(TASK-302e): assistant — drag-drop receipt → OCR → prefill`.
 - [ ] Smoke: TT drags a real receipt PDF onto the assistant + types "this is for ARC001 reimburse me" → expects extraction chip → expense prefill card → click → `/expenses/new` opens with all fields populated.
 
-**Out of scope (future):** CSV → bulk timesheet attachment (bulk import surface at `/admin/import/timesheets` already handles this — assistant could deep-link there instead). Original binary upload to SharePoint. Multi-file per message. Word doc / Excel parsing.
+**Out of scope (moved to TASK-302f):** CSV → bulk timesheet / personnel / bills / expenses attachment. Original binary upload to SharePoint. Multi-file per message. Word doc / Excel parsing.
+
+### TASK-302f — Admin drag-drop CSV → bulk-import preview (this task)
+**status:** doing
+**depends on:** TASK-302e
+**framing:** JN + TT (admins) upload timesheet / personnel / bill / expense CSVs from `/admin/import/*` today. They asked for the same fast-path via the assistant — drop a CSV onto the assistant panel, land straight on the dry-run preview with the file already parsed. Zero-click bulk-import launch. Non-admins can't drop CSVs (existing PDF/image path only).
+
+**acceptance:**
+- [x] Client MIME allowlist extended to include `text/csv`, `application/vnd.ms-excel`, and files with a `.csv` extension so drag-drop from Excel/Finder/Numbers all work.
+- [x] Server-side kind detection by inspecting header row — timesheets (`hours`), personnel (`firstName`+`band`), bills (`supplierName`+`supplierInvoiceNumber`), expenses (`personEmail`+`amountTotalDollars` without `hours`). Non-CSV files still route through the receipt OCR path.
+- [x] For each detected kind, the assistant runs the existing pure `buildXPreview` parser + `stashX` — same code path the admin surface uses. Returns a `prefill_card` pointing to `/admin/import/{kind}?stage=preview&token=<opaqueToken>`. From the user's perspective: they land on the preview screen with counts + rejections rendered and the Commit button live.
+- [x] Per-kind capability gate. Detected kind requires the caller to hold the corresponding capability (`timesheet.approve`, `person.create`, `bill.create`, `expense.approve.under_2k`). Missing cap → tool returns `permission_denied` with a friendly message; admins pass through.
+- [x] Attachment chip in the user bubble flips uploading → parsing → "✓ timesheet CSV · 48 rows · 3 rejected" (or the equivalent per kind).
+- [x] Nothing writes to the DB from the assistant path — the Commit button on the admin preview page remains the sole write action, using the same server action the direct-upload path uses.
+- [x] Tests: kind detection covers each header shape + malformed inputs.
+- [x] Typecheck + lint green.
+- [ ] Commit: `feat(TASK-302f): admin drag-drop CSV → bulk-import preview`.
+- [ ] Smoke: JN drags a real timesheet CSV onto the assistant → chip flips to "48 rows · 3 rejected" → prefill card renders → click → land on `/admin/import/timesheets?stage=preview&token=…` with the preview live. Click Commit → rows land in `TimesheetEntry` per the existing bulk-import audit trail.
 
 ### TASK-302d — Propose tools (quick recruit + feedback ticket)
 **status:** doing

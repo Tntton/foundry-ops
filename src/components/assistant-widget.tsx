@@ -62,7 +62,27 @@ type Message = {
 };
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-const ALLOWED_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/heic', 'image/webp'];
+const ALLOWED_TYPES = [
+  // Receipts / supplier invoices — OCR path (TASK-302e).
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/heic',
+  'image/webp',
+  // Bulk-import CSVs — admin path (TASK-302f). Excel exports CSVs with
+  // application/vnd.ms-excel, some browsers mis-detect .csv as text/plain.
+  'text/csv',
+  'application/csv',
+  'application/vnd.ms-excel',
+  'text/plain',
+];
+
+function isAllowedFile(file: File): boolean {
+  if (ALLOWED_TYPES.includes(file.type)) return true;
+  // Fallback for browsers that hand us a blank MIME string on drag-drop
+  // — accept .csv by extension so Finder / Numbers exports still land.
+  return file.name.toLowerCase().endsWith('.csv');
+}
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -113,9 +133,9 @@ export function AssistantWidget() {
   const abortRef = useRef<AbortController | null>(null);
 
   function adoptFile(file: File) {
-    if (!ALLOWED_TYPES.includes(file.type)) {
+    if (!isAllowedFile(file)) {
       setError(
-        `Unsupported file type: ${file.type || 'unknown'}. Drop a PDF or image.`,
+        `Unsupported file type: ${file.type || 'unknown'}. Drop a PDF, image, or CSV.`,
       );
       return;
     }
@@ -582,9 +602,11 @@ export function AssistantWidget() {
             <div className="pointer-events-none absolute inset-0 z-50 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-brand bg-brand/15 backdrop-blur-sm">
               <span className="text-3xl">📎</span>
               <div className="text-sm font-medium text-ink">
-                Drop receipt or invoice
+                Drop receipt, invoice, or CSV
               </div>
-              <div className="text-[11px] text-ink-3">PDF or image · up to 10MB</div>
+              <div className="text-[11px] text-ink-3">
+                PDF / image · or a bulk-import CSV · up to 10MB
+              </div>
             </div>
           )}
           <header className="flex items-center justify-between gap-2 border-b border-line bg-surface-elev px-4 py-2.5">
@@ -773,6 +795,10 @@ function AttachmentChips({ chips }: { chips: AttachmentChip[] }) {
 }
 
 const PREFILL_LABEL: Record<string, string> = {
+  bulk_timesheets: 'Open timesheet import preview',
+  bulk_personnel: 'Open personnel import preview',
+  bulk_bills: 'Open bill import preview',
+  bulk_expenses: 'Open expense import preview',
   timesheet: 'Open prefilled timesheet',
   expense: 'Open prefilled expense',
   bill: 'Open prefilled bill',
