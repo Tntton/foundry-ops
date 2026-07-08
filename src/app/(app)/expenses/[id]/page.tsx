@@ -7,6 +7,7 @@ import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { TagProjectForm } from './tag-project-form';
+import { DraftEditForm } from './draft-edit-form';
 
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
@@ -139,6 +140,25 @@ export default async function ExpenseDetailPage({
           </div>
         </div>
       </header>
+
+      {/* Draft correction panel — the owner (or admin) fixes fields the
+          OCR got wrong and submits into the approval queue. Renders
+          only for drafts; everything below stays read-only display. */}
+      {expense.status === 'draft' &&
+        (isOwner || canSeeAll) && (
+          <DraftEditForm
+            expenseId={expense.id}
+            initial={{
+              dateIso: expense.date.toISOString().slice(0, 10),
+              amountDollars:
+                expense.amount > 0 ? (expense.amount / 100).toFixed(2) : '',
+              gstDollars: expense.gst > 0 ? (expense.gst / 100).toFixed(2) : '',
+              category: expense.category,
+              vendor: expense.vendor ?? '',
+              description: expense.description ?? '',
+            }}
+          />
+        )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Card>

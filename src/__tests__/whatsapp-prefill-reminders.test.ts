@@ -2,28 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   dueReminder,
   reminderMessage,
-  extractPrefillTokenFromUrl,
   EARLY_REMINDER_AFTER_SECONDS,
   LAST_CALL_BEFORE_EXPIRY_SECONDS,
   type DispatchReminderState,
 } from '@/server/whatsapp-prefill-dispatch';
-
-describe('extractPrefillTokenFromUrl (reply-to-confirm, TASK-129)', () => {
-  it('pulls the prefill token from a timesheet link', () => {
-    const url =
-      'https://ops.foundry.health/timesheet?week=2026-06-29&prefill=abc.def';
-    expect(extractPrefillTokenFromUrl(url)).toBe('abc.def');
-  });
-  it('pulls the prefill token from an expense link', () => {
-    expect(
-      extractPrefillTokenFromUrl('https://ops.foundry.health/expenses/new?prefill=xyz.123'),
-    ).toBe('xyz.123');
-  });
-  it('returns null when there is no query / prefill param', () => {
-    expect(extractPrefillTokenFromUrl('https://ops.foundry.health/timesheet')).toBeNull();
-    expect(extractPrefillTokenFromUrl('https://ops.foundry.health/x?week=1')).toBeNull();
-  });
-});
 
 const SENT = new Date('2026-07-02T00:00:00.000Z');
 const EXPIRES = new Date(SENT.getTime() + 24 * 60 * 60 * 1000); // 24h link

@@ -12,20 +12,10 @@ import { parseTimesheetText } from '@/server/agents/intent/timesheet';
 import { parseAvailabilityText } from '@/server/agents/intent/availability';
 import {
   signPrefillToken,
-  verifyPrefillToken,
   newPrefillJti,
   WHATSAPP_PREFILL_TTL_SECONDS,
 } from '@/server/agents/assistant/prefill/token';
-import type {
-  TimesheetPrefillPayload,
-  ExpensePrefillPayload,
-} from '@/server/agents/assistant/prefill/schemas';
-import {
-  createPrefillDispatch,
-  findLatestOutstandingDispatch,
-  extractPrefillTokenFromUrl,
-  markDispatchCompleted,
-} from '@/server/whatsapp-prefill-dispatch';
+import { createPrefillDispatch } from '@/server/whatsapp-prefill-dispatch';
 import { startOfWeek, formatIsoDate } from '@/lib/week';
 import { optionalEnv } from '@/server/env';
 import { downloadWhatsAppMedia, sendWhatsAppText } from './whatsapp';
@@ -248,27 +238,14 @@ async function handleTimesheet(
   if (legacyAutoDraftEnabled()) {
     // ─── Legacy path — auto-write the draft entry (pre-302c) ──────
     const created = await prisma.$transaction(async (tx) => {
-      // Upsert on the (person, project, date) unique key — re-sent
-      // WhatsApp messages / webhook re-deliveries must not double-log.
-      const entry = await tx.timesheetEntry.upsert({
-        where: {
-          personId_projectId_date: {
-            personId: person.id,
-            projectId: project.id,
-            date,
-          },
-        },
-        create: {
+      const entry = await tx.timesheetEntry.create({
+        data: {
           personId: person.id,
           projectId: project.id,
           date,
           hours: new Prisma.Decimal(parsed.hours),
           description: parsed.description ?? null,
           status: 'draft',
-        },
-        update: {
-          hours: new Prisma.Decimal(parsed.hours),
-          description: parsed.description ?? null,
         },
         select: { id: true },
       });
@@ -670,209 +647,6 @@ async function handleStatusCheck(
   );
 }
 
-// ─── Reply-to-confirm (TASK-129) ──────────────────────────────────────
-// A `CONFIRM` reply submits the most recent outstanding prefill link
-// directly from WhatsApp — for people who can't open the deep-link in a
-// real browser. The dispatch row's linkUrl carries the signed, person-
-// bound token, so we verify + decode it and apply the exact payload the
-// form would have. This intentionally reverses part of TASK-302c (no
-// auto-write) for these low-value (< $20k) items — TT-approved; the
-// high-value web-only approval gate is untouched (timesheet/expense
-// aren't in it).
-
-/** Apply a confirmed timesheet prefill — creates submitted entries so they
- *  reach the approval queue, exactly as the web form's submit would. */
-async function applyTimesheetConfirm(
-  person: Person,
-  payload: TimesheetPrefillPayload,
-): Promise<string> {
-  const applied: string[] = [];
-  const skipped: string[] = [];
-  await prisma.$transaction(async (tx) => {
-    for (const entry of payload.entries) {
-      const project = await tx.project.findUnique({
-        where: { code: entry.projectCode.toUpperCase() },
-        select: { id: true, code: true, stage: true },
-      });
-      if (!project || project.stage === 'archived') {
-        skipped.push(entry.projectCode);
-        continue;
-      }
-      // Upsert — a double-tapped YES / webhook re-delivery lands on
-      // the same (person, project, date) row instead of duplicating.
-      const created = await tx.timesheetEntry.upsert({
-        where: {
-          personId_projectId_date: {
-            personId: person.id,
-            projectId: project.id,
-            date: new Date(`${entry.dateIso}T00:00:00.000Z`),
-          },
-        },
-        create: {
-          personId: person.id,
-          projectId: project.id,
-          date: new Date(`${entry.dateIso}T00:00:00.000Z`),
-          hours: new Prisma.Decimal(entry.hours),
-          description: entry.notes ?? null,
-          status: 'submitted',
-        },
-        update: {
-          hours: new Prisma.Decimal(entry.hours),
-          description: entry.notes ?? null,
-          status: 'submitted',
-        },
-        select: { id: true },
-      });
-      applied.push(`${entry.hours}h on ${project.code} (${entry.dateIso})`);
-      await writeAudit(tx, {
-        actor: { type: 'person', id: person.id },
-        action: 'created',
-        entity: {
-          type: 'timesheet_entry',
-          id: created.id,
-          after: {
-            via: 'whatsapp_confirm',
-            projectCode: project.code,
-            hours: entry.hours,
-            dateIso: entry.dateIso,
-            status: 'submitted',
-          },
-        },
-        source: 'agent',
-      });
-    }
-  });
-  if (applied.length === 0) {
-    throw new Error(
-      `no valid project${skipped.length ? ` (unknown/archived: ${skipped.join(', ')})` : ''}`,
-    );
-  }
-  const suffix = skipped.length ? ` (skipped ${skipped.join(', ')})` : '';
-  return `${applied.join('; ')}${suffix}`;
-}
-
-/** Apply a confirmed expense prefill — creates a submitted Expense. */
-async function applyExpenseConfirm(
-  person: Person,
-  payload: ExpensePrefillPayload,
-): Promise<string> {
-  let projectId: string | null = null;
-  if (payload.projectCode) {
-    const project = await prisma.project.findUnique({
-      where: { code: payload.projectCode.toUpperCase() },
-      select: { id: true, stage: true },
-    });
-    if (project && project.stage !== 'archived') projectId = project.id;
-  }
-  const amountCents = Math.round(payload.amountDollars * 100);
-  const gstCents = Math.round((payload.gstDollars ?? 0) * 100);
-  const expenseId = await prisma.$transaction(async (tx) => {
-    const e = await tx.expense.create({
-      data: {
-        personId: person.id,
-        projectId,
-        date: new Date(`${payload.dateIso}T00:00:00.000Z`),
-        vendor: payload.vendor || 'Unknown vendor',
-        category: payload.category,
-        amount: amountCents,
-        gst: gstCents,
-        description: payload.description,
-        status: 'submitted',
-      },
-      select: { id: true },
-    });
-    await writeAudit(tx, {
-      actor: { type: 'person', id: person.id },
-      action: 'created',
-      entity: {
-        type: 'expense',
-        id: e.id,
-        after: {
-          via: 'whatsapp_confirm',
-          vendor: payload.vendor,
-          amountDollars: payload.amountDollars,
-          category: payload.category,
-          dateIso: payload.dateIso,
-          projectCode: payload.projectCode ?? null,
-          status: 'submitted',
-        },
-      },
-      source: 'agent',
-    });
-    return e.id;
-  });
-  void expenseId;
-  return `*$${payload.amountDollars.toFixed(2)}* to ${payload.vendor || 'vendor'} on ${payload.dateIso}`;
-}
-
-async function handleConfirm(
-  person: Person,
-  conversation: WhatsAppConversation,
-  message: IncomingMessage,
-): Promise<void> {
-  const now = new Date();
-  const dispatch = await findLatestOutstandingDispatch(person.id, now);
-  if (!dispatch) {
-    await reply(
-      conversation.id,
-      message.fromPhone,
-      'Nothing to confirm right now. Send a receipt, or say e.g. "log 3h on CAC001 today".',
-    );
-    return;
-  }
-  const token = extractPrefillTokenFromUrl(dispatch.linkUrl);
-  const kind: 'timesheet' | 'expense' =
-    dispatch.kind === 'timesheet' ? 'timesheet' : 'expense';
-  const verified = token
-    ? verifyPrefillToken(token, { personId: person.id, kind })
-    : ({ ok: false, reason: 'malformed' } as const);
-  if (!verified.ok) {
-    await reply(
-      conversation.id,
-      message.fromPhone,
-      `That prepared ${kind === 'timesheet' ? 'timesheet' : 'expense'} link is no longer valid (${verified.reason}). Send it again and I'll re-prepare it.`,
-    );
-    return;
-  }
-
-  try {
-    if (kind === 'timesheet') {
-      const summary = await applyTimesheetConfirm(
-        person,
-        verified.payload.payload as TimesheetPrefillPayload,
-      );
-      await markDispatchCompleted(dispatch.id, now);
-      await reply(
-        conversation.id,
-        message.fromPhone,
-        `✅ Submitted ${summary} — it's now in the timesheet approval queue.`,
-        'timesheet_entry',
-        null,
-      );
-    } else {
-      const summary = await applyExpenseConfirm(
-        person,
-        verified.payload.payload as ExpensePrefillPayload,
-      );
-      await markDispatchCompleted(dispatch.id, now);
-      await reply(
-        conversation.id,
-        message.fromPhone,
-        `✅ Expense submitted: ${summary}.`,
-        'expense',
-        null,
-      );
-    }
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : 'unknown error';
-    await reply(
-      conversation.id,
-      message.fromPhone,
-      `Couldn't submit it (${reason}). You can still open the link I sent to finish it manually.`,
-    );
-  }
-}
-
 // ─── Top-level dispatcher ─────────────────────────────────────────────
 
 export async function handleIncomingWhatsAppMessage(
@@ -945,9 +719,6 @@ export async function handleIncomingWhatsAppMessage(
             message.fromPhone,
             `Not sure what you mean. ${HELP_TEXT}`,
           );
-          return { ok: true };
-        case 'confirm':
-          await handleConfirm(person, conversation, message);
           return { ok: true };
         case 'timesheet':
           activeFlow = 'timesheet';

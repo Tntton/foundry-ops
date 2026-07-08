@@ -114,24 +114,6 @@ export function listActiveDispatches(now: Date) {
   });
 }
 
-/** The person's most recent still-open prefill link — what a WhatsApp
- *  `CONFIRM` reply applies (TASK-129). Null when nothing is pending. */
-export function findLatestOutstandingDispatch(personId: string, now: Date) {
-  return prisma.whatsAppPrefillDispatch.findFirst({
-    where: { personId, completedAt: null, expiresAt: { gt: now } },
-    orderBy: { sentAt: 'desc' },
-  });
-}
-
-/** Pull the signed `prefill` token out of a stored dispatch link. The
- *  token carries the full, person-bound payload, so CONFIRM can apply it
- *  without re-deriving anything. Pure. Null if there's no prefill param. */
-export function extractPrefillTokenFromUrl(linkUrl: string): string | null {
-  const q = linkUrl.indexOf('?');
-  if (q < 0) return null;
-  return new URLSearchParams(linkUrl.slice(q + 1)).get('prefill');
-}
-
 export async function markDispatchCompleted(id: string, now: Date): Promise<void> {
   await prisma.whatsAppPrefillDispatch.update({
     where: { id },
@@ -198,9 +180,8 @@ export async function targetRecordExists(dispatch: {
   return false;
 }
 
-/** Reminder copy — repeats the link, coaches around the in-app-browser
- *  trap (the whole reason for the nudge), and offers the browser-free
- *  reply-to-confirm fallback (TASK-129). */
+/** Reminder copy — repeats the link and coaches around the in-app-browser
+ *  trap (the whole reason for the nudge). No reply-to-confirm yet. */
 export function reminderMessage(
   dispatch: { kind: string; linkUrl: string },
   which: ReminderKind,
@@ -212,8 +193,7 @@ export function reminderMessage(
       : `👋 You started a ${what} but haven't submitted it yet.`;
   return (
     `${lead}\n\nTap to review + submit:\n${dispatch.linkUrl}\n\n` +
-    `If the link won't open, open it in your phone's browser (Safari or ` +
-    `Chrome) rather than the in-app WhatsApp preview — or just reply ` +
-    `*CONFIRM* and I'll submit it for you.`
+    `If the link opens a blank/blocked page, open it in your phone's browser ` +
+    `(Safari or Chrome) rather than the in-app WhatsApp preview.`
   );
 }

@@ -176,6 +176,15 @@ export default async function TimesheetPage({
       ? await getMonthForPerson(target.id, blockStart)
       : await getWeekForPerson(target.id, blockStart);
 
+  // Previous week's rows feed the "Copy last week" quick action (week
+  // view only) — a repeat week becomes two clicks instead of five
+  // typed cells. Month view skips it: the 28-day grid already shows
+  // history inline.
+  const lastWeekRows =
+    view === 'week'
+      ? await getWeekForPerson(target.id, addDays(blockStart, -7))
+      : null;
+
   // Pull a 6-month window of submitted/approved/billed entries so the
   // overview below the grid shows the running record of decisions, not just
   // what fits in the current 4-week block.
@@ -487,6 +496,7 @@ export default async function TimesheetPage({
             actingOnBehalf={actingOnBehalf}
             isSuperAdmin={isSuperAdmin}
             hourlyRateCents={hourlyRateCents}
+            lastWeekRows={lastWeekRows}
           />
         </>
       )}

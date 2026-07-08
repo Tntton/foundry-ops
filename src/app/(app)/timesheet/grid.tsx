@@ -30,6 +30,7 @@ export function TimesheetGrid({
   actingOnBehalf,
   isSuperAdmin,
   hourlyRateCents,
+  lastWeekRows,
 }: {
   rangeStart: string;
   initialRows: TimesheetRow[];
@@ -41,6 +42,9 @@ export function TimesheetGrid({
   isSuperAdmin: boolean;
   /** Cost rate the user can monetise hours at — used purely for the $ accrued column. 0 hides the column. */
   hourlyRateCents: number;
+  /** Previous week's rows for the "Copy last week" quick action.
+   *  Null in month view (the action only makes sense week-to-week). */
+  lastWeekRows?: TimesheetRow[] | null;
 }) {
   const [rows, setRows] = useState(initialRows);
   const [state, action] = useFormState<TimesheetSaveState, FormData>(saveTimesheet, {
@@ -119,6 +123,48 @@ export function TimesheetGrid({
         cells: cells.map((date) => ({ date, hours: 0 })),
       },
     ]);
+  }
+
+  // "Copy last week" — fill this week's EMPTY cells from the same
+  // day-of-week last week; rows that only existed last week get added.
+  // Never overwrites hours already typed, so it's safe to click after
+  // partially filling the week.
+  const lastWeekHasHours =
+    view === 'week' &&
+    (lastWeekRows ?? []).some((r) => r.cells.some((c) => c.hours > 0));
+  function copyLastWeek() {
+    if (!lastWeekRows) return;
+    setRows((prev) => {
+      const next = [...prev];
+      for (const lw of lastWeekRows) {
+        const lwTotal = lw.cells.reduce((s, c) => s + c.hours, 0);
+        if (lwTotal === 0) continue;
+        const idx = next.findIndex((r) => r.projectId === lw.projectId);
+        if (idx === -1) {
+          next.push({
+            projectId: lw.projectId,
+            projectCode: lw.projectCode,
+            projectName: lw.projectName,
+            projectStage: lw.projectStage,
+            description: '',
+            status: 'draft',
+            cells: cells.map((date, i) => ({
+              date,
+              hours: lw.cells[i]?.hours ?? 0,
+            })),
+          });
+        } else {
+          const r = next[idx]!;
+          next[idx] = {
+            ...r,
+            cells: r.cells.map((c, i) =>
+              c.hours === 0 ? { ...c, hours: lw.cells[i]?.hours ?? 0 } : c,
+            ),
+          };
+        }
+      }
+      return next;
+    });
   }
 
   function removeRow(projectId: string) {
@@ -413,11 +459,24 @@ export function TimesheetGrid({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        {addableProjects.length > 0 ? (
-          <AddRowPicker projects={addableProjects} onAdd={addRow} />
-        ) : (
-          <span className="text-xs text-ink-3">All your projects are on the sheet.</span>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {addableProjects.length > 0 ? (
+            <AddRowPicker projects={addableProjects} onAdd={addRow} />
+          ) : (
+            <span className="text-xs text-ink-3">All your projects are on the sheet.</span>
+          )}
+          {lastWeekHasHours && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={copyLastWeek}
+              title="Fill this week's empty cells from the same days last week. Doesn't overwrite anything you've typed."
+            >
+              Copy last week
+            </Button>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-ink-3">
             {view === 'month'
