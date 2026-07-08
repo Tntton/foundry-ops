@@ -264,6 +264,16 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         roles: ['super_admin', 'admin'],
       },
       {
+        // Office-manager working view of firm overhead: month × ATO
+        // category spend vs the FY budget, run-rate, unpaid pipeline.
+        // Sits next to Bills because that's where the underlying rows
+        // get actioned. Partners' strategic OPEX view stays on /pnl.
+        label: 'OPEX tracker',
+        href: '/admin/opex',
+        icon: Gauge,
+        roles: ['super_admin', 'admin'],
+      },
+      {
         label: 'Pay runs',
         href: '/payroll',
         icon: Banknote,
