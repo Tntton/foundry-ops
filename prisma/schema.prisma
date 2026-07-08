@@ -1083,6 +1083,13 @@ model Expense {
   vendor                String?
   description           String?
   receiptSharepointUrl  String?
+  // Graph DriveItem id for the receipt uploaded to SharePoint under
+  // .../FY YY - YY+1/Expenses/YYYY-MM/. Persisted alongside the webUrl
+  // so the proxied inline-preview route (/api/attachments/expense/[id])
+  // can stream the file back through Foundry Ops with an auth check —
+  // approvers see the receipt without leaving the approvals queue.
+  // Null when the expense was submitted with no receipt.
+  receiptDriveItemId    String?
   parsedByAgentRunId    String?       // null = human-entered
   status                ExpenseStatus @default(draft)
   approvedById          String?
@@ -1175,6 +1182,13 @@ model Bill {
   receivedVia              String     // email / upload / manual
   originalEmailId          String?    // Graph message ID if parsed by agent
   attachmentSharepointUrl  String?
+  // Graph DriveItem id for the vendor-invoice PDF/image uploaded to
+  // SharePoint under .../FY YY - YY+1/Bills/YYYY-MM/. Paired with
+  // attachmentSharepointUrl so the proxied inline-preview route can
+  // stream the attachment inline during approval. Null for bills that
+  // predate the SharePoint upload wiring (see backfill script) or that
+  // arrived with no attachment.
+  attachmentDriveItemId    String?
   issueDate                DateTime   @db.Date
   dueDate                  DateTime   @db.Date
   amountTotal              Int        // AUD cents inc GST

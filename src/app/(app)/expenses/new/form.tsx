@@ -171,12 +171,19 @@ export function NewExpenseForm({
             defaultValue={initialValues?.description ?? ''}
           />
         </Field>
+        <Field
+          label="Receipt (PDF / JPG / PNG)"
+          error={errs['receipt']}
+          hint="Filed automatically to the corporate FY archive in SharePoint; approvers see it inline. Optional but strongly recommended for audit."
+        >
+          <input
+            name="receipt"
+            type="file"
+            accept="application/pdf,image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif"
+            className="block w-full text-sm text-ink file:mr-3 file:rounded-md file:border file:border-line file:bg-surface-elev file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-ink-2 hover:file:bg-surface-subtle"
+          />
+        </Field>
       </Section>
-
-      <div className="rounded-md border border-line bg-surface-subtle p-3 text-xs text-ink-3">
-        Receipt OCR via the Receipt Parser agent ships later. For now, upload the receipt
-        to SharePoint and paste the file link when you need to attach one.
-      </div>
 
       <div className="flex justify-end gap-2">
         <Button type="button" asChild variant="ghost">

@@ -1,5 +1,6 @@
 'use server';
 
+import { randomBytes } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
@@ -10,6 +11,24 @@ import { writeAudit } from '@/server/audit';
 import { notifyApproversOfNewApproval } from '@/server/user-updates';
 import { resolveRequiredRole } from '@/server/approval-policies';
 import { EXPENSE_CATEGORY_VALUES } from '@/lib/expense-categories';
+import { uploadReceiptToSharePoint } from '@/server/integrations/sharepoint-receipts';
+
+// Receipt-attachment limits — mirrors the /bills/intake dropzone.
+// 20MB is a generous ceiling (Foundry's biggest receipt to date is a
+// 6MB scanned travel bundle) and comfortably under Vercel's request
+// body limit on the Pro plan. Types match extensionFromMime in the
+// uploader.
+const MAX_RECEIPT_BYTES = 20 * 1024 * 1024;
+const ALLOWED_RECEIPT_MIME = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+]);
 
 // Bills + expenses both post into Xero as expense lines, so they share
 // one canonical category list (see src/lib/expense-categories.ts) that
@@ -67,6 +86,31 @@ export async function submitExpense(
     return { status: 'error', message: 'Please fix the highlighted fields.', fieldErrors };
   }
 
+  // Pre-validate the receipt file (if attached) BEFORE opening the
+  // transaction. Uploading to SharePoint happens inside the tx path
+  // below so we can capture the URL + drive-item id on the Expense row
+  // atomically with the Approval + audit.
+  const receiptFile = formData.get('receipt');
+  let receiptCheck: { file: File; mimeType: string } | null = null;
+  if (receiptFile instanceof File && receiptFile.size > 0) {
+    if (receiptFile.size > MAX_RECEIPT_BYTES) {
+      return {
+        status: 'error',
+        message: 'Receipt too large — max 20MB. Try compressing or splitting the file.',
+        fieldErrors: { receipt: 'File exceeds 20MB limit.' },
+      };
+    }
+    const mimeType = receiptFile.type || 'application/octet-stream';
+    if (!ALLOWED_RECEIPT_MIME.has(mimeType.toLowerCase())) {
+      return {
+        status: 'error',
+        message: 'Receipt format not accepted — use PDF, JPG, PNG, GIF, WEBP, or HEIC.',
+        fieldErrors: { receipt: `Unsupported type: ${mimeType}` },
+      };
+    }
+    receiptCheck = { file: receiptFile, mimeType };
+  }
+
   const data = parsed.data;
   const amountCents = Math.round(data.amountDollars * 100);
   const gstCents = Math.round(data.gstDollars * 100);
@@ -87,6 +131,50 @@ export async function submitExpense(
     rebillableDefault = proj?.defaultExpensesRebillable ?? false;
   }
 
+  // If a receipt was attached, upload it to SharePoint BEFORE opening
+  // the Expense transaction. If Graph is down, the upload is a soft
+  // failure — the expense still lands without a receipt link, and a
+  // warning surfaces in the audit event. This trades atomicity for
+  // resilience: better to have an approvable Expense with a missing
+  // receipt (which owner can attach later on /expenses/[id]) than to
+  // block the whole submission on a SharePoint outage.
+  //
+  // Filename uses a random shortId (not the Expense.id) so the upload
+  // can complete before the row is created; the Expense.id + shortId
+  // are cross-referenced through the AuditEvent delta.
+  let uploadedReceiptUrl: string | null = null;
+  let uploadedReceiptDriveItemId: string | null = null;
+  let receiptFilename: string | null = null;
+  let uploadWarning: string | null = null;
+  if (receiptCheck) {
+    try {
+      const buffer = Buffer.from(await receiptCheck.file.arrayBuffer());
+      const shortId = randomBytes(4).toString('hex');
+      const upload = await uploadReceiptToSharePoint({
+        kind: 'expense',
+        date: data.date,
+        vendor: data.vendor,
+        amountCents,
+        ownerInitials: session.person.initials,
+        id: shortId,
+        buffer,
+        mimeType: receiptCheck.mimeType,
+        originalFilename: receiptCheck.file.name,
+      });
+      if (upload) {
+        uploadedReceiptUrl = upload.webUrl;
+        uploadedReceiptDriveItemId = upload.driveItemId;
+        receiptFilename = upload.filename;
+      } else {
+        uploadWarning =
+          'SharePoint not configured — expense saved without a receipt link. Set SHAREPOINT_SITE_URL to enable receipt archiving.';
+      }
+    } catch (err) {
+      console.error('[expense.submit] receipt upload failed:', err);
+      uploadWarning = `Receipt upload failed: ${(err as Error).message.slice(0, 120)}. Expense saved without a receipt — attach later from the detail page.`;
+    }
+  }
+
   let createdExpenseId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
@@ -102,6 +190,8 @@ export async function submitExpense(
           description: data.description,
           status: 'submitted',
           rebillable: rebillableDefault,
+          receiptSharepointUrl: uploadedReceiptUrl,
+          receiptDriveItemId: uploadedReceiptDriveItemId,
         },
       });
       const approval = await tx.approval.create({
@@ -142,6 +232,15 @@ export async function submitExpense(
             category: expense.category,
             vendor: expense.vendor,
             status: expense.status,
+            receipt: uploadedReceiptUrl
+              ? {
+                  filename: receiptFilename,
+                  driveItemId: uploadedReceiptDriveItemId,
+                  webUrl: uploadedReceiptUrl,
+                }
+              : uploadWarning
+                ? { attempted: true, warning: uploadWarning }
+                : { attempted: false },
           },
         },
         source: 'web',
