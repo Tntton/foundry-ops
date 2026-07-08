@@ -1,4 +1,5 @@
 import { prisma } from '@/server/db';
+import { listTestProjectIds, TEST_PROJECT_PREFIX } from '@/server/test-projects';
 
 export type PerProjectPnL = {
   projectId: string;
@@ -116,7 +117,11 @@ export type RevenueByFyRow = {
  */
 export async function computeRevenueByFy(): Promise<{ rows: RevenueByFyRow[]; totalRevenueCents: number; totalReceivedCents: number }> {
   const invoices = await prisma.invoice.findMany({
-    where: { status: { in: ['approved', 'sent', 'partial', 'paid', 'overdue'] } },
+    where: {
+      status: { in: ['approved', 'sent', 'partial', 'paid', 'overdue'] },
+      // Sandbox invoices (TST* projects) never count as revenue.
+      NOT: { project: { code: { startsWith: TEST_PROJECT_PREFIX } } },
+    },
     select: {
       amountExGst: true,
       paymentReceivedAmount: true,
@@ -162,9 +167,23 @@ export async function computeFirmPnL(opts?: FirmPnLOpts): Promise<FirmPnL> {
   // have zero contract value but accrue cost. Internal FH projects
   // (FHP*) keep showing.
   const BUCKET_CODES = ['FHB000', 'FHO000', 'FHX000'];
+  // Test-sandbox projects (TST*) are fully excluded — see
+  // src/server/test-projects.ts for the convention. Fetched first so
+  // every financial query below can filter on the id list.
+  const testIds = await listTestProjectIds();
+  // For NULLABLE projectId columns (expense, bill), `notIn` alone would
+  // also drop the NULL (OPEX) rows — SQL `NULL NOT IN (…)` is not true.
+  const nullableProjectNotTest =
+    testIds.length > 0
+      ? { OR: [{ projectId: null }, { projectId: { notIn: testIds } }] }
+      : {};
+  const requiredProjectNotTest =
+    testIds.length > 0 ? { projectId: { notIn: testIds } } : {};
   const [projects, bucketProjects, invoices, expenses, bills, timesheet, contractorInvoices, cumulative] = await Promise.all([
     prisma.project.findMany({
-      where: { code: { notIn: BUCKET_CODES } },
+      where: {
+        code: { notIn: BUCKET_CODES, not: { startsWith: TEST_PROJECT_PREFIX } },
+      },
       orderBy: { code: 'asc' },
       select: {
         id: true,
@@ -182,7 +201,10 @@ export async function computeFirmPnL(opts?: FirmPnLOpts): Promise<FirmPnL> {
       select: { id: true, code: true },
     }),
     prisma.invoice.findMany({
-      where: hasWindow ? { issueDate: dateWindow } : {},
+      where: {
+        ...(hasWindow ? { issueDate: dateWindow } : {}),
+        ...requiredProjectNotTest,
+      },
       select: {
         projectId: true,
         amountExGst: true,
@@ -194,6 +216,7 @@ export async function computeFirmPnL(opts?: FirmPnLOpts): Promise<FirmPnL> {
       where: {
         status: { in: ['approved', 'reimbursed', 'batched_for_payment'] },
         ...(hasWindow ? { date: dateWindow } : {}),
+        ...nullableProjectNotTest,
       },
       select: { projectId: true, amount: true, gst: true, date: true },
     }),
@@ -201,6 +224,7 @@ export async function computeFirmPnL(opts?: FirmPnLOpts): Promise<FirmPnL> {
       where: {
         status: { in: ['approved', 'scheduled_for_payment', 'paid'] },
         ...(hasWindow ? { issueDate: dateWindow } : {}),
+        ...nullableProjectNotTest,
       },
       select: { projectId: true, amountTotal: true, gst: true, issueDate: true },
     }),
@@ -208,6 +232,7 @@ export async function computeFirmPnL(opts?: FirmPnLOpts): Promise<FirmPnL> {
       where: {
         status: { in: ['approved', 'billed'] },
         ...(hasWindow ? { date: dateWindow } : {}),
+        ...requiredProjectNotTest,
       },
       select: {
         projectId: true,
@@ -219,17 +244,23 @@ export async function computeFirmPnL(opts?: FirmPnLOpts): Promise<FirmPnL> {
     // Historical contractor invoices — pre-platform aggregated cost.
     // Feeds consultantCost alongside live timesheet cost.
     prisma.contractorInvoice.findMany({
-      where: hasWindow ? { periodAnchor: dateWindow } : {},
+      where: {
+        ...(hasWindow ? { periodAnchor: dateWindow } : {}),
+        ...requiredProjectNotTest,
+      },
       select: { projectId: true, hours: true, amountExGst: true, periodAnchor: true },
     }),
-    // Cumulative — always unfiltered so the "firm earnings to date" tile
-    // is stable across FY switches.
+    // Cumulative — always unfiltered by date so the "firm earnings to
+    // date" tile is stable across FY switches. Test projects excluded.
     Promise.all([
       prisma.invoice.aggregate({
+        where: testIds.length > 0 ? { projectId: { notIn: testIds } } : {},
         _sum: { amountExGst: true, paymentReceivedAmount: true },
       }),
       prisma.project.aggregate({
-        where: { code: { notIn: BUCKET_CODES } },
+        where: {
+          code: { notIn: BUCKET_CODES, not: { startsWith: TEST_PROJECT_PREFIX } },
+        },
         _sum: { contractValue: true },
       }),
     ]).then(([inv, prj]) => ({

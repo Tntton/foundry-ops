@@ -117,6 +117,8 @@ export async function computeResourcePlanning(
     prisma.timesheetEntry.findMany({
       where: {
         date: { gte: rangeStart, lt: rangeEnd },
+        // Sandbox hours (TST* projects) don't count toward utilisation.
+        NOT: { project: { code: { startsWith: 'TST' } } },
       },
       select: {
         personId: true,
