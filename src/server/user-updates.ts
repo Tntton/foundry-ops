@@ -151,6 +151,24 @@ export async function markAllUpdatesRead(personId: string): Promise<number> {
 }
 
 /**
+ * Mark a specific set of updates read (scoped to the person so a
+ * crafted id list can't touch someone else's rows). Used by the
+ * dashboard card, which renders only the first 8 — marking ALL read
+ * would silently swallow items the user never saw.
+ */
+export async function markUpdatesReadByIds(
+  personId: string,
+  ids: string[],
+): Promise<number> {
+  if (ids.length === 0) return 0;
+  const result = await prisma.userUpdate.updateMany({
+    where: { personId, id: { in: ids }, readAt: null },
+    data: { readAt: new Date() },
+  });
+  return result.count;
+}
+
+/**
  * Fan-out helper for admin-pool feed entries.
  *
  * Resolves every active person whose roles include `super_admin` or

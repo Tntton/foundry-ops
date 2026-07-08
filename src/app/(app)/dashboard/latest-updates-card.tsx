@@ -80,9 +80,17 @@ export function LatestUpdatesCard({ updates }: { updates: UserUpdateRow[] }) {
 
   useEffect(() => {
     if (hasUnread) {
-      startMark(() => {
-        void markMyUpdatesRead();
-      });
+      // Only mark the 8 rendered items read — items below the fold
+      // stay unread (and keep the nav badge) until viewed on /updates.
+      const renderedUnreadIds = updates
+        .slice(0, 8)
+        .filter((u) => u.readAt === null)
+        .map((u) => u.id);
+      if (renderedUnreadIds.length > 0) {
+        startMark(() => {
+          void markMyUpdatesRead(renderedUnreadIds);
+        });
+      }
     }
     // We deliberately only react to the initial unread state — once
     // we've fired the mark-read action, subsequent re-renders shouldn't
@@ -97,8 +105,11 @@ export function LatestUpdatesCard({ updates }: { updates: UserUpdateRow[] }) {
           Latest updates for me
         </CardTitle>
         {updates.length > 0 && (
-          <span className="text-[11px] text-ink-3">
-            {updates.length} {updates.length === 1 ? 'item' : 'items'}
+          <span className="flex items-center gap-2 text-[11px] text-ink-3">
+            {updates.length > 8 && <span>showing 8 of {updates.length}</span>}
+            <Link href="/updates" className="text-brand hover:underline">
+              View all →
+            </Link>
           </span>
         )}
       </CardHeader>

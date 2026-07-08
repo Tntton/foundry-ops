@@ -95,10 +95,11 @@ export function FeedbackWidget() {
         </button>
       )}
 
-      {/* Expanded panel — full bottom-right corner is fine when open; the
-          assistant pill is small enough to coexist. */}
+      {/* Expanded panel sits at bottom-16 — the assistant pill paints
+          at bottom-4 right-4 with the same z-index and was covering
+          the submit button's right corner when this was bottom-4. */}
       {open && (
-        <div className="fixed bottom-4 right-4 z-40 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-line bg-card shadow-xl">
+        <div className="fixed bottom-16 right-4 z-40 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-line bg-card shadow-xl">
           <header className="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
             <div>
               <div className="text-sm font-semibold text-ink">Send feedback</div>

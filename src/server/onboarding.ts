@@ -48,7 +48,7 @@ function opener(firstName: string): OnboardingSlide {
 
 const CLOSER: OnboardingSlide = {
   title: 'You are set.',
-  body: 'The floating pill on the bottom-right is the in-app assistant. Ask it what is on your plate, what you have logged this week, or which screen does X. Feedback goes through the smaller pill next to it, and you can re-open this tour any time from your user menu.',
+  body: 'The floating pill on the bottom-right is the in-app assistant. Ask it what is on your plate, what you have logged this week, or which screen does X. Feedback and bug reports go through the smaller pill next to it.',
 };
 
 function slidesFor(role: Role): OnboardingSlide[] {
@@ -78,7 +78,6 @@ function slidesFor(role: Role): OnboardingSlide[] {
           links: [
             { label: 'Integrations', href: '/admin/integrations' },
             { label: 'Feedback', href: '/admin/feedback' },
-            { label: 'Feature flags', href: '/admin/feature-flags' },
           ],
         },
       ];
@@ -91,7 +90,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
           links: [
             { label: 'Dashboard', href: '/' },
             { label: 'BD pipeline', href: '/bd' },
-            { label: 'Scorecard', href: '/partner/scorecard' },
+            { label: 'Scorecard', href: '/partners' },
           ],
         },
         {

@@ -146,8 +146,10 @@ export function AssistantWidget() {
       } catch (err) {
         console.error('[assistant.hydrate] failed:', err);
         if (cancelled) return;
-        setError("Couldn't load conversation — refresh and try again.");
-        setHydrated(true);
+        setError("Couldn't load conversation — close and reopen to retry.");
+        // Deliberately NOT setting hydrated — leaving it false means
+        // closing + reopening the panel refetches instead of dead-
+        // ending until a full page refresh.
       }
     })();
     return () => {
@@ -386,6 +388,14 @@ export function AssistantWidget() {
               );
             } else if (evt.kind === 'error' && evt.message) {
               setError(evt.message);
+              // The server closes without a `done` frame after an
+              // error — stop the typing animation or the bubble looks
+              // alive while dead.
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === replyMsg.id ? { ...m, streaming: false } : m,
+                ),
+              );
             } else if (evt.kind === 'done') {
               setMessages((prev) =>
                 prev.map((m) =>
@@ -562,7 +572,7 @@ export function AssistantWidget() {
 
       {open && (
         <div
-          className="fixed bottom-4 right-4 z-40 flex h-[600px] w-[400px] max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-line bg-card shadow-2xl"
+          className="fixed bottom-4 right-4 z-40 flex h-[600px] w-[400px] max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-line bg-card shadow-2xl"
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -584,7 +594,7 @@ export function AssistantWidget() {
                 <span className="font-normal text-ink-3">· helps you move fast</span>
               </div>
               <div className="text-[11px] text-ink-3">
-                Asks short, point-and-go answers. Phase 1: guidance only.
+                Ask about your week, or drop a receipt to log it.
               </div>
             </div>
             <div className="flex items-center gap-1">

@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import type { BillStatus } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
+import { hasAnyRole } from '@/server/roles';
 import { listBills } from '@/server/bills';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -64,6 +65,13 @@ export default async function BillsPage({
 }) {
   const session = await getSession();
   if (!session) notFound();
+  // Firm-AP surface — manager+ only. listBills already scopes staff to
+  // zero rows (no data leak), but the breadcrumb on /bills/intake was
+  // dropping staff onto a permanently-empty admin page. The staff
+  // surface for receipts is /bills/intake + /expenses.
+  if (!hasAnyRole(session, ['super_admin', 'admin', 'partner', 'manager'])) {
+    notFound();
+  }
 
   const status = STATUS_OPTIONS.includes(searchParams.status as BillStatus)
     ? (searchParams.status as BillStatus)

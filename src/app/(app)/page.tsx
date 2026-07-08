@@ -47,11 +47,18 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 /**
  * Greeting for the staff dashboard header. Time-of-day aware so the
  * line reads natural ("Good morning", "Afternoon" etc.) instead of
- * the static "my week" we had before. Server-rendered using the host
- * timezone — close enough for AU/NZ team, which is the audience.
+ * the static "my week" we had before. Fixed to the firm timezone —
+ * Vercel serves from UTC, so host-clock hours rendered "late night"
+ * at 9am Sydney.
  */
 function greeting(): string {
-  const h = new Date().getHours();
+  const h = Number(
+    new Intl.DateTimeFormat('en-AU', {
+      timeZone: 'Australia/Sydney',
+      hour: 'numeric',
+      hour12: false,
+    }).format(new Date()),
+  );
   if (h < 5) return 'late night';
   if (h < 12) return 'good morning';
   if (h < 17) return 'afternoon';

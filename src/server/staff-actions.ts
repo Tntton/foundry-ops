@@ -1,5 +1,5 @@
 import { prisma } from '@/server/db';
-import { startOfWeek, addDays } from '@/lib/week';
+import { startOfWeek, addDays, todayInFirmTz } from '@/lib/week';
 
 /**
  * "What does the staff member owe right now?" — a tight read of the
@@ -46,15 +46,24 @@ export async function listStaffPendingActions(
 
   // ── 1+3. Timesheet signals ────────────────────────────────────
   const now = new Date();
-  const thisMonday = startOfWeek(now);
+  const thisMonday = startOfWeek(todayInFirmTz());
   // Walk back 4 weeks looking for un-submitted blocks. Skip the
   // current week from the "overdue" check — that's a "this week"
   // signal, not a past-due one.
   const fourWeeksAgo = addDays(thisMonday, -28);
-  const recentEntries = await prisma.timesheetEntry.findMany({
-    where: { personId, date: { gte: fourWeeksAgo } },
-    select: { date: true, status: true, hours: true },
-  });
+  const [recentEntries, personRow] = await Promise.all([
+    prisma.timesheetEntry.findMany({
+      where: { personId, date: { gte: fourWeeksAgo } },
+      select: { date: true, status: true, hours: true },
+    }),
+    // startDate bounds the empty-week check — a new joiner shouldn't
+    // be told they missed weeks before they existed.
+    prisma.person.findUnique({
+      where: { id: personId },
+      select: { startDate: true },
+    }),
+  ]);
+  const personStart = personRow?.startDate ?? null;
   type WeekBucket = {
     weekStart: Date;
     hours: number;
@@ -86,8 +95,8 @@ export async function listStaffPendingActions(
     const wkStart = addDays(thisMonday, -7 * i);
     const key = wkStart.toISOString().slice(0, 10);
     const bucket = weekMap.get(key);
+    const weekEnd = addDays(wkStart, 6);
     if (bucket?.hasDraft) {
-      const weekEnd = addDays(wkStart, 6);
       out.push({
         kind: 'timesheet_overdue',
         title: `Timesheet for ${formatWeekRange(wkStart, weekEnd)} still draft`,
@@ -97,6 +106,23 @@ export async function listStaffPendingActions(
       });
       // Only surface the most recent overdue week — older ones are
       // visible in the timesheet approval-history card already.
+      break;
+    }
+    // Completely-empty prior week — the most common miss (someone who
+    // never opened the timesheet at all). Previously only draft-but-
+    // unsubmitted weeks fired, so a fully-skipped week showed
+    // "You're all clear". Weeks before the person's start date don't
+    // count.
+    const startedByThisWeek =
+      personStart === null || personStart.getTime() <= weekEnd.getTime();
+    if (startedByThisWeek && (!bucket || (!bucket.hasSubmitted && bucket.hours === 0))) {
+      out.push({
+        kind: 'timesheet_overdue',
+        title: `No hours logged for ${formatWeekRange(wkStart, weekEnd)}`,
+        detail: 'Log the week (or enter 0h for leave) so resourcing stays accurate.',
+        href: `/timesheet?week=${key}&view=week`,
+        tone: 'red',
+      });
       break;
     }
   }
