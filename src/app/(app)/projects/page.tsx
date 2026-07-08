@@ -231,6 +231,11 @@ export default async function ProjectsPage({
           >
             Download CSV
           </a>
+          {/* Practice sandbox — open to EVERYONE (staff included).
+              Server-assigns the next TST code; excluded from P&L. */}
+          <Button asChild variant="outline">
+            <Link href="/projects/new-test">+ Practice project</Link>
+          </Button>
           {canCreate && (
             <Button asChild>
               <Link href="/projects/new">+ New project</Link>
