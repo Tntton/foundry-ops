@@ -14,7 +14,7 @@ Five external systems. Each has its own auth flow, surfaces, sync rules, and fai
 - `User.Read.All` (app) — directory sync
 - `User.ReadWrite.All` (app) — provisioning
 - `GroupMember.ReadWrite.All` (app) — role via group membership
-- `Files.ReadWrite.All` (app) — SharePoint provisioning
+- `Files.ReadWrite.All` (app) — SharePoint provisioning + receipt / attachment archive (see below)
 - `Sites.ReadWrite.All` (app) — folder structure
 - `Mail.Read` (app, scoped via `New-ApplicationAccessPolicy` to `finance@foundry.health` + `trung@foundry.health` only) — AP autoharvest cron. See §7 for the grant + scoping steps.
 - `Calendars.Read` (delegated) — timesheet reconciler
@@ -302,6 +302,37 @@ The policy can take up to **30 minutes** to propagate. Don't enable the cron unt
 3. As vendors migrate to `finance@` (TT updates Xero contact emails + sends one-off "please email finance@ in future" replies), the volume in `trung@` decays.
 4. Once `trung@` shows zero invoice arrivals for 30 days, TT flips the toggle on the admin page — cursor row stays but cron stops polling.
 5. Optionally, drop the `trung@foundry.health` member from the `Foundry Ops Mail Intake` distribution group to fully revoke app access.
+
+---
+
+## 8. Receipt / attachment archive (TASK-042b · TASK-046b)
+
+**Status:** live for `/expenses/new`, `/bills/new`, `/bills/intake` — commits `3565362` + `372338b`.
+
+Every submitted expense or bill that carries a receipt / attachment gets a copy filed into the corporate SharePoint FY tree so the compliance trail is complete without leaving Foundry Ops.
+
+**Target folder** (locked by TT 2026-05-30):
+```
+CORPORATE/ADMIN ACCESS/00 Administration/03 Financial/
+  01 Company Administration/
+    FY <YY> - <YY+1>/
+      Expenses/YYYY-MM/<filename>
+      Bills/YYYY-MM/<filename>
+```
+
+- FY subfolder is auto-derived from the receipt/issue date (Australian FY, 1 Jul – 30 Jun). A July-2026 receipt lands in `FY 26 - 27/Expenses/2026-07/` and stays there forever — never renamed.
+- Filename: `YYYY-MM-DD - <vendor> - $<amount> - <initials> - <shortId>.<ext>` — searchable in the SharePoint UI, sortable by date, human-scannable.
+- Root path overridable via `SHAREPOINT_RECEIPTS_ROOT` env var for future restructures.
+
+**Uploader:** `src/server/integrations/sharepoint-receipts.ts` — shared by all three submission paths. Uses `Files.ReadWrite.All` (already granted). `conflictBehavior=rename` protects against silent overwrites; chunked upload session for files ≥4MB.
+
+**Approver view:** `/api/attachments/{expense|bill}/{id}` proxies the file's raw bytes back through Foundry Ops with an auth check (owner or approver capability) so `<ReceiptPreview>` on `/expenses/[id]` / `/invoices/[id]` renders the receipt inline. Secondary "Open in SharePoint →" link falls back to the parent record's SharePoint webUrl for deep audit.
+
+**Backfill:** `pnpm backfill:receipts [--dry] [--limit=N]` migrates existing `data:base64,…` inline receipts (from pre-042b `/bills/intake` uploads) to SharePoint. Idempotent — once a row's URL becomes `https://`, subsequent runs skip it. Each migration writes a system-actor AuditEvent so the operation is fully traceable and reversible.
+
+**Graceful degradation:** if Graph is down or `SHAREPOINT_SITE_URL` isn't set, the expense / bill saves without a receipt link (with an `uploadWarning` in the audit-event delta). Better UX than blocking submission; the owner can attach later from the detail page.
+
+**Follow-up (not yet in HEAD):** AP autoharvest (TASK-093) attachment archival — the mail-intake module is stranded on `feat/task-093-mail-intake-autoharvest` after an earlier `reset --hard`. Once re-integrated, wire the same uploader into `processMessage` so vendor invoices arriving by email also land in `FY YY - YY+1/Bills/YYYY-MM/`.
 
 ---
 

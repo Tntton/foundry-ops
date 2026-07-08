@@ -422,7 +422,7 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **depends on:** TASK-021
 **acceptance:**
 - [x] `/expenses/new`: date, amount (inc GST), GST (auto ÷ 11, overridable), category (travel/meals/office/tools/subscriptions/other), project (optional "— OPEX —"), vendor, description
-- [ ] Receipt upload → SharePoint — **deferred to TASK-042b** (needs Graph Files scope)
+- [x] Receipt upload → SharePoint — **TASK-042b landed 2026-07-02** (commit `3565362`). `/expenses/new` now has a file input; upload runs before the Bill/Expense tx via `uploadReceiptToSharePoint`; graceful degradation if Graph is down. See INTEGRATIONS.md §1 for the folder layout. Backfill script + proxy inline preview shipped in `372338b`.
 - [x] GST auto-calc + manual override
 - [x] Category enum picker
 - [x] Project optional, blank = OPEX
@@ -461,7 +461,7 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **depends on:** TASK-020
 **acceptance:**
 - [x] `/bills/new` form: supplier name, optional contractor Person link, supplier invoice number, issue/due dates, category (subscriptions / hosting / office / professional_services / contractor_payment / travel / other), amount + GST (auto ÷ 11, overridable), optional project, optional cost centre
-- [ ] File upload → SharePoint — **deferred to TASK-046b** (needs Graph Files scope). Pasted SharePoint URL supported as an interim; UI hints at 046b.
+- [x] File upload → SharePoint — **TASK-046b landed 2026-07-02** (commit `372338b`). `/bills/new` accepts a file (precedence over the pasted URL) and `/bills/intake` no longer stores base64 inline — both branches upload via `uploadReceiptToSharePoint`. `/api/attachments/bill/[id]` proxies binary content for inline preview during approval. Pending: AP autoharvest (TASK-093) attachment archival — the mail-intake module is not on current HEAD (stranded on `feat/task-093-mail-intake-autoharvest`); apply once re-integrated.
 - [x] Supplier picker: either external org (typed name) or an existing contractor Person (dropdown filtered to `employment=contractor, endDate=null`)
 - [x] Status `pending_review`; `receivedVia='manual'`; audit event on create/submit
 - [x] "Save for review" + "Save + submit for approval" buttons
