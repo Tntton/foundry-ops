@@ -23,6 +23,17 @@ import { startOfWeek, addDays, todayInFirmTz } from '@/lib/week';
  * /expenses/[id], etc.) so we don't fork the data-entry surface.
  */
 
+/**
+ * Timesheet tracking begins at go-live (1 July 2026, FY27 start).
+ * Nobody is chased for hours in any week that ended before this —
+ * FY26 and earlier predate the platform, so "you missed a week"
+ * nudges for that period are noise, not signal. Weeks that span the
+ * boundary (i.e. reach into 1 July onwards) still count.
+ *
+ * UTC midnight, matching the week-helper convention.
+ */
+const TIMESHEET_TRACKING_FLOOR = new Date(Date.UTC(2026, 6, 1)); // 2026-07-01
+
 export type StaffPendingAction = {
   kind:
     | 'timesheet_overdue'
@@ -96,6 +107,11 @@ export async function listStaffPendingActions(
     const key = wkStart.toISOString().slice(0, 10);
     const bucket = weekMap.get(key);
     const weekEnd = addDays(wkStart, 6);
+    // Go-live floor: never chase for a week that ended before the
+    // platform started tracking (1 July 2026). Walking most-recent-
+    // first, once we cross the floor every earlier week is also
+    // pre-floor, so it's safe to stop the whole scan here.
+    if (weekEnd.getTime() < TIMESHEET_TRACKING_FLOOR.getTime()) break;
     if (bucket?.hasDraft) {
       out.push({
         kind: 'timesheet_overdue',
