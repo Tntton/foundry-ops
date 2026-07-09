@@ -105,13 +105,18 @@ export default async function ProjectDetailPage({
 
   if (!project) notFound();
 
-  // Role-scope check: staff can only see projects they're on; manager only their own.
+  // Role-scope check: non-privileged viewers see a project when they're
+  // connected to it in ANY capacity — team member, manager of record,
+  // or lead partner (primaryPartnerId, covers associate partners).
+  // Mirrors listProjects' scoping so the list and the detail page can
+  // never disagree about what someone can open.
   const roles = session.person.roles;
   const canSeeAll = roles.some((r) => ['super_admin', 'admin', 'partner'].includes(r));
   if (!canSeeAll) {
     const onTeam = project.team.some((t) => t.personId === session.person.id);
     const isManager = project.managerId === session.person.id;
-    if (!onTeam && !isManager) notFound();
+    const isLead = project.primaryPartnerId === session.person.id;
+    if (!onTeam && !isManager && !isLead) notFound();
   }
 
   // Internal FH projects (FHP series) have no client revenue, so the

@@ -85,8 +85,15 @@ export type ProjectListFilter = {
 /**
  * Role-scoped project list:
  *  - super_admin / admin / partner: see everything
- *  - manager: projects where managerId === self
- *  - staff: projects where team includes self
+ *  - everyone else: any project they're CONNECTED to — as manager of
+ *    record, as lead (primaryPartner, covers associate partners), or
+ *    as a team member.
+ *
+ * The old split (manager role → managerId only; staff → team only)
+ * hid relevant projects from people wearing more than one hat: a
+ * manager who was a plain team member on someone else's project saw
+ * nothing, and an associate partner leading via primaryPartnerId saw
+ * nothing at all (QC 2026-07-09, Matt Byers).
  */
 export async function listProjects(
   session: Session,
@@ -97,12 +104,13 @@ export async function listProjects(
 
   const scopeFilter: Record<string, unknown>[] = [];
   if (!roles.some((r) => r === 'super_admin' || r === 'admin' || r === 'partner')) {
-    if (roles.includes('manager')) {
-      scopeFilter.push({ managerId: personId });
-    } else {
-      // Staff: on the team.
-      scopeFilter.push({ team: { some: { personId } } });
-    }
+    scopeFilter.push({
+      OR: [
+        { managerId: personId },
+        { primaryPartnerId: personId },
+        { team: { some: { personId } } },
+      ],
+    });
   }
 
   const q = filter.search?.trim();
