@@ -98,6 +98,14 @@ model FeedbackTicket {
   // (or why it was declined). Surfaces prominently in the archive
   // view so TT can audit what shipped per ticket.
   resolutionSummary String?    @db.Text
+  // Commit SHA or PR URL that carried the implementation. Set when the
+  // ticket flips to in_progress / resolved so "what's actually
+  // happening" is traceable straight from the queue, not just a word.
+  commitRef    String?
+  // Stamped when the ticket is routed to a Claude Code chat for
+  // implementation ("Send to dev"). Drives the queue's "routed" marker
+  // so an approved item can't silently sit un-picked-up.
+  routedToDevAt DateTime?
   // Stamp set when TT approves or declines.
   decidedAt    DateTime?
   // Person who approved/declined (super_admin only).

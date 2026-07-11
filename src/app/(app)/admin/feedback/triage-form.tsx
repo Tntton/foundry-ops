@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import { updateFeedbackTriage } from './actions';
+import { updateFeedbackTriage, routeTicketToDev } from './actions';
 
 const STATUS_OPTIONS = [
   { v: 'open', label: 'Open (new)' },
@@ -20,15 +20,21 @@ export function TriageForm({
   currentStatus,
   currentNotes,
   currentResolution,
+  currentCommitRef = '',
+  routedToDevAt = null,
 }: {
   id: string;
   currentStatus: string;
   currentNotes: string;
   currentResolution: string;
+  currentCommitRef?: string;
+  routedToDevAt?: string | null;
 }) {
   const [status, setStatus] = useState(currentStatus);
   const [notes, setNotes] = useState(currentNotes);
   const [resolution, setResolution] = useState(currentResolution);
+  const [commitRef, setCommitRef] = useState(currentCommitRef);
+  const [routed, setRouted] = useState<boolean>(routedToDevAt !== null);
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -36,12 +42,14 @@ export function TriageForm({
     status: string;
     triageNotes: string;
     resolutionSummary: string;
+    commitRef: string;
   }) {
     const fd = new FormData();
     fd.set('id', id);
     fd.set('status', opts.status);
     fd.set('triageNotes', opts.triageNotes);
     fd.set('resolutionSummary', opts.resolutionSummary);
+    fd.set('commitRef', opts.commitRef);
     start(async () => {
       const result = await updateFeedbackTriage({ status: 'idle' }, fd);
       if (result.status === 'error') {
@@ -54,7 +62,35 @@ export function TriageForm({
   }
 
   function save() {
-    persist({ status, triageNotes: notes, resolutionSummary: resolution });
+    persist({ status, triageNotes: notes, resolutionSummary: resolution, commitRef });
+  }
+
+  // Route to a Claude Code chat: copies the paste-ready brief to the
+  // clipboard, stamps the ticket routed + in_progress, and notifies
+  // the submitter. The copied brief goes straight into a code session.
+  function sendToDev() {
+    start(async () => {
+      const result = await routeTicketToDev(id);
+      if (result.status !== 'success') {
+        setMsg({
+          ok: false,
+          text: result.status === 'error' ? result.message : 'Failed to route',
+        });
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(result.brief);
+        setMsg({ ok: true, text: 'Brief copied — paste into Claude Code' });
+      } catch {
+        // Clipboard blocked (insecure context / gesture policy) — still
+        // routed; show the brief so it can be copied manually.
+        setMsg({ ok: true, text: 'Routed. Copy the brief from the box below.' });
+        window.prompt('Implementation brief — copy this into Claude Code:', result.brief);
+      }
+      setStatus('in_progress');
+      setRouted(true);
+      setTimeout(() => setMsg(null), 4000);
+    });
   }
 
   // Quick-close button — collapses the whole "approve → work → resolve"
@@ -76,14 +112,21 @@ export function TriageForm({
       status: 'resolved',
       triageNotes: notes,
       resolutionSummary: summary,
+      commitRef,
     });
   }
 
   const dirty =
     status !== currentStatus ||
     notes !== currentNotes ||
-    resolution !== currentResolution;
+    resolution !== currentResolution ||
+    commitRef !== currentCommitRef;
   const showResolutionField = TERMINAL_STATUSES.has(status) || resolution.length > 0;
+  // Offer "Send to Claude Code" for tickets that are greenlit but not
+  // yet terminal — the point at which they should hit a code session.
+  const canRouteToDev = !TERMINAL_STATUSES.has(status);
+  const showCommitField =
+    status === 'in_progress' || TERMINAL_STATUSES.has(status) || commitRef.length > 0;
 
   return (
     <div className="flex flex-col gap-2">
@@ -108,6 +151,22 @@ export function TriageForm({
         >
           {pending ? 'Saving…' : 'Save'}
         </button>
+        {canRouteToDev && (
+          <button
+            type="button"
+            onClick={sendToDev}
+            disabled={pending}
+            className="rounded-md border border-brand bg-brand-soft px-2.5 py-1 text-[11px] font-medium text-brand hover:opacity-90 disabled:opacity-40"
+            title="Copy a paste-ready brief to the clipboard, mark this in progress, and notify the submitter"
+          >
+            {routed ? 'Re-copy dev brief' : 'Send to Claude Code'}
+          </button>
+        )}
+        {routed && (
+          <span className="rounded-sm bg-brand-soft px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-brand">
+            routed
+          </span>
+        )}
         {!TERMINAL_STATUSES.has(currentStatus) && (
           <button
             type="button"
@@ -142,6 +201,24 @@ export function TriageForm({
           className="w-full resize-y rounded-md border border-line bg-surface-elev px-2 py-1.5 text-xs text-ink"
         />
       </div>
+
+      {/* Commit / PR link — what's actually carrying the fix. Shown
+          once the ticket is in progress or terminal so the queue can
+          trace status → code. */}
+      {showCommitField && (
+        <div>
+          <label className="mb-0.5 block text-[10px] uppercase tracking-wide text-ink-3">
+            Commit / PR (SHA or URL)
+          </label>
+          <input
+            type="text"
+            value={commitRef}
+            onChange={(e) => setCommitRef(e.target.value)}
+            placeholder="e.g. 9bb1b20 or https://github.com/Tntton/foundry-ops/commit/…"
+            className="w-full rounded-md border border-line bg-surface-elev px-2 py-1.5 font-mono text-xs text-ink"
+          />
+        </div>
+      )}
 
       {/* Resolution summary — what was actually shipped (or why
           declined). Only visible once status moves to a terminal

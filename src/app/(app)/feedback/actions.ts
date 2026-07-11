@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { writeAudit } from '@/server/audit';
+import { notifyAdminPool } from '@/server/user-updates';
 
 const FeedbackSubmit = z.object({
   urgency: z.enum(['critical', 'urgent', 'routine']),
@@ -61,6 +62,21 @@ export async function submitFeedback(
           after: { urgency: t.urgency, kind: t.kind, title: t.title },
         },
         source: 'web',
+      });
+      // Ping the admin pool (TT + admins) the moment anything is
+      // raised, so no ticket sits unseen waiting for someone to open
+      // /admin/feedback. Critical / urgent items lead the dashboard
+      // feed by their prefix.
+      const urgencyPrefix =
+        t.urgency === 'critical' ? '🔴 Critical' : t.urgency === 'urgent' ? '🟠 Urgent' : 'Routine';
+      await notifyAdminPool(tx, {
+        actorPersonId: session.person.id,
+        kind: 'generic',
+        title: `Feedback · ${urgencyPrefix} — ${t.title}`,
+        body: `${t.kind} raised by ${session.person.firstName} ${session.person.lastName}`,
+        href: '/admin/feedback',
+        entityType: 'feedback_ticket',
+        entityId: t.id,
       });
       return t;
     });

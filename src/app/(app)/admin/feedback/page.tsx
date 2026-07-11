@@ -189,6 +189,8 @@ function TicketRow({ t }: { t: Ticket }) {
           currentStatus={t.status}
           currentNotes={t.triageNotes ?? ''}
           currentResolution={t.resolutionSummary ?? ''}
+          currentCommitRef={t.commitRef ?? ''}
+          routedToDevAt={t.routedToDevAt ? t.routedToDevAt.toISOString() : null}
         />
       </div>
     </div>
