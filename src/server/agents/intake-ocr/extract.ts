@@ -26,6 +26,15 @@ export const ExtractionSchema = z.object({
   // Useful but not always present — the agent can return null.
   paymentMethod: z.string().nullable(),
   notes: z.string().nullable(),
+  // Document type (TASK-132): lets the WhatsApp router send a supplier
+  // invoice to the Bills/AP flow and a personal receipt to Expenses.
+  // Nullable + defaulted so existing callers (/bills/intake) that don't
+  // read it are unaffected, and a model that omits it degrades to
+  // 'unknown' (→ ask the user) rather than misrouting.
+  documentType: z
+    .enum(['receipt', 'supplier_invoice', 'unknown'])
+    .nullable()
+    .default('unknown'),
   // Per-field confidence: each entry is optional (the agent may legitimately
   // omit a confidence score for a field it returned as null). Missing keys
   // default to 0 in the review pane, and we only mandate `overall` so the
@@ -63,6 +72,11 @@ Rules:
 - ABN: 11 digits. Strip spaces. Return null if missing.
 - "invoiceNumber": the supplier's reference (e.g. "HS-2041", "Receipt #zjj7", "INV-2026-042"). Return the receipt / ticket number if there's no formal invoice number.
 - Confidence (0-100): how sure are you about each field. 99 = printed clearly. 70-90 = likely correct but worth a glance. <50 = uncertain or inferred. "overall" is mandatory — a simple average of the field confidences for the fields you returned. Per-field confidences are optional; only emit a key for fields you actually returned a value for. Don't emit a confidence score for a field you returned as null.
+- "documentType": classify the document as one of:
+   • "supplier_invoice" — a bill FROM a supplier/contractor TO the business, payable later. Signals: an invoice number, an ABN, payment terms / "due date", "TAX INVOICE" with bank/BPAY payment details, bill-to/pay-to addressing.
+   • "receipt" — proof of a purchase already PAID (card/EFTPOS/cash), typically to be reimbursed. Signals: card-payment line, "PAID"/"CHANGE"/"EFTPOS", point-of-sale layout, no payment-due terms.
+   • "unknown" — genuinely ambiguous or unreadable.
+  Set confidence.documentType (0-100) for how sure you are.
 
 Return null for any field you cannot read. Do not invent.`;
 
