@@ -20,6 +20,8 @@ import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { ArchiveProjectButton, ReactivateProjectButton } from './archive/dialog';
 import { ProjectChecklistsPanel } from './checklists/panel';
+import { RiskRegister } from './risks/register';
+import { ProjectLevelSummary } from './project-summary';
 import { ProjectHoursPanel } from './hours/panel';
 import { listProjectTimesheetEntries } from '@/server/timesheet';
 import { computeProjectOverviewExtras } from '@/server/projects/overview';
@@ -100,23 +102,30 @@ export default async function ProjectDetailPage({
         orderBy: { order: 'asc' },
         include: { items: { orderBy: { order: 'asc' } } },
       },
+      risks: {
+        orderBy: [{ status: 'asc' }, { severity: 'desc' }, { createdAt: 'desc' }],
+      },
     },
   });
 
   if (!project) notFound();
 
-  // Role-scope check: non-privileged viewers see a project when they're
-  // connected to it in ANY capacity — team member, manager of record,
-  // or lead partner (primaryPartnerId, covers associate partners).
-  // Mirrors listProjects' scoping so the list and the detail page can
-  // never disagree about what someone can open.
+  // Project-level visibility is firm-wide (per TT, 2026-07-20): any
+  // signed-in user can open any project. What they SEE depends on their
+  // connection to it:
+  //   • Firm leaders (super_admin / admin / partner) — full tabbed view.
+  //   • People connected to the project (team member, manager of record,
+  //     or lead partner — covers associate partners) — full tabbed view.
+  //   • Everyone else — a read-only project-level summary (identity +
+  //     leadership + window), with all ops/commercial detail withheld.
   const roles = session.person.roles;
   const canSeeAll = roles.some((r) => ['super_admin', 'admin', 'partner'].includes(r));
-  if (!canSeeAll) {
-    const onTeam = project.team.some((t) => t.personId === session.person.id);
-    const isManager = project.managerId === session.person.id;
-    const isLead = project.primaryPartnerId === session.person.id;
-    if (!onTeam && !isManager && !isLead) notFound();
+  const isConnected =
+    project.team.some((t) => t.personId === session.person.id) ||
+    project.managerId === session.person.id ||
+    project.primaryPartnerId === session.person.id;
+  if (!canSeeAll && !isConnected) {
+    return <ProjectLevelSummary project={project} />;
   }
 
   // Internal FH projects (FHP series) have no client revenue, so the
@@ -186,7 +195,10 @@ export default async function ProjectDetailPage({
   const projectTimesheetEntries = await listProjectTimesheetEntries(project.id);
   const overviewExtras = await computeProjectOverviewExtras(project.id);
   const teamMemberIds = new Set(project.team.map((t) => t.personId));
-  const peopleOptionsRaw = canEditProject ? await listActivePeopleOptions() : [];
+  // Fetched unconditionally: viewers (not just editors) need it to
+  // resolve risk owners and checklist assignees for display. Editors
+  // additionally get the team-add picker built from it below.
+  const peopleOptionsRaw = await listActivePeopleOptions();
   const teamAddOptions = peopleOptionsRaw.filter(
     (p) => !teamMemberIds.has(p.id) && p.id !== project.primaryPartnerId && p.id !== project.managerId,
   );
@@ -704,7 +716,15 @@ export default async function ProjectDetailPage({
                 label: i.label,
                 done: i.done,
                 doneAt: i.doneAt,
+                assigneeId: i.assigneeId,
               })),
+            }))}
+            people={peopleOptionsRaw.map((p) => ({
+              id: p.id,
+              initials: p.initials,
+              headshotUrl: p.headshotUrl,
+              firstName: p.firstName,
+              lastName: p.lastName,
             }))}
             canEdit={canEditProject}
           />
@@ -755,17 +775,18 @@ export default async function ProjectDetailPage({
         </TabsContent>
 
         <TabsContent value="risks">
-          <Card>
-            <CardContent className="py-6 text-center text-sm text-ink-3">
-              Risk register is managed on its own page.{' '}
-              <Link
-                href={`/projects/${project.code}/risks`}
-                className="text-brand hover:underline"
-              >
-                Open risk register →
-              </Link>
-            </CardContent>
-          </Card>
+          <RiskRegister
+            projectId={project.id}
+            risks={project.risks}
+            people={peopleOptionsRaw.map((p) => ({
+              id: p.id,
+              initials: p.initials,
+              headshotUrl: p.headshotUrl,
+              firstName: p.firstName,
+              lastName: p.lastName,
+            }))}
+            canEdit={canEditProject}
+          />
         </TabsContent>
 
         <TabsContent value="files">
