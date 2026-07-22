@@ -1,6 +1,84 @@
 import { prisma } from '@/server/db';
 import type { FeedbackStatus, FeedbackUrgency, FeedbackKind } from '@prisma/client';
 
+function feedbackAppBaseUrl(): string {
+  return process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://ops.foundry.health';
+}
+
+export type CriticalFeedbackWhatsAppInput = {
+  title: string;
+  kind: FeedbackKind;
+  submitterName: string;
+  appBaseUrl: string;
+};
+
+/**
+ * Copy for the WhatsApp DM a Super Admin receives when a *critical*
+ * feedback ticket is raised. Pure so it's unit-testable without the
+ * network. Leads with the urgency marker, states what and who, and
+ * deep-links to the triage surface where the action actually happens
+ * (WhatsApp is the nudge; the decision stays web-only per the
+ * high-value approval policy). Kept short — it renders on a phone.
+ */
+export function buildCriticalFeedbackWhatsApp(
+  input: CriticalFeedbackWhatsAppInput,
+): string {
+  return (
+    `🔴 Foundry Ops · CRITICAL feedback needs action` +
+    `\n${input.title}` +
+    `\n${input.kind} · raised by ${input.submitterName}` +
+    `\nTriage: ${input.appBaseUrl}/admin/feedback`
+  );
+}
+
+/**
+ * WhatsApp side-channel for critical feedback (mirrors the approval
+ * side-channel in notifyApproversOfNewApproval). When a ticket is
+ * raised at `critical` urgency, DM every active Super Admin who has a
+ * WhatsApp number on file (excluding the submitter) so it can't sit
+ * unseen in the in-app feed. Fire-and-forget + best-effort: a send
+ * failure is logged, never thrown — the in-app notifyAdminPool row is
+ * the source of truth. No-op when WhatsApp isn't configured.
+ */
+export async function notifySuperAdminsOfCriticalFeedbackWhatsApp(opts: {
+  title: string;
+  kind: FeedbackKind;
+  submitterId: string;
+  submitterName: string;
+}): Promise<void> {
+  const supers = await prisma.person.findMany({
+    where: {
+      endDate: null,
+      inactiveAt: null,
+      roles: { has: 'super_admin' },
+      id: { not: opts.submitterId },
+      whatsappNumber: { not: null },
+    },
+    select: { id: true, whatsappNumber: true },
+  });
+  if (supers.length === 0) return;
+
+  const { isWhatsAppConfigured, sendWhatsAppText } = await import(
+    '@/server/integrations/whatsapp'
+  );
+  if (!isWhatsAppConfigured()) return;
+
+  const message = buildCriticalFeedbackWhatsApp({
+    title: opts.title,
+    kind: opts.kind,
+    submitterName: opts.submitterName,
+    appBaseUrl: feedbackAppBaseUrl(),
+  });
+  for (const p of supers) {
+    if (!p.whatsappNumber) continue;
+    try {
+      await sendWhatsAppText(p.whatsappNumber, message);
+    } catch (err) {
+      console.error('[whatsapp.critical-feedback] failed for', p.id, err);
+    }
+  }
+}
+
 export type FeedbackPipelineCard = {
   id: string;
   title: string;

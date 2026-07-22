@@ -21,6 +21,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatFte, formatRateCents } from '@/lib/format';
 import { countryName } from '@/lib/countries';
+import { waLink } from '@/lib/phone';
 import {
   listPersonTimesheetEntries,
   listContractorBillableEntries,
@@ -504,24 +505,30 @@ export default async function PersonDetailPage({
                 <span className="font-mono">{person.email}</span>
               </Field>
               <Field label="Phone">
-                <InlineField
-                  personId={person.id}
-                  field="phone"
-                  type="tel"
-                  initialValue={person.phone}
-                  canEdit={canInlineEdit}
-                  placeholder="+61 4xx xxx xxx"
-                />
+                <div className="flex items-center gap-2">
+                  <InlineField
+                    personId={person.id}
+                    field="phone"
+                    type="tel"
+                    initialValue={person.phone}
+                    canEdit={canInlineEdit}
+                    placeholder="+61 4xx xxx xxx"
+                  />
+                  <WhatsAppLink number={person.phone} />
+                </div>
               </Field>
               <Field label="WhatsApp">
-                <InlineField
-                  personId={person.id}
-                  field="whatsappNumber"
-                  type="tel"
-                  initialValue={person.whatsappNumber}
-                  canEdit={canInlineEdit}
-                  placeholder="+61 4xx xxx xxx"
-                />
+                <div className="flex items-center gap-2">
+                  <InlineField
+                    personId={person.id}
+                    field="whatsappNumber"
+                    type="tel"
+                    initialValue={person.whatsappNumber}
+                    canEdit={canInlineEdit}
+                    placeholder="+61 4xx xxx xxx"
+                  />
+                  <WhatsAppLink number={person.whatsappNumber} />
+                </div>
               </Field>
               <Field label="LinkedIn">
                 <InlineField
@@ -977,6 +984,24 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <div className="text-ink-3">{label}</div>
       <div className="text-ink">{children}</div>
     </div>
+  );
+}
+
+/** Tap-to-chat WhatsApp link, rendered next to a phone / WhatsApp
+ *  number. Hidden when the number has no usable digits. */
+function WhatsAppLink({ number }: { number: string | null }) {
+  const href = waLink(number);
+  if (!href) return null;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title="Open in WhatsApp"
+      className="shrink-0 text-xs font-medium text-status-green hover:underline"
+    >
+      WhatsApp ↗
+    </a>
   );
 }
 

@@ -119,8 +119,10 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   'person.delete': ['super_admin'],
   'client.create': ['super_admin', 'admin', 'partner', 'associate_partner'],
   'client.edit': ['super_admin', 'admin', 'partner', 'associate_partner'],
-  'deal.create': ['super_admin', 'admin', 'partner', 'associate_partner'],
-  'deal.edit': ['super_admin', 'admin', 'partner', 'associate_partner'],
+  // Managers get full BD pipeline edit rights (per TT, 2026-07-20) —
+  // this cascades to every deal server action + the create/move/edit UI.
+  'deal.create': ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'],
+  'deal.edit': ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'],
   // Client hard-delete: super_admin only, and handler refuses if the client has
   // any projects / deals / invoices attached. No soft-archive yet — add it with
   // a migration when mid-engagement "close" becomes a need.
