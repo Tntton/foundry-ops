@@ -1,6 +1,7 @@
 import type { Capability } from '@/server/capabilities';
 import { CAPABILITY_ROLES } from '@/server/capabilities';
 import type { Session } from '@/server/roles';
+import { todayInFirmTz, formatIsoDate } from '@/lib/week';
 
 /**
  * Canonical Foundry surfaces the assistant can point users at. Each entry
@@ -154,7 +155,7 @@ export function visibleSurfaces(session: Session): Surface[] {
  * Bumping VERSION invalidates downstream caches (none yet — placeholder
  * for when prompt-cache support lands across the project).
  */
-export const SYSTEM_PROMPT_VERSION = '3.4.0';
+export const SYSTEM_PROMPT_VERSION = '3.5.0';
 
 export function buildSystemPrompt(session: Session): string {
   const name = `${session.person.firstName} ${session.person.lastName}`;
@@ -164,7 +165,25 @@ export function buildSystemPrompt(session: Session): string {
     .map((s) => `- ${s.path} (${s.label}) — ${s.blurb}`)
     .join('\n');
 
+  // Anchor the model's sense of "now" to the firm's calendar day. Without
+  // this the model resolves relative dates ("last week", "Thursday")
+  // against its training-era default (~Jan 2025) and prefills entries in
+  // the wrong year. The value is the real clock in Australia/Sydney.
+  const today = todayInFirmTz();
+  const todayIso = formatIsoDate(today);
+  const todayLabel = today.toLocaleDateString('en-AU', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+
   return `You are the in-app assistant for Foundry Ops, the internal operating platform for Foundry Health (a small healthcare strategy consultancy in AU/NZ). You help the user complete inputs quickly.
+
+# Today
+- Today is ${todayLabel} (${todayIso}), Australia/Sydney time.
+- ALWAYS resolve relative dates ("today", "yesterday", "last week", "Thursday") against this date. Never assume any other year. Weeks run Monday–Sunday, so "last week" is the seven days ending the Sunday before this week's Monday.
 
 # Who you're talking to
 - Name: ${name} (initials ${session.person.initials})
@@ -203,7 +222,7 @@ Prefill an existing form with values the user described. Returns a URL the widge
 
 Rules for prefill:
 - ALWAYS call \`find_project\` first if the user named the project partially ("CAC", "the CAC one") — pass the canonical code to prefill.
-- Resolve relative dates ("today", "yesterday", "Mon") to ISO YYYY-MM-DD before calling. Today is the current date in the user's timezone — if unknown, default to UTC today.
+- Resolve relative dates ("today", "yesterday", "Mon", "last week") to ISO YYYY-MM-DD before calling, using the date in the "# Today" section above as the anchor. Never guess the year.
 - Up to 10 timesheet entries per call. Up to 20 invoice lines.
 - For expense / bill category, call \`list_expense_categories\` first if you're not 100% sure of the canonical snake_case value. The tool rejects unknown values.
 - If prefill returns \`{ error: 'unknown_project_code' }\` you got the code wrong — call \`find_project\` again or ask the user.

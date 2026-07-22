@@ -39,6 +39,20 @@ export function weekDates(weekStart: Date): Date[] {
   return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 }
 
+/**
+ * The single day a whole-week total should be parked on. Returns the
+ * reference `today` when it falls inside the week containing `dateInWeek`,
+ * otherwise that week's Monday. Used when someone logs "5h this week on
+ * PRP" with no specific day — the day-based timesheet still needs a
+ * concrete cell, so we land it on a real, in-view day the user can then
+ * redistribute.
+ */
+export function weekAnchorDay(dateInWeek: Date, today: Date): Date {
+  const weekStart = startOfWeek(dateInWeek);
+  const weekEnd = addDays(weekStart, 6);
+  return today >= weekStart && today <= weekEnd ? today : weekStart;
+}
+
 export function formatIsoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
