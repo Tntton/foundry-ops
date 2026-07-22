@@ -647,6 +647,66 @@ async function handleStatusCheck(
   );
 }
 
+// ─── Unknown sender ───────────────────────────────────────────────────
+
+/**
+ * Copy sent back to a sender we can't match to an active Person.
+ * Deliberately generic: it must not confirm or deny who is registered
+ * (the number could be a wrong-number stranger, not a teammate), while
+ * still telling a real teammate what to do. Kept as a pure function so
+ * it's unit-testable without the DB.
+ */
+export function unknownSenderReply(): string {
+  return `👋 Thanks for messaging Foundry Ops. I don't recognise this number, so I can't action anything yet.
+If you're on the team, ask an admin to add your WhatsApp number (in *+61…* format) to your profile in the Directory — then message me again.`;
+}
+
+/**
+ * Handle an inbound from a phone that matches no active Person. These
+ * used to be dropped in total silence — no reply, no log — which to a
+ * sender looked like the agent was broken (and gave admins no trail of
+ * who tried). Now we:
+ *   1. record the attempt as a *system* AuditEvent (actorId is a Person
+ *      FK, so an unknown sender can't be the actor) keyed on the wamid so
+ *      Meta re-deliveries don't double-log, and
+ *   2. send one generic bounce-back. We're allowed to reply because the
+ *      sender messaged us first (inside Meta's 24h service window).
+ */
+async function handleUnknownSender(message: IncomingMessage): Promise<void> {
+  // Dedupe Meta re-deliveries of the same wamid so a retried delivery
+  // doesn't double-audit or double-reply. Uses the
+  // (entityType, entityId) index on AuditEvent.
+  if (message.providerId) {
+    const seen = await prisma.auditEvent.findFirst({
+      where: { entityType: 'whatsapp_inbound', entityId: message.providerId },
+      select: { id: true },
+    });
+    if (seen) return;
+  }
+  await prisma.$transaction(async (tx) => {
+    await writeAudit(tx, {
+      actor: { type: 'system' },
+      action: 'rejected',
+      entity: {
+        type: 'whatsapp_inbound',
+        id: message.providerId || message.fromPhone,
+        after: {
+          reason: 'unknown_sender',
+          fromPhone: message.fromPhone,
+          hadMedia: message.mediaId !== null,
+          textPreview: message.text ? message.text.slice(0, 80) : null,
+        },
+      },
+      source: 'agent',
+    });
+  });
+  try {
+    await sendWhatsAppText(message.fromPhone, unknownSenderReply());
+  } catch (err) {
+    console.error('[whatsapp.unknownSender] bounce-back failed:', err);
+  }
+}
+
 // ─── Top-level dispatcher ─────────────────────────────────────────────
 
 export async function handleIncomingWhatsAppMessage(
@@ -654,6 +714,7 @@ export async function handleIncomingWhatsAppMessage(
 ): Promise<{ ok: boolean; reason?: string }> {
   const person = await resolvePerson(message.fromPhone);
   if (!person) {
+    await handleUnknownSender(message);
     return { ok: false, reason: 'unknown sender' };
   }
   if (person.endDate !== null) {
