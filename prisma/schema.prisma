@@ -873,12 +873,14 @@ model ProjectChecklistItem {
   order        Int      @default(0)
   doneAt       DateTime?
   doneById     String?
+  assigneeId   String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   checklist    ProjectChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
 
   @@index([checklistId])
+  @@index([assigneeId])
 }
 
 model ProjectTeam {
