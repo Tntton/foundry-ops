@@ -84,6 +84,11 @@ describe('Manager — can approve expenses under $2k (own project enforced elsew
   it('cannot edit rate card', () => {
     expect(hasCapability(s, 'ratecard.edit')).toBe(false);
   });
+
+  it('has full BD pipeline edit rights (per TT, 2026-07-20)', () => {
+    expect(hasCapability(s, 'deal.create')).toBe(true);
+    expect(hasCapability(s, 'deal.edit')).toBe(true);
+  });
 });
 
 describe('Partner — approves under-threshold invoices, creates projects', () => {

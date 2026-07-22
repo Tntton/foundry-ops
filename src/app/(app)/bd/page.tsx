@@ -76,7 +76,7 @@ export default async function BdPipelinePage({
   };
 }) {
   const session = await getSession();
-  if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
+  if (!hasAnyRole(session, ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'])) notFound();
 
   const canCreate = hasCapability(session, 'deal.create');
   // Commercial values hidden by default — partners flip on for private
