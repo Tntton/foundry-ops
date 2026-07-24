@@ -4,14 +4,19 @@ import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
+import { writeAudit } from '@/server/audit';
 import { getAvailabilityForecast } from '@/server/timesheet';
 import { loadAvailabilityForPerson } from '@/server/availability';
+import { verifyPrefillToken } from '@/server/agents/assistant/prefill/token';
+import { AvailabilityPrefillSchema } from '@/server/agents/assistant/prefill/schemas';
+import { applyAvailabilityPrefill } from '@/server/agents/assistant/prefill/apply-availability';
 import { addDays, startOfWeek, todayInFirmTz } from '@/lib/week';
 import { PersonAvatar } from '@/components/person-avatar';
+import { PrefillBanner } from '@/components/prefill-banner';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { AvailabilityEditor } from './availability-editor';
+import { AvailabilityEditor, type AvailabilityDayInput } from './availability-editor';
 import { AvailabilityPersonPicker } from './person-picker';
 import { RegularDaysEditor } from './regular-days-editor';
 import { ScheduleTable } from './schedule-table';
@@ -34,7 +39,7 @@ import { ScheduleTable } from './schedule-table';
 export default async function AvailabilityPage({
   searchParams,
 }: {
-  searchParams: { personId?: string };
+  searchParams: { personId?: string; prefill?: string };
 }) {
   const session = await getSession();
   if (!session || !hasCapability(session, 'timesheet.submit')) notFound();
@@ -181,6 +186,77 @@ export default async function AvailabilityPage({
     target.id,
     EDITOR_WEEKS,
   );
+
+  // ─── Assistant prefill (#11) ─────────────────────────────────────────
+  // The assistant signs a one-time token of per-day hours. Verify +
+  // merge into the cells BEFORE handing them to the editor so the grid
+  // lands pre-populated. Self-only (never on-behalf) and best-effort:
+  // failures leave the grid untouched and surface a small notice.
+  let prefillCells: AvailabilityDayInput[] = initialCells;
+  let prefillSummary: string | null = null;
+  let prefillIgnored:
+    | ReadonlyArray<{ dateIso: string; reason: string }>
+    | undefined;
+  let prefillNotice: string | null = null;
+  if (searchParams.prefill && target.id === session.person.id) {
+    const verify = verifyPrefillToken(searchParams.prefill, {
+      personId: session.person.id,
+      kind: 'availability',
+    });
+    if (verify.ok) {
+      const payloadCheck = AvailabilityPrefillSchema.safeParse(
+        verify.payload.payload,
+      );
+      if (payloadCheck.success) {
+        const result = applyAvailabilityPrefill(initialCells, payloadCheck.data);
+        prefillCells = result.cells;
+        prefillIgnored =
+          result.ignored.length > 0 ? result.ignored : undefined;
+        const totalH = result.applied.reduce((s, a) => s + a.hours, 0);
+        prefillSummary =
+          result.applied.length > 0
+            ? `${result.applied.length} day${result.applied.length === 1 ? '' : 's'} · ${totalH}h — review and save.`
+            : 'Nothing to populate — the prefilled dates fell outside the 8-week horizon.';
+        try {
+          await prisma.$transaction(async (tx) => {
+            await writeAudit(tx, {
+              actor: { type: 'person', id: session.person.id },
+              action: 'redeemed',
+              entity: {
+                type: 'assistant_prefill',
+                id: `${session.person.id}:availability:${verify.payload.jti}`,
+                after: {
+                  kind: 'availability',
+                  applied: result.applied,
+                  ignored: result.ignored,
+                  jti: verify.payload.jti,
+                },
+              },
+              source: 'agent',
+            });
+          });
+        } catch (err) {
+          console.error('[availability.prefill] audit redeem failed:', err);
+        }
+      } else {
+        prefillNotice =
+          'Prefill payload malformed — opened availability without changes.';
+      }
+    } else if (verify.reason === 'expired') {
+      prefillNotice =
+        'Prefill link expired (15-min TTL). Ask the assistant for a fresh one.';
+    } else if (verify.reason === 'wrong_person') {
+      prefillNotice = "That prefill link wasn't minted for your account.";
+    } else {
+      prefillNotice =
+        'Prefill link invalid — opened availability without changes.';
+    }
+  }
+  // URL the banner's "Undo" navigates to — same page, no prefill param.
+  const cleanUrl =
+    actingOnBehalf && searchParams.personId
+      ? `/availability?personId=${searchParams.personId}`
+      : '/availability';
   const editorWeeks = Array.from({ length: EDITOR_WEEKS }, (_, i) => {
     const ws = addDays(horizonStart, i * 7);
     return {
@@ -432,25 +508,39 @@ export default async function AvailabilityPage({
           </span>
         </div>
       ) : (
-        <AvailabilityEditor
-          // Remount when the person or their regular-days schedule
-          // changes so the grid re-seeds its pre-filled defaults
-          // immediately after a regular-days save (the editor holds
-          // cell state in useState, which ignores prop updates).
-          key={`${target.id}:${JSON.stringify(regularDays)}`}
-          personId={target.id}
-          targetFirstName={
-            target.id === session.person.id ? 'You' : target.firstName
-          }
-          weeklyCapacityHours={targetCapacityHours}
-          weeks={editorWeeks}
-          initialCells={initialCells}
-          allocatableProjects={sortedProjects.map((p) => ({
-            id: p.id,
-            code: p.code,
-            name: p.name,
-          }))}
-        />
+        <>
+          {prefillSummary && (
+            <PrefillBanner
+              summary={prefillSummary}
+              cleanUrl={cleanUrl}
+              ignored={prefillIgnored}
+            />
+          )}
+          {prefillNotice && !prefillSummary && (
+            <div className="rounded-md border border-status-amber bg-status-amber-soft/40 px-3 py-2 text-xs text-status-amber">
+              {prefillNotice}
+            </div>
+          )}
+          <AvailabilityEditor
+            // Remount when the person, their regular-days schedule, or an
+            // applied prefill changes so the grid re-seeds its cell state
+            // (the editor holds cells in useState, which ignores prop
+            // updates after mount).
+            key={`${target.id}:${JSON.stringify(regularDays)}:${searchParams.prefill ? 'pf' : 'nf'}`}
+            personId={target.id}
+            targetFirstName={
+              target.id === session.person.id ? 'You' : target.firstName
+            }
+            weeklyCapacityHours={targetCapacityHours}
+            weeks={editorWeeks}
+            initialCells={prefillCells}
+            allocatableProjects={sortedProjects.map((p) => ({
+              id: p.id,
+              code: p.code,
+              name: p.name,
+            }))}
+          />
+        </>
       )}
 
       {/* ── Read-only schedule + booked ──────────────────────────── */}
