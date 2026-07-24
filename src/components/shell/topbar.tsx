@@ -10,7 +10,7 @@ export function Topbar({
   email,
   headshotUrl,
   roles,
-  isRealSuperAdmin,
+  viewAsChoices,
   viewAsRoles,
 }: {
   initials: string;
@@ -21,9 +21,9 @@ export function Topbar({
    *  name/email in the user menu pill so the signed-in person can see
    *  their permission level at a glance. */
   roles: readonly Role[];
-  /** The signed-in person actually holds super_admin (independent of
-   *  the view-as overlay). Drives the "View as" picker visibility. */
-  isRealSuperAdmin: boolean;
+  /** Single-role overlays this person may preview (already clamped to
+   *  strict capability downgrades server-side). Empty → no picker. */
+  viewAsChoices: Role[];
   /** Active overlay (or null). Drives the "Exit view-as" affordance. */
   viewAsRoles: Role[] | null;
 }) {
@@ -48,7 +48,7 @@ export function Topbar({
           email={email}
           headshotUrl={headshotUrl}
           roles={roles}
-          isRealSuperAdmin={isRealSuperAdmin}
+          viewAsChoices={viewAsChoices}
           viewAsRoles={viewAsRoles}
         />
       </div>

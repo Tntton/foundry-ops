@@ -15,18 +15,12 @@ import { setViewAsRoles } from '@/app/(app)/me/view-as-action';
  * Profile picture: `headshotUrl` drives the avatar image; falls back to
  * the person's initials when unset.
  *
- * View-as: only shown when the underlying user is a real super_admin.
+ * View-as: shown when `viewAsChoices` is non-empty (super_admins and
+ * admins — the server clamps the list to strict capability downgrades).
  * Setting an overlay reloads the view (cookie + revalidate) so the
  * sidebar / pages immediately reflect the pretended role-set; an
  * "Exit view-as" item replaces the picker while the overlay is active.
  */
-
-const VIEW_AS_OPTIONS: Array<{ label: string; roles: Role[] }> = [
-  { label: 'Admin', roles: ['admin'] },
-  { label: 'Partner', roles: ['partner'] },
-  { label: 'Manager', roles: ['manager'] },
-  { label: 'Staff', roles: ['staff'] },
-];
 
 /**
  * Map a Role to its human-readable label. Super-admin gets a hyphen
@@ -71,7 +65,7 @@ export function UserMenu({
   email,
   headshotUrl,
   roles,
-  isRealSuperAdmin,
+  viewAsChoices,
   viewAsRoles,
 }: {
   initials: string;
@@ -79,7 +73,9 @@ export function UserMenu({
   email: string;
   headshotUrl: string | null;
   roles: readonly Role[];
-  isRealSuperAdmin: boolean;
+  /** Single-role overlays this person may preview, clamped server-side
+   *  to strict capability downgrades. Empty → the picker is hidden. */
+  viewAsChoices: Role[];
   viewAsRoles: Role[] | null;
 }) {
   const [open, setOpen] = useState(false);
@@ -124,11 +120,7 @@ export function UserMenu({
   const activeRoles: Role[] | null = viewAsRoles ?? null;
   const isViewing = activeRoles !== null && activeRoles.length > 0;
   const viewAsLabel = isViewing
-    ? VIEW_AS_OPTIONS.find(
-        (o) =>
-          o.roles.length === activeRoles!.length &&
-          o.roles.every((r) => activeRoles!.includes(r)),
-      )?.label ?? activeRoles!.join(' + ')
+    ? activeRoles!.map((r) => ROLE_LABEL[r]).join(' + ')
     : null;
 
   return (
@@ -198,31 +190,31 @@ export function UserMenu({
             My profile
           </Link>
 
-          {isRealSuperAdmin && (
+          {viewAsChoices.length > 0 && (
             <div className="border-t border-line bg-surface-subtle/40">
               <div className="px-3 pt-2 text-[10px] font-semibold uppercase tracking-wider text-ink-3">
                 View as
               </div>
               <div className="px-1 py-1">
-                {VIEW_AS_OPTIONS.map((opt) => {
+                {viewAsChoices.map((role) => {
                   const isCurrent =
                     isViewing &&
-                    opt.roles.length === activeRoles!.length &&
-                    opt.roles.every((r) => activeRoles!.includes(r));
+                    activeRoles!.length === 1 &&
+                    activeRoles![0] === role;
                   return (
                     <button
-                      key={opt.label}
+                      key={role}
                       type="button"
                       role="menuitem"
                       disabled={viewAsPending || isCurrent}
-                      onClick={() => applyViewAs(opt.roles)}
+                      onClick={() => applyViewAs([role])}
                       className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-sm transition-colors ${
                         isCurrent
                           ? 'bg-status-amber-soft text-status-amber'
                           : 'text-ink-2 hover:bg-surface-hover hover:text-ink'
                       } disabled:cursor-not-allowed`}
                     >
-                      <span>{opt.label}</span>
+                      <span>{ROLE_LABEL[role]}</span>
                       {isCurrent && (
                         <span className="text-[10px] uppercase tracking-wide">
                           Active
