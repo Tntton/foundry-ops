@@ -25,7 +25,7 @@ export default async function PersonnelImportPage({
 
   // Preview stage — read the stashed parse result by token + user.
   if (searchParams.stage === 'preview' && searchParams.token) {
-    const preview = readPersonnel(session.person.id, searchParams.token);
+    const preview = await readPersonnel(session.person.id, searchParams.token);
     if (!preview) {
       return (
         <div className="space-y-4">

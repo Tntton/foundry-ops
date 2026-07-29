@@ -157,7 +157,7 @@ export async function dispatchBulkCsv(input: {
     if (kind === 'timesheets') {
       const r = await buildTimesheetPreview(input.csvText, input.fileName);
       if (!r.ok) return { ok: false, error: r.error.message };
-      const token = stashTimesheets(personId, r.preview);
+      const token = await stashTimesheets(personId, r.preview);
       return {
         ok: true,
         kind,
@@ -173,7 +173,7 @@ export async function dispatchBulkCsv(input: {
     if (kind === 'personnel') {
       const r = await buildPersonnelPreview(input.csvText, input.fileName);
       if (!r.ok) return { ok: false, error: r.error.message };
-      const token = stashPersonnel(personId, r.preview);
+      const token = await stashPersonnel(personId, r.preview);
       // Personnel uses new/update/error counts (upsert semantics) rather
       // than accepted/rejected. Sum them for the caller-facing counts +
       // give a slightly different summary sentence.
@@ -193,7 +193,7 @@ export async function dispatchBulkCsv(input: {
     if (kind === 'bills') {
       const r = await buildBillsPreview(input.csvText, input.fileName);
       if (!r.ok) return { ok: false, error: r.error.message };
-      const token = stashBills(personId, r.preview);
+      const token = await stashBills(personId, r.preview);
       return {
         ok: true,
         kind,
@@ -209,7 +209,7 @@ export async function dispatchBulkCsv(input: {
     // expenses
     const r = await buildExpensesPreview(input.csvText, input.fileName);
     if (!r.ok) return { ok: false, error: r.error.message };
-    const token = stashExpenses(personId, r.preview);
+    const token = await stashExpenses(personId, r.preview);
     return {
       ok: true,
       kind,

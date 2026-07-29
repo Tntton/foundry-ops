@@ -1387,8 +1387,20 @@ A secondary, smaller surface of `propose_*` tools handles low-field one-shot act
 - [x] `personalEmail` may equal the person's own work email; an explicitly-provided *different* `@foundry.health` address is still rejected (guards against pasting the wrong mailbox).
 - [x] On **update**, a blank CSV cell leaves the existing DB value untouched (rate, fte, roles, phone, whatsappNumber, personalEmail, linkedinUrl). The `ft`-needs-`fte` rule now applies to **new** rows only. Preview diff reflects the skip (no phantom rate→$0 rows).
 - [x] Tests: new-contractor-blank-personalEmail passes; update-with-blank-fields yields an empty diff; own-work-email allowed / other-foundry-address rejected. Full suite green.
-- [ ] Commit: `feat(TASK-304): personnel import — optional personal email + non-destructive updates`.
-- [ ] Hand-off: JN (or TT) re-uploads the same CSV at /admin/import/personnel → preview shows 0 errors → Commit. (Checkout can't reach prod DB; the platform is the authoritative write path per A1 + writes the A9 audit event.)
+- [x] Commit: `feat(TASK-304): personnel import — optional personal email + non-destructive updates` (PR #4, merged + deployed to prod).
+- [ ] Hand-off: JN (or TT) re-uploads the same CSV at /admin/import/personnel → preview shows 0 errors → Commit. (Checkout can't reach prod DB; the platform is the authoritative write path per A1 + writes the A9 audit event.) **Blocked in prod by the preview-cache bug — see TASK-305.**
+
+### TASK-305 — Bulk-import dry-run cache: DB-backed (serverless-safe)
+**status:** doing
+**framing:** With TASK-304's validation fixed, the import still failed at Commit in prod with "preview expired or already committed". Root cause: the parse → preview → Commit flow stashed the validated preview in a per-process in-memory Map ([cache.ts](src/server/imports/cache.ts)). On Vercel the parse and Commit requests are separate serverless invocations that land on different instances, so Commit couldn't find the stash — intermittently, presenting as "expired". Affects all four import surfaces (personnel, timesheets, bills, expenses). TT decision (2026-07-25): back the cache with a DB table — the fix the cache.ts comment already anticipated.
+
+- [x] New `ImportDryRun` model (token PK, userId, kind, data Json, expiresAt, createdAt) + migration `20260729000000_add_import_dry_run`.
+- [x] `cache.ts` rewritten to stash/read/discard via Prisma (async); 10-min TTL preserved; opportunistic GC of expired rows; reads still bound to (token, kind, userId). All four preview shapes are JSON-safe (ISO date strings + number dollars) so they round-trip through `jsonb`.
+- [x] All callers awaited: personnel/timesheets/bills/expenses parse+commit actions + preview pages, and the assistant bulk-csv dispatch.
+- [x] prisma validate + generate clean; tsc clean; full suite green (342); lint clean.
+- [ ] Commit: `feat(TASK-305): DB-backed bulk-import dry-run cache`.
+- [ ] Prod migration: `prisma migrate deploy` against prod — auto-runs on the Vercel production build **iff `DIRECT_URL` is set** (see [vercel-build.mjs](scripts/vercel-build.mjs)); otherwise manual. The table must exist before the next import or parse throws P2021.
+- [ ] Hand-off: after deploy + migration, re-drop the CSV → preview (35 new · 0 errors) → Commit now sticks.
 
 ---
 
