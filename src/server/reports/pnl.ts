@@ -1,5 +1,6 @@
 import { prisma } from '@/server/db';
 import { listTestProjectIds, TEST_PROJECT_PREFIX } from '@/server/test-projects';
+import { invoiceRevenueByProject } from '@/server/invoice-attribution';
 
 export type PerProjectPnL = {
   projectId: string;
@@ -210,6 +211,11 @@ export async function computeFirmPnL(opts?: FirmPnLOpts): Promise<FirmPnL> {
         amountExGst: true,
         status: true,
         issueDate: true,
+        // Per-line project attribution (feedback #12B, Option C): a line
+        // may draw from a sibling project of the same client. Revenue is
+        // attributed by line project (falling back to the header) via
+        // invoiceRevenueByProject.
+        lineItems: { select: { projectId: true, amount: true } },
       },
     }),
     prisma.expense.findMany({
@@ -305,12 +311,23 @@ export async function computeFirmPnL(opts?: FirmPnLOpts): Promise<FirmPnL> {
   }
 
   for (const inv of invoices) {
-    const row = perProject.get(inv.projectId);
+    // Distribute the invoice's ex-GST revenue across the projects its
+    // lines belong to (Option C). Single-project invoices yield one
+    // contribution equal to the header total, so this is a no-op change
+    // for existing data. The monthly rollup stays project-agnostic, so
+    // it still uses the header total.
+    const contributions = invoiceRevenueByProject(inv);
     if (INVOICED.has(inv.status)) {
-      if (row) row.revenueCents += inv.amountExGst;
+      for (const c of contributions) {
+        const row = perProject.get(c.projectId);
+        if (row) row.revenueCents += c.amountExGstCents;
+      }
       bumpMonth(ym(inv.issueDate), { revenueCents: inv.amountExGst });
     } else if (WIP.has(inv.status)) {
-      if (row) row.wipCents += inv.amountExGst;
+      for (const c of contributions) {
+        const row = perProject.get(c.projectId);
+        if (row) row.wipCents += c.amountExGstCents;
+      }
       // WIP not recorded on monthly revenue — will count when invoiced.
     }
   }

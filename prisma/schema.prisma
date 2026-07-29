@@ -744,6 +744,7 @@ model Project {
   budget                     ProjectBudget?
   partnerContributions       ProjectPartnerContribution[]
   availabilityForecasts      AvailabilityForecast[]     @relation("AvailabilityForecastProject")
+  invoiceLines               InvoiceLine[]              @relation("InvoiceLineProject")
 }
 
 // ── Partner contribution attribution ────────────────────────────────
@@ -1174,8 +1175,19 @@ model InvoiceLine {
   rate              Int?      // AUD cents
   amount            Int       // AUD cents
   timesheetEntryIds String[]  @default([])
+  // Multi-project invoices (feedback #12B, "Option C"). Null means the
+  // line belongs to the invoice's primary project (Invoice.projectId) —
+  // the pre-#12B behaviour and the default for single-project invoices.
+  // When set, the line is attributed to this project instead, which must
+  // belong to the same client as the invoice (enforced in the create/
+  // edit actions). SetNull on delete so archiving a project frees the
+  // line back to the header project rather than orphaning it.
+  projectId         String?
 
   invoice           Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  project           Project?  @relation("InvoiceLineProject", fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
 }
 
 model Bill {
