@@ -1379,6 +1379,163 @@ A secondary, smaller surface of `propose_*` tools handles low-field one-shot act
 
 **Why this is deferred (not for MVP):** TASK-303 is real architectural work — best done after Phase 1 + Phase 2 + Phase 3 have been in real use for at least a week and we have evidence the shared shape actually fits both channels (vs an assumed alignment that breaks when an edge case shows up). Setting it up now would also tangle with TASK-080 (Inngest workflow framework) if that lands first. Keep the alignment principles enforced via TASK-301 + TASK-302 acceptance criteria so we don't drift in the meantime.
 
+### TASK-304 — Personnel bulk import: optional personal email + non-destructive updates
+**status:** doing
+**framing:** JN's full-team FY26 personnel CSV bounced on upload: the importer rejects any *new* contractor without a `personalEmail`, and the file has that column blank for all 35 people (34 are contractors) — 34/35 rows errored and the all-or-nothing commit was blocked. `personalEmail` has no code consumers (grep confirms) and is not used for auth — magic-link login keys on the `@foundry.health` work email (auth.ts `REQUIRED_EMAIL_SUFFIX`). It's a payroll/contracts contact placeholder only. TT decision (2026-07-24): (1) don't require it on bulk import — align it with the foundry work email for each account; (2) on *update*, never overwrite an existing value with a blank CSV cell.
+
+- [x] Importer no longer errors on a new contractor with a blank `personalEmail`. Blank `personalEmail` on a **new** row defaults to the person's own `@foundry.health` work email at commit.
+- [x] `personalEmail` may equal the person's own work email; an explicitly-provided *different* `@foundry.health` address is still rejected (guards against pasting the wrong mailbox).
+- [x] On **update**, a blank CSV cell leaves the existing DB value untouched (rate, fte, roles, phone, whatsappNumber, personalEmail, linkedinUrl). The `ft`-needs-`fte` rule now applies to **new** rows only. Preview diff reflects the skip (no phantom rate→$0 rows).
+- [x] Tests: new-contractor-blank-personalEmail passes; update-with-blank-fields yields an empty diff; own-work-email allowed / other-foundry-address rejected. Full suite green.
+- [ ] Commit: `feat(TASK-304): personnel import — optional personal email + non-destructive updates`.
+- [ ] Hand-off: JN (or TT) re-uploads the same CSV at /admin/import/personnel → preview shows 0 errors → Commit. (Checkout can't reach prod DB; the platform is the authoritative write path per A1 + writes the A9 audit event.)
+
+---
+
+## Phase 7 — FY27 role architecture (personnel taxonomy)
+
+Migrate personnel fields, functionality and taxonomy to the FY27 role architecture. **Shared reference: [`FY27_ROLE_ARCHITECTURE.md`](FY27_ROLE_ARCHITECTURE.md)** (crosswalk + decisions) and the source package in [`docs/fy27-migration/`](docs/fy27-migration/). Decisions locked by TT 2026-07-28: **hybrid** data model (flat `Person` current-state + effective-dated dimension tables + FY27 reference tables), **phased MVP** for go-live, **new `OPERATIONS`/`OM`** band+code for the Office Manager, **adopt FY27 rate bands**. Do NOT run the four `.sql` files against the Prisma DB — they are the spec, ported into Prisma migrations by these tasks. Schema is `2.3-draft`, `PENDING_MP_SIGNOFF` — nothing in this phase runs against **prod** until the MP signs off and OD-1 is resolved.
+
+### TASK-400 — FY27 taxonomy constants + legacy crosswalk (code, no DB)
+**status:** todo
+**depends on:** —
+**acceptance:**
+- [ ] New `src/lib/fy27-roles.ts`: the 17 canonical role codes + `OM`, 8 bands + `OPERATIONS`, engagement types (`permanent`/`contractor`/`program`/`honorary`), workforce statuses (`ACTIVE`/`RESERVE`/`ALUMNI`/`ADVISOR`), pool codes, and per-role metadata (title, band, seniority_rank, permits_*, incentive target) — sourced from `docs/fy27-migration/foundry_roles_schema.json`, not re-keyed by hand.
+- [ ] `legacyLevelToRoleCode(level, band?)` implementing the §3a crosswalk (incl. `L4→P1`, `IO→I0`, `OM→OM`) and `bandForRoleCode(code)`; a `isLeadershipRoleCode` / band predicate that correctly includes L1/L2/L3 under LEADERSHIP.
+- [ ] Pure unit tests covering every current level code → expected (role code, band), the two renames, and the OM/OPERATIONS extension.
+- [ ] `pnpm typecheck && pnpm test && pnpm lint` green. Commit: `feat(TASK-400): FY27 taxonomy constants + legacy crosswalk`.
+
+**context:** Foundation for the rest of Phase 7 — every later task imports from here. No schema change yet, so it can land and be reviewed independently.
+
+### TASK-401 — FY27 reference tables: schema + seed (bands, roles, rate bands, statuses, pools, code map)
+**status:** todo
+**depends on:** TASK-400
+**acceptance:**
+- [ ] Prisma models for the reference data (port of package file 01 §1 + seed file 02): `RefBand`, `RefRole`, `RefRateBand` (geo + cost anchor + basis; **no stored bill rate**), `RefBillingMultiple`, `RefWorkforceStatus`, `RefTalentPool`, `RefPoolRole`, `RefPromotionStep`, `RefCredentialType`, `RefRoleCodeMap`. Effective-dated (`effectiveFrom`, `schemaVersion`); current-state read via a documented "latest ≤ today" query helper.
+- [ ] `chore(db):` migration committed separately from the seed wiring (per CLAUDE.md rule 9).
+- [ ] Seed populated from `docs/fy27-migration/foundry_roles_schema.json` (regenerate via `generate_seed.py` or a TS equivalent — do not hand-key). `SELECT count` parity: 18 roles, 9 bands, incl. `OM`/`OPERATIONS` as `not_time_billed`.
+- [ ] Bill rate is **derived** in a helper (cost ×2 / ×3 from `RefBillingMultiple`), never stored — mirror of `v_rate_card_current`.
+- [ ] Tests: derived bill matches the anchor ×2/×3; `RefRoleCodeMap` resolves every current `Person.level` value (no `requires_review` gaps for real data).
+- [ ] Migration is manual against prod (see memory: nothing auto-runs `migrate deploy`). Commit: `feat(TASK-401): FY27 reference taxonomy tables + seed`.
+
+**context:** Adopts D4 (FY27 rate bands, geo, derived bill). Reference tables are seeded and staging-dogfooded before any `Person` row is touched.
+
+### TASK-402 — Person dimension tables + current-state cache fields (hybrid model)
+**status:** todo
+**depends on:** TASK-401
+**acceptance:**
+- [ ] New append-only, effective-dated dimension tables: `PersonRole`, `PersonStatus`, `PersonEngagement`, `PersonRate` (+ `PersonPool`), each with `effectiveFrom`, `changeReason`, `supersedesId`, `approvedBy`, `recordedAt` per package file 01 §3.
+- [ ] Append-only enforced **app-side** (no Prisma trigger equivalent): a single write module is the only door; direct update/delete of a domain row is rejected in code + covered by a test. Every write emits an `AuditEvent` in the same transaction (A9).
+- [ ] `Person` gains denormalised current-state cache columns: `roleCode`, `engagementType`, `employmentBasis`, `workforceStatus`, `poolCode` (written through by the dimension write module; documented as cache, not source of truth). Extend the `Band` enum with `Leadership`, `Fellow`, `Advisor`, `Intern`, `Operations` (keep existing values for the transition).
+- [ ] `chore(db):` migration committed separately from the write module.
+- [ ] Tests: an append creates a new row (never mutates); a correction sets `supersedesId`; the cache column matches the latest dimension row; a direct-mutation attempt throws.
+- [ ] Commit: `feat(TASK-402): person dimension tables + current-state cache`.
+
+**context:** D1 hybrid. Deliberately does NOT delete `employment`/`level` yet — the transition keeps both readable so the ~44 consumers don't break in one step. Field removal is a later cleanup once all reads move over.
+
+### TASK-403 — Backfill existing people into the FY27 taxonomy + reconciliation
+**status:** todo
+**depends on:** TASK-402
+**acceptance:**
+- [ ] Idempotent backfill script (port of package file 03) that, for every `Person`: writes a `PersonRole` (level→role code via TASK-400 crosswalk), `PersonEngagement` (employment→engagement + basis + FTE), `PersonStatus` (active→ACTIVE, archived→ALUMNI; `inactiveAt`→flagged for per-person MP review, NOT auto-Reserve), `PersonPool` (from role code), and — for contractors — a `PersonRate` no-worse-off pass (`grandfathered` / `band_anchor` / `deviation_below` flagged). Populates the `Person` cache columns + remaps `band` (incl. L1/L2→Leadership, F1/F2→Fellow, IO→Intern, OM→Operations).
+- [ ] Reconciliation output (port of `v_migration_reconciliation`): headcount by engagement basis + status + pool matches pre-migration counts; zero rows in a ported `v_integrity_exceptions` check.
+- [ ] Runs clean against a **seeded staging copy** first; a dry-run mode prints the diff without writing.
+- [ ] Prod cutover gated on: (a) MP schema sign-off, and (b) the per-person `inactiveAt`→status reviews being actioned. **OD-1 is resolved — preserve-and-flag (no auto-uplift):** below-anchor contractors keep their current rate recorded as `deviation_below` and flagged; do NOT lift anyone to anchor.
+- [ ] Commit: `feat(TASK-403): backfill existing people into FY27 taxonomy`.
+
+**context:** `Person.level` is a free string so nothing auto-migrates — this is the one-time data pass. Follows the brief's rule that Reserve is never assumed on someone's behalf. OD-1 resolved by TT 2026-07-28 (preserve-and-flag); the flagged classification must surface on the resourcing tab — see TASK-410.
+
+### TASK-404 — Person create/edit form + actions on the new taxonomy
+**status:** todo
+**depends on:** TASK-402
+**acceptance:**
+- [ ] `directory/people/new/{form,actions}.tsx` and `directory/people/[id]/edit/{form,actions}.tsx` use role-code pickers grouped by band (from TASK-400/401), engagement type + basis + FTE (with the permanent⇒FTE / contractor⇒no-FTE constraints), and a workforce-status control. Writes go through the TASK-402 dimension write module (effective-dated), not a direct `Person` update.
+- [ ] Rate auto-snap works against the FY27 anchor for the selected role code + geo; off-anchor entry sets `rateBasis` + requires a `deviationReason` and records `approvedBy` (MP gate for non-anchor).
+- [ ] Empty / loading / error states present (CLAUDE.md). Server-side capability check + Zod validation on every mutation.
+- [ ] Tests for the new actions (append-only write, constraint rejection, off-anchor requires reason). Commit: `feat(TASK-404): person edit on FY27 taxonomy`.
+
+### TASK-405 — Directory + profile surfaces on the new taxonomy
+**status:** todo
+**depends on:** TASK-404
+**acceptance:**
+- [ ] Directory roster + profile page render role-code labels + band groupings from the reference tables; filters cover band / engagement type / workforce status / pool. Status chips show ACTIVE/RESERVE/ALUMNI/ADVISOR (reconciled with the existing `inactiveAt`/`endDate`/`poolStatusOverride` display — no double-encoding).
+- [ ] `labelForLevel` / `FOUNDRY_LEVELS` consumers updated or shimmed to the new source; no raw codes leak into the UI.
+- [ ] Empty / loading / error states. Commit: `feat(TASK-405): directory + profile on FY27 taxonomy`.
+
+### TASK-406 — CSV import + template + tests on the new taxonomy
+**status:** todo
+**depends on:** TASK-402
+**acceptance:**
+- [ ] `src/server/imports/personnel.ts` accepts `roleCode` (or a legacy label resolved via `RefRoleCodeMap`), `engagementType`, `employmentBasis`, `geo`, `workforceStatus`, `pool`; validators sourced from TASK-400 (no hardcoded `BANDS`/`EMPLOYMENTS` arrays). Commit writes through the dimension write module.
+- [ ] `public/templates/personnel-template.csv` + `admin/import/personnel/page.tsx` help text updated to the new columns. Pre-existing `region` bug fixed (importer no longer narrower than `Person.region`).
+- [ ] Golden tests in `src/__tests__/import-personnel.test.ts` updated: legacy-label rows resolve; ambiguous labels (`Consultant (0.5 FTE)`) surface for review rather than guessing; append-only write verified.
+- [ ] Preserve TASK-304 behaviours (optional personal email, non-destructive blank-cell updates). Commit: `feat(TASK-406): personnel import on FY27 taxonomy`.
+
+### TASK-407 — Rate card: cost-anchor + derived bill + geo + person deviation log
+**status:** todo
+**depends on:** TASK-401
+**acceptance:**
+- [ ] `src/server/rate-card.ts` + `admin/rate-card/*` read the FY27 `RefRateBand` (cost anchor per role code + geo); bill columns are **derived** ×2/×3, never stored. Display bands come from the reference table, not the hardcoded `ROLE_LABELS`/`ORDER` maps.
+- [ ] Person-level deviation log surfaced (a ported `v_rate_transition_check`): above-anchor = grandfathered, below-anchor = flagged for MP review, off-anchor requires MP `approvedBy` + reason.
+- [ ] No-worse-off assertion available as a check (port of integrity rule 5). Tests: derived bill = anchor ×2/×3; deviation without MP approval rejected. Commit: `feat(TASK-407): FY27 rate bands + deviation log`.
+
+### TASK-408 — Generalise band/leadership consumers + wire integrity checks into CI
+**status:** todo
+**depends on:** TASK-402
+**acceptance:**
+- [ ] `isLeadershipBand` and every hardcoded off-pyramid band check (availability, resource-planning, utilisation, manager-dashboard, availability/edit pages — see `FY27_ROLE_ARCHITECTURE.md` §4) driven by the reference taxonomy so L1/L2 count as leadership and FELLOW/ADVISOR/INTERN/OPERATIONS are correctly excluded from capacity/utilisation.
+- [ ] The ported `v_integrity_exceptions` checks (engagement-not-permitted-for-role, advisor/status mismatch, permanent-without-FTE, intern-nonzero-rate, person-without-status, etc.) run as a zero-row assertion in CI (package migration step M9).
+- [ ] Tests cover L1/L2 leadership classification + an off-pyramid exclusion. Commit: `feat(TASK-408): generalise band consumers + integrity CI gate`.
+
+### TASK-410 — Surface the below-anchor rate classification on the resourcing tab
+**status:** todo
+**depends on:** TASK-407
+**acceptance:**
+- [ ] `/resource-planning` (`src/app/(app)/resource-planning/page.tsx` + `pool-chip.tsx`) shows a distinct badge/pip on a person's `PoolChip` when their current `person_rate` is `deviation_below` (below the FY27 anchor, flagged for MP review). Visually separate from the existing engagement-status colour pip and the ⊕ override glyph so the two don't collide. Optionally distinguish `grandfathered` (above-anchor) with its own subtle marker.
+- [ ] A filter and/or a header summary count ("N below anchor") so a partner scanning the resourcing tab can immediately see who has moved into the flagged classification, and jump to them.
+- [ ] Hovering/opening the badge shows the specifics: current cost vs band anchor, geo, and the deviation reason (from the TASK-407 deviation log / `v_rate_transition_check` port). Reads only — no rate edits from this surface (rate changes stay MP-gated in TASK-404/407).
+- [ ] Server query scoped by capability (rate data is sensitive — reuse the `ratecard.view` / resource-planning capability gate, don't expose cost to roles that can't already see it). Empty/loading/error states present.
+- [ ] Tests: a `deviation_below` person renders the badge + counts in the summary; a `band_anchor` person does not; the badge is hidden for roles without the capability.
+- [ ] Commit: `feat(TASK-410): below-anchor rate flag on resourcing tab`.
+
+**context:** TT (2026-07-28), on resolving OD-1 to preserve-and-flag: "Ensure that this is visible in the resourcing tab so we can see when people have moved into that classification." The classification data is produced by the TASK-403 backfill (`person_rate.rate_basis = 'deviation_below'`) and the TASK-407 deviation log; this task is purely the resourcing-tab surfacing of it. Reconcile with the `poolStatusOverride` / status pip decision noted in `FY27_ROLE_ARCHITECTURE.md` §6 so pips aren't double-encoded.
+
+### TASK-409 — Seed + fixtures on the new taxonomy
+**status:** todo
+**depends on:** TASK-401, TASK-402
+**acceptance:**
+- [ ] `prisma/seed.ts` (`mapBand`, `mapEmployment`, `rolesForPerson`, `seedRateCard`) + `prisma/fixtures/*.json` emit FY27 role codes / bands / engagement / status / pool via TASK-400, and seed the reference tables via TASK-401. Staging seed still runs clean end to end.
+- [ ] Access `Role` enum assignment stays a separate axis from role code (documented). Commit: `feat(TASK-409): seed + fixtures on FY27 taxonomy`.
+
+---
+
+*Deferred to post-go-live (D2). Do not auto-pick in the ralph loop.*
+
+### TASK-420 — Promotion tenure clock + eligibility surfaces
+**status:** deferred
+**depends on:** TASK-402
+**acceptance:** Port `v_role_tenure` (active-days only; Reserve pauses, never resets — keep the Alumni/Reserve NULL-guard), `v_promotion_eligibility` (machine gates only; contribution/sponsorship/business-need surfaced as human decisions), and `v_tenure_watchlist`. As Prisma queries/views over the dimension tables.
+
+### TASK-421 — Understudy assignments
+**status:** deferred
+**depends on:** TASK-420
+**acceptance:** `UnderstudyAssignment` table + surface; feeds the L-band promotion gate (`gate4_understudy_complete`).
+
+### TASK-422 — Incentive framework
+**status:** deferred
+**depends on:** TASK-402
+**acceptance:** `IncentiveAward` (standardised dimensions, discretionary amount, target by band); contractors excluded (integrity rule 3). Rem-Committee approval path.
+
+### TASK-423 — Credential modifiers + supervision overlay
+**status:** deferred
+**depends on:** TASK-402
+**acceptance:** `PersonCredential` + `RefCredentialType`; provisional AHPRA triggers a supervision overlay; credentials position rate within band, never change the role code.
+
+### TASK-424 — Reserve review + re-entry surfaces
+**status:** deferred
+**depends on:** TASK-403
+**acceptance:** Port `v_reserve_review` (quarterly pool-lead list + past-24-month flag, OD-3) and the re-entry rules (0–12 / 12–24 / >24-month treatments).
+
 ---
 
 *End of TASKS.md. Start with TASK-001.*

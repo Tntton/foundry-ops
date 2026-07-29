@@ -206,21 +206,34 @@ export function buildPersonnelPreviewWithExisting(
         `roles: invalid value(s) ${rolesParsed.invalid.join(', ')} (allowed: ${ROLE_ENUM.join(', ')})`,
       );
     }
-    if (v.employment === 'ft' && !isLeadershipBand(v.band) && v.fte === null) {
-      errors.push('fte: required for ft employees (0.1 – 1.0)');
-    }
 
     const existing = existingByEmail.get(v.email);
     const action: 'new' | 'update' = existing ? 'update' : 'new';
 
+    // fte is required for new ft non-leadership staff. On update a blank cell
+    // means "leave the existing value" (see the blank-skip logic in commit),
+    // so this only gates new rows.
+    if (action === 'new' && v.employment === 'ft' && !isLeadershipBand(v.band) && v.fte === null) {
+      errors.push('fte: required for ft employees (0.1 – 1.0)');
+    }
+
     if (action === 'new' && !v.email.endsWith(FOUNDRY_SUFFIX)) {
       errors.push(`email: new persons must use a ${FOUNDRY_SUFFIX} work email`);
     }
-    if (v.personalemail && v.personalemail.endsWith(FOUNDRY_SUFFIX)) {
-      errors.push('personalEmail: cannot be a @foundry.health address');
-    }
-    if (action === 'new' && v.employment === 'contractor' && !v.personalemail) {
-      errors.push('personalEmail: required for contractors');
+    // personalEmail is a payroll/contracts contact — it is NOT used for auth
+    // (magic-link login keys on the @foundry.health work email). It is optional
+    // on import: a blank value on a new row defaults to the person's own work
+    // email at commit (TT 2026-07-24 — align the personal email with the
+    // foundry account). Guard only against pasting a *different* @foundry.health
+    // mailbox into the field.
+    if (
+      v.personalemail &&
+      v.personalemail.endsWith(FOUNDRY_SUFFIX) &&
+      v.personalemail !== v.email
+    ) {
+      errors.push(
+        'personalEmail: cannot be a @foundry.health address other than the person’s own work email',
+      );
     }
 
     const seenAt = seenEmails.get(v.email);
@@ -253,7 +266,7 @@ export function buildPersonnelPreviewWithExisting(
 
     let diff: PersonnelPreviewRow['diff'] = [];
     if (action === 'update' && existing) {
-      diff = diffAgainstExisting(parsedRow, existing);
+      diff = diffAgainstExisting(parsedRow, existing, raw);
     }
 
     previewRows.push({
@@ -385,6 +398,7 @@ async function loadExisting(emails: string[]): Promise<ExistingPersonRow[]> {
 function diffAgainstExisting(
   row: PersonnelParsedRow,
   existing: ExistingPersonRow,
+  raw: Record<string, string>,
 ): PersonnelPreviewRow['diff'] {
   const diff: PersonnelPreviewRow['diff'] = [];
   const push = (field: string, before: unknown, after: unknown) => {
@@ -392,6 +406,11 @@ function diffAgainstExisting(
     const a = String(after ?? '');
     if (b !== a) diff.push({ field, before: b, after: a });
   };
+  // A blank cell in the CSV leaves the existing value untouched on commit
+  // (TT 2026-07-24 — never clobber a live value with a blank). Mirror that
+  // here so the preview diff doesn't show a phantom change (e.g. rate → $0).
+  const provided = (key: string) => (raw[key] ?? '').trim().length > 0;
+
   push('firstName', existing.firstName, row.firstName);
   push('lastName', existing.lastName, row.lastName);
   push('band', existing.band, row.band);
@@ -399,14 +418,14 @@ function diffAgainstExisting(
   push('employment', existing.employment, row.employment);
   push('region', existing.region, row.region);
   push('rateUnit', existing.rateUnit, row.rateUnit);
-  push('rate (¢)', existing.rate, Math.round(row.rateDollars * 100));
+  if (provided('ratedollars')) push('rate (¢)', existing.rate, Math.round(row.rateDollars * 100));
   push('startDate', existing.startDate?.toISOString().slice(0, 10) ?? '', row.startDate);
-  push('phone', existing.phone ?? '', row.phone ?? '');
-  push('whatsappNumber', existing.whatsappNumber ?? '', row.whatsappNumber ?? '');
-  push('personalEmail', existing.personalEmail ?? '', row.personalEmail ?? '');
-  push('linkedinUrl', existing.linkedinUrl ?? '', row.linkedinUrl ?? '');
-  push('fte', existing.fte?.toString() ?? '', row.fte === null ? '' : row.fte.toFixed(2));
-  push('roles', (existing.roles ?? []).join(','), row.roles.join(','));
+  if (provided('phone')) push('phone', existing.phone ?? '', row.phone ?? '');
+  if (provided('whatsappnumber')) push('whatsappNumber', existing.whatsappNumber ?? '', row.whatsappNumber ?? '');
+  if (provided('personalemail')) push('personalEmail', existing.personalEmail ?? '', row.personalEmail ?? '');
+  if (provided('linkedinurl')) push('linkedinUrl', existing.linkedinUrl ?? '', row.linkedinUrl ?? '');
+  if (provided('fte')) push('fte', existing.fte?.toString() ?? '', row.fte === null ? '' : row.fte.toFixed(2));
+  if (provided('roles')) push('roles', (existing.roles ?? []).join(','), row.roles.join(','));
   return diff;
 }
 
@@ -444,6 +463,10 @@ export async function commitPersonnelImport(
     for (const row of usableRows) {
       const v = row.parsed!;
       const rateCents = Math.round(v.rateDollars * 100);
+      // A blank cell means different things per action: on a new row we fall
+      // back to a sensible default; on an update we skip the field entirely so
+      // the existing DB value survives (TT 2026-07-24).
+      const provided = (key: string) => (row.raw[key] ?? '').trim().length > 0;
       if (row.action === 'new') {
         const initials = await ensureUniqueInitials(tx, deriveInitials(v.firstName, v.lastName));
         const created = await tx.person.create({
@@ -452,7 +475,9 @@ export async function commitPersonnelImport(
           // Person column — silently dropped here.
           data: {
             email: v.email,
-            personalEmail: v.personalEmail,
+            // Personal email is optional on import; when blank we align it with
+            // the person's own foundry work email rather than leaving it null.
+            personalEmail: v.personalEmail ?? v.email,
             firstName: v.firstName,
             lastName: v.lastName,
             initials,
@@ -474,26 +499,26 @@ export async function commitPersonnelImport(
         newCount += 1;
         row.matchedPersonId = created.id;
       } else if (row.action === 'update' && row.matchedPersonId) {
-        await tx.person.update({
-          where: { id: row.matchedPersonId },
-          data: {
-            firstName: v.firstName,
-            lastName: v.lastName,
-            personalEmail: v.personalEmail,
-            phone: v.phone,
-            whatsappNumber: v.whatsappNumber,
-            linkedinUrl: v.linkedinUrl,
-            band: v.band,
-            level: v.level,
-            employment: v.employment,
-            fte: v.fte ?? null,
-            region: v.region,
-            rateUnit: v.rateUnit,
-            rate: rateCents,
-            roles: v.roles,
-            startDate: new Date(v.startDate),
-          },
-        });
+        // Always-present required columns: safe to write unconditionally.
+        const data: Prisma.PersonUpdateInput = {
+          firstName: v.firstName,
+          lastName: v.lastName,
+          band: v.band,
+          level: v.level,
+          employment: v.employment,
+          region: v.region,
+          rateUnit: v.rateUnit,
+          startDate: new Date(v.startDate),
+        };
+        // Optional columns: only overwrite when the CSV actually carried a value.
+        if (provided('ratedollars')) data.rate = rateCents;
+        if (provided('fte')) data.fte = v.fte ?? null;
+        if (provided('phone')) data.phone = v.phone;
+        if (provided('whatsappnumber')) data.whatsappNumber = v.whatsappNumber;
+        if (provided('personalemail')) data.personalEmail = v.personalEmail;
+        if (provided('linkedinurl')) data.linkedinUrl = v.linkedinUrl;
+        if (provided('roles')) data.roles = v.roles;
+        await tx.person.update({ where: { id: row.matchedPersonId }, data });
         updatedCount += 1;
       }
     }
