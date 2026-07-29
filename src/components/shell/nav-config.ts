@@ -139,25 +139,33 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     label: 'Reports',
     items: [
       {
+        // Firm financial reporting. EXCLUDES associate_partner (TT
+        // 2026-07-29): APs see only their own project-level reporting,
+        // not firm P&L / balance sheet / receivables. Mirrors the
+        // Partner scorecard exclusion below.
         label: 'P&L',
         href: '/pnl',
         icon: BarChart3,
-        roles: ['super_admin', 'admin', 'partner', 'associate_partner'],
+        roles: ['super_admin', 'admin', 'partner'],
       },
       {
         // Operational balance sheet — AR + AP + WIP + bank. NOT a
         // substitute for Xero's official BS; flagged on the page
-        // itself. Same audience as P&L (partner-tier+).
+        // itself. Firm financial reporting — same audience as P&L, and
+        // like P&L it EXCLUDES associate_partner (TT 2026-07-29).
         label: 'Balance sheet',
         href: '/balance-sheet',
         icon: BarChart3,
-        roles: ['super_admin', 'admin', 'partner', 'associate_partner'],
+        roles: ['super_admin', 'admin', 'partner'],
       },
       {
+        // AR aging — firm financial reporting. EXCLUDES associate_partner
+        // (TT 2026-07-29); APs track their own projects' invoices via the
+        // Invoices working list, not the firm-wide AR aging surface.
         label: 'Receivables',
         href: '/receivables',
         icon: HandCoins,
-        roles: ['super_admin', 'admin', 'partner', 'associate_partner'],
+        roles: ['super_admin', 'admin', 'partner'],
       },
       {
         label: 'Payables',

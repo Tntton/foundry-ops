@@ -38,15 +38,10 @@ export default async function BalanceSheetPage({
   searchParams: { asOf?: string };
 }) {
   const session = await getSession();
-  if (
-    !hasAnyRole(session, [
-      'super_admin',
-      'admin',
-      'partner',
-      'associate_partner',
-    ])
-  )
-    notFound();
+  // Firm financial reporting — EXCLUDES associate_partner (TT 2026-07-29):
+  // APs see only their own project-level reporting, not the firm balance
+  // sheet. Matches /pnl + /receivables and the nav-config gating.
+  if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
 
   const asOf = parseAsOf(searchParams.asOf);
   const isToday =
