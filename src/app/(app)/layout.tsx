@@ -102,10 +102,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             </div>
           )}
           {/* Bottom padding clears the floating Assistant + Feedback
-               pills (bottom-4 + ~32px pills = needs ~52px clearance).
-               pb-24 gives a comfortable buffer on mobile; pb-6 on
-               desktop where the pills sit over empty space anyway. */}
-          <main className="flex-1 overflow-y-auto p-3 pb-24 md:p-6 md:pb-6">
+               pills (bottom-4 + ~36px pills). The desktop value used to
+               be pb-6 on the assumption the pills "sit over empty space"
+               — but on forms whose action row is bottom-right (e.g.
+               /projects/new) the pills covered the Create / Cancel
+               buttons (feedback #4, Jas). pb-20 (80px) clears the pill
+               zone on every page. */}
+          <main className="flex-1 overflow-y-auto p-3 pb-24 md:p-6 md:pb-20">
             {children}
           </main>
         </div>
