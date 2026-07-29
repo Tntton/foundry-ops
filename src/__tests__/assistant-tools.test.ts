@@ -33,6 +33,7 @@ describe('assistant tool registry', () => {
       'list_expense_categories',
       'get_active_rate_card_for_role',
       'prefill_timesheet',
+      'prefill_availability',
       'prefill_expense',
       'prefill_bill',
       'prefill_invoice',
