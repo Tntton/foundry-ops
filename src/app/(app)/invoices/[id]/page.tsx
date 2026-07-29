@@ -45,12 +45,19 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
   const invoice = await prisma.invoice.findUnique({
     where: { id: params.id },
     include: {
-      lineItems: true,
+      lineItems: { include: { project: { select: { code: true } } } },
       client: { select: { id: true, code: true, legalName: true } },
       project: { select: { id: true, code: true, name: true } },
     },
   });
   if (!invoice) notFound();
+
+  // Option C (feedback #12B): does any line draw from a project other than
+  // the invoice's primary? Drives the extra "Project" column so a
+  // multi-project invoice is legible internally (kept off the client PDF).
+  const hasCrossProjectLines = invoice.lineItems.some(
+    (l) => l.projectId && l.projectId !== invoice.projectId,
+  );
 
   const canPushToXero = hasAnyRole(session, ['super_admin', 'admin', 'partner']);
   const canDeleteDraft =
@@ -319,6 +326,7 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
           <TableHeader>
             <TableRow>
               <TableHead>Line</TableHead>
+              {hasCrossProjectLines && <TableHead>Project</TableHead>}
               <TableHead className="text-right">Amount</TableHead>
             </TableRow>
           </TableHeader>
@@ -326,6 +334,11 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
             {invoice.lineItems.map((l) => (
               <TableRow key={l.id}>
                 <TableCell className="text-ink">{l.label}</TableCell>
+                {hasCrossProjectLines && (
+                  <TableCell className="font-mono text-xs text-ink-2">
+                    {l.project?.code ?? invoice.project.code}
+                  </TableCell>
+                )}
                 <TableCell className="text-right tabular-nums text-ink-2">
                   {formatMoney(l.amount)}
                 </TableCell>
@@ -334,6 +347,13 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
           </TableBody>
         </Table>
       </Card>
+      {hasCrossProjectLines && (
+        <p className="text-xs text-ink-3">
+          This invoice bills across multiple projects of {invoice.client.legalName}.
+          Revenue is attributed per line; {invoice.project.code} is the primary
+          (billing) project.
+        </p>
+      )}
 
       <div className="ml-auto grid max-w-xs grid-cols-2 gap-y-1 text-sm">
         <span className="text-ink-3">Subtotal</span>
