@@ -1,0 +1,973 @@
+{
+  "meta": {
+    "schema_name": "foundry_health_role_architecture",
+    "version": "2.3-draft",
+    "status": "PENDING_MP_SIGNOFF",
+    "effective_from": "2026-07-01",
+    "supersedes": "Role Guides dated 2025-08-04; Contractor Rate Card FY2023-24; platform rate rows effective 2025-07-01",
+    "authored": "2026-07-25",
+    "billing_model": {
+      "bill_low_multiple": 2.0,
+      "bill_high_multiple": 3.0,
+      "note": "Bill rates are derived: bill_low = cost_hr x 2, bill_high = cost_hr x 3. Store cost only; derive bill in code."
+    },
+    "currency_base": "AUD",
+    "geo_rates": {
+      "AU": {
+        "currency": "AUD",
+        "multiplier": 1.0
+      },
+      "NZ": {
+        "currency": "AUD",
+        "multiplier": 1.0
+      },
+      "US": {
+        "currency": "USD",
+        "multiplier": 0.66,
+        "note": "US-located consultants; local market rate in USD"
+      },
+      "UK": {
+        "currency": "GBP",
+        "multiplier": 0.5,
+        "note": "UK-located consultants; local market rate in GBP"
+      }
+    },
+    "governance": {
+      "rate_deviation_authority": "MP",
+      "rate_deviation_rule": "All person-level rates that deviate from the band anchor require Managing Partner sign-off and must be logged against the engagement record in Foundry Ops.",
+      "incentive_authority": "Partnership / Remuneration Committee",
+      "pd_change_authority": "MP",
+      "no_worse_off": "No individual currently engaged on a contractor rate has that rate reduced as a consequence of the FY26-27 band restatement. Where a current rate sits above the new band anchor or ceiling it is preserved as a personal rate for the current engagement and carried into subsequent work orders unless varied by agreement. Band anchors apply to new engagements and new individuals. Where a current rate sits below the new anchor, it is reviewed at the next work order at MP discretion. Personal rates above band are recorded in the deviation log with a 'grandfathered' reason code."
+    },
+    "transition": {
+      "from_state": {
+        "documents": "Five overlapping Role Guides dated 2025-08-04 (two of them in divergent full and short versions); Contractor Rate Card FY2023-24; Foundry Ops platform rate rows effective 2025-07-01; ad hoc employment offer letters.",
+        "undocumented_roles": [
+          "L2",
+          "E1",
+          "E2",
+          "F1",
+          "F2",
+          "ADV",
+          "I0"
+        ],
+        "code_collision": "Partner coded L3 in the 2025 position descriptions but L4 on the FY23-24 rate card; Associate Partner coded L2 in the position descriptions and L3 on the rate card and platform.",
+        "rate_defects": "Two financial years stale; L2 cost ($180) inverted below L1 ($200); individual staff initials embedded in the artefact; A3 and T1 descriptions duplicated; rates in practice individually negotiated with no logged approval.",
+        "engagement_conflation": "One title vocabulary covered both employment and contracting; the 'Consultant (0.5 FTE)' employment offer and the T-band contractor grades shared a title, and contractor-facing material carried employment-style language.",
+        "progression": "Implied inconsistently within individual role guides; no contractor progression logic; understudy expectations informal and uncodified.",
+        "incentives": "A Manager-only rubric under which slightly-above-average performance attained the full 20% bonus; all other bands either 'may be eligible' or silent.",
+        "status": "No workforce status concept: departure was binary. The ADV (Advisor) role existed in onboarding material with no code, terms or rate.",
+        "operating_model": "The FY27 operating model (LT/Partnership, Admin and Ops, core teams, internal project teams and four talent pools with leads) was already adopted and running, but no role, rate, progression or status structure underneath it matched."
+      },
+      "to_state": "One canonical schema covering 17 role codes across eight bands, generating all position descriptions, the rate band card and the platform records, with dual permanent and contractor overlays, a promotions pathway, a workforce status lifecycle and a standardised discretionary incentive framework.",
+      "framing": "The FY27 operating model is not what changes: it is already in place. What changes is the role architecture beneath it, which was never rebuilt to support pools, core teams and a blended permanent-and-contractor workforce."
+    }
+  },
+  "bands": [
+    {
+      "band": "Partnership",
+      "codes": [
+        "P1"
+      ],
+      "notes": "Outside the L-track. Entry by invitation and consensus of partners; fiduciary role."
+    },
+    {
+      "band": "Leadership",
+      "codes": [
+        "L1",
+        "L2",
+        "L3"
+      ]
+    },
+    {
+      "band": "Consultant",
+      "codes": [
+        "T1",
+        "T2",
+        "T3"
+      ]
+    },
+    {
+      "band": "Analyst",
+      "codes": [
+        "A1",
+        "A2",
+        "A3"
+      ]
+    },
+    {
+      "band": "Advisor",
+      "codes": [
+        "ADV"
+      ],
+      "notes": "Contractor or honorary. Periodic strategic guidance; no delivery obligation, no progression mechanics."
+    },
+    {
+      "band": "Expert",
+      "codes": [
+        "E1",
+        "E2"
+      ],
+      "notes": "Contractor-only rail. Permanent entry requires joining the core consulting ladder."
+    },
+    {
+      "band": "Fellow",
+      "codes": [
+        "F1",
+        "F2"
+      ],
+      "notes": "Contractor-only rail. Clinical SMEs building consulting exposure."
+    },
+    {
+      "band": "Intern",
+      "codes": [
+        "I0"
+      ]
+    },
+    {
+      "band": "Operations",
+      "codes": [
+        "OM"
+      ],
+      "notes": "Firm-internal support roles (Office Manager, administration). Off the delivery ladder: not time-billed, no progression mechanics, no incentive eligibility. Foundry Ops extension to schema 2.3-draft, MP-approved 2026-07-28 (TT)."
+    }
+  ],
+  "roles": [
+    {
+      "code": "MP",
+      "title": "Managing Partner",
+      "band": "Partnership",
+      "seniority_rank": 100,
+      "engagement_types": [
+        "permanent"
+      ],
+      "remuneration_model": "salary_plus_time_billing_plus_LT_share_plus_partnership_distribution",
+      "cost_hr_aud": null,
+      "bill_low_aud": 550,
+      "bill_high_aud": 800,
+      "notes": "Only salaried role in the firm (salaried partner role), received in addition to the standard partner package of time billing + LT share + partnership distribution. CEO-equivalent: day-to-day oversight, P&L responsibility, admin team leadership, rate/PD sign-off authority.",
+      "dual_pathway": false,
+      "incentive": "Salary + time billing + LT share + partnership distribution; set by partnership."
+    },
+    {
+      "code": "P1",
+      "title": "Partner",
+      "band": "Partnership",
+      "seniority_rank": 90,
+      "engagement_types": [
+        "equity_partner"
+      ],
+      "remuneration_model": "time_billing_plus_LT_share_plus_partnership_distribution",
+      "cost_hr_aud": null,
+      "bill_low_aud": 550,
+      "bill_high_aud": 800,
+      "notes": "Equity owner; fiduciary responsibility. Remunerated via time billing + LT share + partnership distribution; no fixed internal cost rate. Bill rates apply for engagement pricing.",
+      "dual_pathway": false,
+      "incentive": "Time billing + LT share + partnership distribution per partnership deed."
+    },
+    {
+      "code": "L3",
+      "title": "Associate Partner / Director",
+      "band": "Leadership",
+      "seniority_rank": 80,
+      "engagement_types": [
+        "permanent",
+        "contractor"
+      ],
+      "remuneration_model": "dual_rem_time_billing_plus_LT_share",
+      "cost_hr_aud": null,
+      "bill_low_aud": 450,
+      "bill_high_aud": 650,
+      "effective_from": "2026-07-01",
+      "notes": "Dual remuneration: time billing + long-term share, per platform row effective 2026-05-21. Dual pathway: career AP or Partner track.",
+      "dual_pathway": true,
+      "incentive": "Target up to 25% discretionary + LT share; Rem Committee determines."
+    },
+    {
+      "code": "L2",
+      "title": "Senior Manager / Project Director",
+      "band": "Leadership",
+      "seniority_rank": 70,
+      "engagement_types": [
+        "permanent",
+        "contractor"
+      ],
+      "remuneration_model": "hourly_or_salary",
+      "cost_hr_aud": 210,
+      "effective_from": "2026-07-01",
+      "prior_cost_hr_aud": 200,
+      "prior_note": "Corrects the FY25-26 platform inversion (L2 180 < L1 200). Corrected base L2=200, L1=180, then indexed ~5%.",
+      "dual_pathway": true,
+      "incentive": "Target up to 20% discretionary; Rem Committee determines.",
+      "incumbents_note": "Actively staffed (currently one incumbent)."
+    },
+    {
+      "code": "L1",
+      "title": "Manager / Project Manager",
+      "band": "Leadership",
+      "seniority_rank": 60,
+      "engagement_types": [
+        "permanent",
+        "contractor"
+      ],
+      "remuneration_model": "hourly_or_salary",
+      "cost_hr_aud": 190,
+      "effective_from": "2026-07-01",
+      "prior_cost_hr_aud": 180,
+      "dual_pathway": true,
+      "incentive": "Target up to 20% discretionary; Rem Committee determines."
+    },
+    {
+      "code": "ADV",
+      "title": "Advisor",
+      "band": "Advisor",
+      "seniority_rank": 58,
+      "engagement_types": [
+        "contractor",
+        "honorary"
+      ],
+      "remuneration_model": "honorarium_or_nil_individually_approved",
+      "cost_hr_aud": null,
+      "effective_from": "2026-07-01",
+      "dual_pathway": false,
+      "incentive": "Not incentive-eligible; individually agreed terms only.",
+      "notes": "Senior industry leader and supporter of Foundry's mission and team. Provides periodic strategic guidance to the partnership, supports senior stakeholder relationship management, and mentors emerging talent. Not a delivery role; not time-billed by default. Common destination for senior Alumni.",
+      "source": "Foundry onboarding deck, Experts function, Advisor role."
+    },
+    {
+      "code": "E2",
+      "title": "Senior Expert",
+      "band": "Expert",
+      "seniority_rank": 55,
+      "engagement_types": [
+        "contractor"
+      ],
+      "remuneration_model": "hourly",
+      "cost_hr_aud": 315,
+      "effective_from": "2026-07-01",
+      "prior_cost_hr_aud": 300,
+      "dual_pathway": false,
+      "incentive": "Not incentive-eligible; engagement-level terms only."
+    },
+    {
+      "code": "E1",
+      "title": "Expert",
+      "band": "Expert",
+      "seniority_rank": 50,
+      "engagement_types": [
+        "contractor"
+      ],
+      "remuneration_model": "hourly",
+      "cost_hr_aud": 210,
+      "effective_from": "2026-07-01",
+      "prior_cost_hr_aud": 200,
+      "dual_pathway": false,
+      "incentive": "Not incentive-eligible; engagement-level terms only."
+    },
+    {
+      "code": "F2",
+      "title": "Fellow",
+      "band": "Fellow",
+      "seniority_rank": 45,
+      "engagement_types": [
+        "contractor"
+      ],
+      "remuneration_model": "hourly",
+      "cost_hr_aud": 160,
+      "effective_from": "2026-07-01",
+      "prior_cost_hr_aud": 150,
+      "dual_pathway": false,
+      "incentive": "Not incentive-eligible; engagement-level terms only.",
+      "conversion_note": "Permanent progression requires transfer into the T-track (typically T2/T3 subject to consulting capability assessment)."
+    },
+    {
+      "code": "F1",
+      "title": "Junior Fellow",
+      "band": "Fellow",
+      "seniority_rank": 40,
+      "engagement_types": [
+        "contractor"
+      ],
+      "remuneration_model": "hourly",
+      "cost_hr_aud": 125,
+      "effective_from": "2026-07-01",
+      "prior_cost_hr_aud": 120,
+      "dual_pathway": false,
+      "incentive": "Not incentive-eligible; engagement-level terms only.",
+      "conversion_note": "Permanent progression requires transfer into the T-track."
+    },
+    {
+      "code": "T3",
+      "title": "Senior Consultant",
+      "band": "Consultant",
+      "seniority_rank": 35,
+      "engagement_types": [
+        "permanent",
+        "contractor"
+      ],
+      "remuneration_model": "hourly_or_salary",
+      "cost_hr_aud": 160,
+      "effective_from": "2026-07-01",
+      "prior_cost_hr_aud": 150,
+      "dual_pathway": true,
+      "incentive": "Target up to 15% discretionary; Rem Committee determines."
+    },
+    {
+      "code": "T2",
+      "title": "Consultant",
+      "band": "Consultant",
+      "seniority_rank": 30,
+      "engagement_types": [
+        "permanent",
+        "contractor"
+      ],
+      "remuneration_model": "hourly_or_salary",
+      "cost_hr_aud": 125,
+      "effective_from": "2026-07-01",
+      "prior_cost_hr_aud": 120,
+      "dual_pathway": true,
+      "incentive": "Target up to 15% discretionary; Rem Committee determines."
+    },
+    {
+      "code": "T1",
+      "title": "Junior Consultant",
+      "band": "Consultant",
+      "seniority_rank": 25,
+      "engagement_types": [
+        "permanent",
+        "contractor"
+      ],
+      "remuneration_model": "hourly_or_salary",
+      "cost_hr_aud": 85,
+      "effective_from": "2026-07-01",
+      "prior_cost_hr_aud": 80,
+      "dual_pathway": true,
+      "incentive": "Target up to 15% discretionary; Rem Committee determines."
+    },
+    {
+      "code": "A3",
+      "title": "Senior Analyst",
+      "band": "Analyst",
+      "seniority_rank": 20,
+      "engagement_types": [
+        "permanent",
+        "contractor"
+      ],
+      "remuneration_model": "hourly_or_salary",
+      "cost_hr_aud": 70,
+      "effective_from": "2026-07-01",
+      "prior_cost_hr_aud": 65,
+      "dual_pathway": true,
+      "incentive": "Target up to 10% discretionary; Rem Committee determines."
+    },
+    {
+      "code": "A2",
+      "title": "Analyst",
+      "band": "Analyst",
+      "seniority_rank": 15,
+      "engagement_types": [
+        "permanent",
+        "contractor"
+      ],
+      "remuneration_model": "hourly_or_salary",
+      "cost_hr_aud": 55,
+      "effective_from": "2026-07-01",
+      "prior_cost_hr_aud": 50,
+      "dual_pathway": true,
+      "incentive": "Target up to 10% discretionary; Rem Committee determines."
+    },
+    {
+      "code": "A1",
+      "title": "Junior Analyst",
+      "band": "Analyst",
+      "seniority_rank": 10,
+      "engagement_types": [
+        "permanent",
+        "contractor"
+      ],
+      "remuneration_model": "hourly_or_salary",
+      "cost_hr_aud": 50,
+      "effective_from": "2026-07-01",
+      "prior_cost_hr_aud": 45,
+      "dual_pathway": true,
+      "incentive": "Target up to 10% discretionary; Rem Committee determines.",
+      "notes": "Probationary grade, 6-12 months."
+    },
+    {
+      "code": "I0",
+      "title": "Intern",
+      "band": "Intern",
+      "seniority_rank": 5,
+      "engagement_types": [
+        "program"
+      ],
+      "remuneration_model": "unpaid_program",
+      "cost_hr_aud": 0,
+      "effective_from": "2026-07-01",
+      "dual_pathway": true,
+      "incentive": "Not applicable.",
+      "notes": "Structured program placement; pathway to A1 on merit."
+    },
+    {
+      "code": "OM",
+      "title": "Office Manager",
+      "band": "Operations",
+      "seniority_rank": 8,
+      "engagement_types": [
+        "permanent"
+      ],
+      "remuneration_model": "salary",
+      "cost_hr_aud": null,
+      "effective_from": "2026-07-01",
+      "dual_pathway": false,
+      "incentive": "Not incentive-eligible; firm-internal support role.",
+      "notes": "Firm-internal operations / administration lead. Off the delivery ladder: not time-billed, no promotion pathway, no incentive target. Foundry Ops extension to schema 2.3-draft, MP-approved 2026-07-28 (TT)."
+    }
+  ],
+  "credential_modifiers": {
+    "description": "Attached to a person-in-role, not to the role. Affect rate positioning within band, scope of clinical work, and supervision requirements. Do not change role code.",
+    "modifiers": [
+      {
+        "key": "ahpra_registration",
+        "values": [
+          "none",
+          "provisional",
+          "general",
+          "specialist"
+        ],
+        "implication": "Provisional registration triggers supervision overlay (named supervisor, structured supervision plan per AHPRA pathway)."
+      },
+      {
+        "key": "fellowship_status",
+        "values": [
+          "none",
+          "advanced_trainee",
+          "fellowed"
+        ],
+        "implication": "Supports upper-band rate positioning; F-rail eligibility."
+      },
+      {
+        "key": "clinical_experience_pgy",
+        "values": "integer",
+        "implication": "Rate positioning within band."
+      },
+      {
+        "key": "higher_degree",
+        "values": [
+          "none",
+          "masters",
+          "phd",
+          "md_phd"
+        ],
+        "implication": "Rate positioning; Expert-rail eligibility signal."
+      },
+      {
+        "key": "prior_consulting",
+        "values": [
+          "none",
+          "boutique",
+          "big4",
+          "mbb"
+        ],
+        "implication": "Rate positioning and level mapping at entry."
+      }
+    ]
+  },
+  "incentive_framework": {
+    "model": "standardised_discretionary",
+    "description": "Standardised dimensions and target percentages by band; all disbursements discretionary and determined by the Partnership / Remuneration Committee. No contractual entitlement. Contractors excluded (engagement-level terms only).",
+    "dimensions": [
+      "client_impact",
+      "commercial_contribution",
+      "team_leadership",
+      "firm_and_ip_contribution"
+    ],
+    "targets_pct_of_base": {
+      "A": 10,
+      "T": 15,
+      "L1": 20,
+      "L2": 20,
+      "L3": 25
+    },
+    "calibration": "threshold_target_stretch",
+    "note": "Replaces the prior Manager-only rubric in which slightly-above-average performance attained full bonus."
+  },
+  "deprecation_map": [
+    {
+      "old": "Partner (L3) [2025 PD]",
+      "new": "P1"
+    },
+    {
+      "old": "Partner (L4) [FY23-24 rate card]",
+      "new": "P1"
+    },
+    {
+      "old": "Associate Partner (L2) [2025 PD]",
+      "new": "L3"
+    },
+    {
+      "old": "Associate Partner (L3) [FY23-24 rate card]",
+      "new": "L3"
+    },
+    {
+      "old": "Project Director / Senior Manager (L2) [rate card/platform]",
+      "new": "L2"
+    },
+    {
+      "old": "Manager (L1)",
+      "new": "L1"
+    },
+    {
+      "old": "Consultant 0.5 FTE [employment offer title]",
+      "new": "T-band role code + permanent overlay + ahpra credential modifiers"
+    },
+    {
+      "old": "T1-T3, A1-A3, E1-E2, F1-F2, I0 [platform]",
+      "new": "unchanged codes; updated rates and PD linkage"
+    }
+  ],
+  "reingestion_notes": {
+    "platform_field_mapping": {
+      "CODE": "roles[].code",
+      "ROLE": "roles[].title",
+      "BAND": "roles[].band",
+      "CURRENTLY FROM": "roles[].effective_from",
+      "COST/HR": "roles[].cost_hr_aud",
+      "BILL (LOW)": "cost_hr_aud * meta.billing_model.bill_low_multiple",
+      "BILL (HIGH)": "cost_hr_aud * meta.billing_model.bill_high_multiple"
+    },
+    "instructions": "Ingest as new effective-dated rows (2026-07-01); do not mutate FY25-26 rows so historical engagements retain original terms. Add fields: engagement_types, dual_pathway, incentive target, geo multipliers, credential modifiers (person-level table), and deviation log (person-engagement level, MP-approved). Apply deprecation_map to any records keyed on legacy codes."
+  },
+  "promotion_pathways": {
+    "description": "Promotions Pathway overlay. Applies over the role architecture; rendered as Foundry_Health_Promotions_Pathway_Overlay.docx.",
+    "criteria_gates": {
+      "tenure": "Minimum time-in-role before eligibility; a floor, never an entitlement.",
+      "qualifications": "Formal credential gates per step (degrees, AHPRA status, fellowship, higher degrees) recorded as credential modifiers in Foundry Ops.",
+      "contributions": "Sustained performance across the four firm dimensions (client impact, commercial contribution, team leadership, firm & IP contribution) at threshold-or-above for at least two consecutive review cycles, with target/stretch evidence at the promotion-critical dimensions for the destination role.",
+      "requisite_experience_and_understudy": "Demonstrated performance of the destination role's core duties before promotion (perform-at-next-level principle), including a formal understudy assignment for L-band and above.",
+      "sponsorship_and_calibration": "A named sponsor (Project Lead or partner) presents the case; promotions are calibrated across the cohort in a partner round-table, not decided engagement-by-engagement.",
+      "business_need": "For L3 and P1: commercial capacity test - the promotion must be supportable by revenue, pipeline and leadership span."
+    },
+    "decision_rights": {
+      "A_and_T": "MP approval on Project Lead recommendation, post-calibration.",
+      "L1_L2": "MP plus partner calibration panel.",
+      "L3": "Partnership decision on MP recommendation.",
+      "P1": "Invitation and consensus of the full partnership."
+    },
+    "cycles": "Annual promotion round aligned to annual reviews, with a mid-year window for clear-cut cases; all promotion events written to Foundry Ops as effective-dated role-code changes.",
+    "permanent_track": {
+      "velocity_standard": "Consulting-industry standard: c.18 months to 3 years per role, 3 years as a soft maximum. Reaching maximum tenure without promotion readiness triggers a structured career conversation (accelerated development plan, deliberate grow-in-place where the architecture supports it, or supported transition).",
+      "grow_in_place_exceptions": [
+        "L3 career Associate Partner (explicit dual pathway)",
+        "E/F rails are outside this track entirely"
+      ],
+      "steps": [
+        {
+          "from": "I0",
+          "to": "A1",
+          "min_months": 3,
+          "typical_months": "3-6",
+          "max_months": 12,
+          "understudy": false,
+          "qualification_gate": "Program completion; merit offer"
+        },
+        {
+          "from": "A1",
+          "to": "A2",
+          "min_months": 6,
+          "typical_months": "6-12",
+          "max_months": 18,
+          "understudy": false,
+          "qualification_gate": "None beyond role attributes"
+        },
+        {
+          "from": "A2",
+          "to": "A3",
+          "min_months": 12,
+          "typical_months": "12-18",
+          "max_months": 30,
+          "understudy": false,
+          "qualification_gate": "None; MD candidacy progression supportive"
+        },
+        {
+          "from": "A3",
+          "to": "T1",
+          "min_months": 12,
+          "typical_months": "18-24",
+          "max_months": 36,
+          "understudy": true,
+          "qualification_gate": "Degree completion (MD/MBBS or equivalent) or demonstrated consultant-level capability"
+        },
+        {
+          "from": "T1",
+          "to": "T2",
+          "min_months": 6,
+          "typical_months": "6-12",
+          "max_months": 24,
+          "understudy": false,
+          "qualification_gate": "None; clinical PGY progression supportive"
+        },
+        {
+          "from": "T2",
+          "to": "T3",
+          "min_months": 12,
+          "typical_months": "12-24",
+          "max_months": 36,
+          "understudy": true,
+          "qualification_gate": "None; fellowship progress / higher degree supportive"
+        },
+        {
+          "from": "T3",
+          "to": "L1",
+          "min_months": 18,
+          "typical_months": "18-30",
+          "max_months": 36,
+          "understudy": true,
+          "qualification_gate": "None; understudy of Manager role mandatory"
+        },
+        {
+          "from": "L1",
+          "to": "L2",
+          "min_months": 12,
+          "typical_months": "12-24",
+          "max_months": 36,
+          "understudy": true,
+          "qualification_gate": "None; understudy of L2 mandatory"
+        },
+        {
+          "from": "L2",
+          "to": "L3",
+          "min_months": 18,
+          "typical_months": "18-36",
+          "max_months": 42,
+          "understudy": true,
+          "qualification_gate": "None; understudy of AP mandatory; business-need gate applies"
+        },
+        {
+          "from": "L3",
+          "to": "P1",
+          "min_months": 24,
+          "typical_months": "24-48",
+          "max_months": null,
+          "understudy": true,
+          "qualification_gate": "Business-need and partnership-readiness gates; no maximum tenure (career AP pathway)"
+        }
+      ]
+    },
+    "contractor_track": {
+      "model": "Credential-and-capability-driven re-grading, not a promotion clock. Contractors progress in line with qualifications, experience and expertise obtained in parallel (clinical training, fellowship, academic and industry milestones); timelines are typically equal to or longer than the permanent track.",
+      "mechanics": [
+        "Re-grading is assessed at engagement boundaries (new work order or renewal), never mid-engagement.",
+        "A re-grade requires BOTH a credential/experience milestone AND demonstrated capability at the destination grade across prior engagements.",
+        "Tenure alone never triggers a contractor re-grade; no maximum time in grade applies.",
+        "All re-grades are MP-approved and logged as effective-dated changes in Foundry Ops; rate moves to the new band anchor unless a deviation is approved."
+      ],
+      "credential_maps": {
+        "A_rail": "A1->A2: sustained delivery + undergraduate progression; A2->A3: MD candidacy / final-year standing + independent analysis.",
+        "T_rail": "T1->T2: 4+ years clinical experience or equivalent; T2->T3: fellowship attainment or PGY6+, or MBB-associate/big-4-manager equivalence.",
+        "F_rail": "F1->F2: fellowship attainment (e.g. RACGP, RANZCR). F->T transfer: consulting capability assessment (typically T2/T3 entry).",
+        "E_rail": "E1->E2: national/international recognition and standing; rare, recognition-driven, partnership-endorsed.",
+        "L_rail": "Contractor L1->L2->L3: MBB EM / senior-manager equivalence plus demonstrated Foundry engagement leadership."
+      },
+      "conversion": "Contractor-to-permanent conversion occurs at the equivalent code (MP approval); on conversion the individual joins the permanent velocity track with a fresh time-in-role clock and full incentive/firm-building overlay."
+    },
+    "status_interaction": {
+      "tenure_clock": "Time-in-role accrues only while status is Active. Inactive (Reserve) pauses the clock; it does not reset it.",
+      "soft_maximum": "The 3-year soft maximum on the permanent track counts Active time only, so a pause never triggers a career conversation by itself.",
+      "credential_accrual": "Qualifications and experience obtained while Inactive count in full at re-entry and may support placement at a higher code.",
+      "contractor": "Contractor re-grading is unaffected by status duration, being credential- and capability-driven rather than tenure-driven."
+    }
+  },
+  "functional_groupings": {
+    "description": "Client- and team-facing functional view used in the Foundry onboarding deck. Maps onto canonical codes; used for org charts and external descriptions, not for rate or progression logic.",
+    "groups": [
+      {
+        "function": "Leadership",
+        "codes": [
+          "MP",
+          "P1",
+          "L3",
+          "L2",
+          "L1"
+        ],
+        "onboarding_labels": [
+          "Partner",
+          "Associate Partner / Director"
+        ]
+      },
+      {
+        "function": "Consulting Team",
+        "codes": [
+          "T1",
+          "T2",
+          "T3",
+          "A1",
+          "A2",
+          "A3",
+          "I0"
+        ],
+        "onboarding_labels": [
+          "Consultant/Expert",
+          "Analyst"
+        ]
+      },
+      {
+        "function": "Experts",
+        "codes": [
+          "E1",
+          "E2",
+          "F1",
+          "F2",
+          "ADV"
+        ],
+        "onboarding_labels": [
+          "Subject Matter Expert",
+          "Advisor"
+        ]
+      },
+      {
+        "function": "Operations",
+        "codes": [
+          "OM"
+        ],
+        "onboarding_labels": [
+          "Office Manager"
+        ]
+      }
+    ],
+    "peer_principle": "Foundry operates in close, collaborative, non-hierarchical teams. Bands and codes govern accountability, remuneration and progression only. They do not create deference, and initiative and leadership are prized from all perspectives."
+  },
+  "team_structure": {
+    "description": "FY27 operating model. Orthogonal to role codes: every person holds one role code and sits in one talent pool, and may be assigned to a core team and any number of internal project teams.",
+    "operational_groups": [
+      {
+        "name": "LT / Partnership",
+        "composition": "Partners (P1) and Managing Partner (MP)",
+        "role": "Firm governance, strategy and coordination of core teams"
+      },
+      {
+        "name": "Admin and Ops Team",
+        "composition": "Managing Partner (MP); Office Manager",
+        "role": "Day-to-day firm operations, contracting flow, systems"
+      },
+      {
+        "name": "Core Teams",
+        "composition": "Partner-coordinated standing teams (e.g. Core Team A full-time; Core Team B part-time; Team C North America)",
+        "role": "Pastoral care and outputs; project-based client work, team-based internal work, team-led BD, partner-led and geography specialisation"
+      },
+      {
+        "name": "Internal Project Teams",
+        "composition": "Led by project owner",
+        "role": "Intern Analyst Program; Project Assay (ExpertCo); Project Alloy (IntelCo); Community; Media and engagement"
+      }
+    ],
+    "talent_pools": [
+      {
+        "pool": "Associate Partner / Manager Pool",
+        "codes": [
+          "L3",
+          "L2",
+          "L1"
+        ],
+        "lead_initials": "TT"
+      },
+      {
+        "pool": "Consultant Pool",
+        "codes": [
+          "T1",
+          "T2",
+          "T3"
+        ],
+        "lead_initials": "TT/CP"
+      },
+      {
+        "pool": "Expert / Fellow Pool",
+        "codes": [
+          "E1",
+          "E2",
+          "F1",
+          "F2",
+          "ADV"
+        ],
+        "lead_initials": "MB"
+      },
+      {
+        "pool": "Analyst Pool",
+        "codes": [
+          "A1",
+          "A2",
+          "A3",
+          "I0"
+        ],
+        "lead_initials": "CP"
+      }
+    ],
+    "principles": [
+      "Core teams are responsible for pastoral care and outputs; individuals cross over according to availability and need across projects.",
+      "Active analysts and consultants rotate through teams (reviewed quarterly) and self-nominate for projects and programs of interest.",
+      "Core team meetings and syncs are coordinated by the core team partners.",
+      "Experts and fellows are assigned to teams on a project basis and contribute to primer and IP development.",
+      "Talent pool leads own the relationship for every member of their pool, including Inactive and Alumni members."
+    ],
+    "source": "Foundry Health onboarding deck, Team Structure FY27; 'team structure mimics other firms, but we are all peers'."
+  },
+  "workforce_status": {
+    "description": "Person-level lifecycle status, effective-dated and orthogonal to role code. A person always holds both a role code and a status. Status governs obligations, access and clock treatment, never the role code itself.",
+    "statuses": [
+      {
+        "status": "Active",
+        "definition": "Currently engaged as a permanent employee or under a live contractor work order.",
+        "clock": "Tenure clock accrues (permanent track).",
+        "obligations": "Full role obligations per the applicable overlay.",
+        "access": "Full systems, engagement and firm access."
+      },
+      {
+        "status": "Inactive (Reserve)",
+        "definition": "Self-nominated or mutually agreed pause, colloquially 'shelved'. Used where an individual steps away for another role, clinical training, fellowship, study, parental leave or personal reasons, with the intention or option of returning. Reviewable, nominally up to 24 months.",
+        "clock": "Tenure clock paused; accrued time-in-role and contribution evidence are retained, not reset. Credentials obtained externally continue to count and are recorded on return.",
+        "obligations": "No delivery, availability or firm-building obligations. Confidentiality, IP assignment and non-solicitation survive.",
+        "access": "Retains alumni-level communications and optional community/learning access; systems access suspended.",
+        "mechanics_permanent": "Formalised as unpaid leave where the role is held open (nominally up to 12 months), or as a resignation to Alumni status where the pause is open-ended or longer. The distinction is documented at the outset because the employment consequences differ.",
+        "mechanics_contractor": "Dormancy between work orders is the normal contractor state and requires no flag. The Inactive (Reserve) flag is applied where no work order has been active for six months, to keep pool availability data accurate."
+      },
+      {
+        "status": "Alumni",
+        "definition": "Formally exited with no current expectation of return, on good terms. Not a lesser status: alumni are a deliberate part of Foundry's network and referral base.",
+        "clock": "Clock closed. Prior time-in-role and performance record are retained for re-hire assessment.",
+        "obligations": "Confidentiality, IP assignment and non-solicitation survive per the applicable agreement.",
+        "access": "Alumni network, firm updates, events; eligible for re-hire priority, referral arrangements and BD introductions; may be invited into the Advisor (ADV) role."
+      },
+      {
+        "status": "Advisor",
+        "definition": "Held concurrently with the ADV role code. Senior industry figures, including senior alumni, providing periodic strategic guidance.",
+        "clock": "Not applicable.",
+        "obligations": "Per individually agreed terms.",
+        "access": "Partnership-level strategic fora as invited; mentoring access to emerging talent."
+      }
+    ],
+    "re_entry_rules": [
+      {
+        "absence": "0\u201312 months",
+        "treatment": "Returns at the same role code. Tenure clock resumes from its paused position."
+      },
+      {
+        "absence": "12\u201324 months",
+        "treatment": "Re-entry assessment confirms the role code. Where parallel qualifications or experience have been obtained (fellowship, higher degree, senior industry role), the assessment may place the individual at a HIGHER code than at departure. Credential accrual is not penalised by absence."
+      },
+      {
+        "absence": ">24 months / Alumni",
+        "treatment": "Treated as a new entry with alumni re-hire priority; placement is credential- and capability-based per the Promotions Pathway, and prior Foundry record is weighted favourably."
+      }
+    ],
+    "governance": [
+      "Status changes are requested through, or notified to, the individual's talent pool lead and approved by the Managing Partner.",
+      "All status changes are written to Foundry Ops as effective-dated records against the person, with the role code unchanged.",
+      "Talent pool leads review Inactive and Alumni members quarterly, alongside the pool's active availability review.",
+      "Rates and salary bands are re-anchored to the current financial year on re-entry; the departure-era rate does not carry forward.",
+      "No status is a performance judgement. Performance-related exits are handled separately under the applicable overlay and are not recorded as Reserve status."
+    ]
+  },
+  "code_migration": {
+    "description": "Machine-readable legacy-to-canonical code mapping for Foundry Ops migration. Distinct from deprecation_map, which is the human-readable narrative rendered in documents. Every legacy label a person record can carry must resolve here, including codes that did not change.",
+    "identity_note": "Identity rows (code maps to itself) are generated for every canonical code, in both bare-code and 'Title (CODE)' display forms.",
+    "renames": [
+      {
+        "legacy_label": "Partner (L3)",
+        "legacy_source": "2025_position_description",
+        "canonical_role_code": "P1"
+      },
+      {
+        "legacy_label": "Partner",
+        "legacy_source": "2025_position_description",
+        "canonical_role_code": "P1"
+      },
+      {
+        "legacy_label": "L3",
+        "legacy_source": "2025_position_description",
+        "canonical_role_code": "P1"
+      },
+      {
+        "legacy_label": "Partner (L4)",
+        "legacy_source": "fy23_24_rate_card",
+        "canonical_role_code": "P1"
+      },
+      {
+        "legacy_label": "L4",
+        "legacy_source": "fy23_24_rate_card",
+        "canonical_role_code": "P1"
+      },
+      {
+        "legacy_label": "Associate Partner (L2)",
+        "legacy_source": "2025_position_description",
+        "canonical_role_code": "L3"
+      },
+      {
+        "legacy_label": "L2",
+        "legacy_source": "2025_position_description",
+        "canonical_role_code": "L3"
+      },
+      {
+        "legacy_label": "Associate Partner (L3)",
+        "legacy_source": "fy23_24_rate_card",
+        "canonical_role_code": "L3"
+      },
+      {
+        "legacy_label": "Associate Partner / Director",
+        "legacy_source": "platform",
+        "canonical_role_code": "L3"
+      },
+      {
+        "legacy_label": "Project Director / Sr Manager",
+        "legacy_source": "platform",
+        "canonical_role_code": "L2"
+      },
+      {
+        "legacy_label": "Project Director / Senior Manager (L2)",
+        "legacy_source": "fy23_24_rate_card",
+        "canonical_role_code": "L2"
+      },
+      {
+        "legacy_label": "Project Manager / Manager",
+        "legacy_source": "platform",
+        "canonical_role_code": "L1"
+      },
+      {
+        "legacy_label": "Consultant (junior)",
+        "legacy_source": "platform",
+        "canonical_role_code": "T1"
+      },
+      {
+        "legacy_label": "Subject Matter Expert",
+        "legacy_source": "onboarding_deck",
+        "canonical_role_code": "E1"
+      },
+      {
+        "legacy_label": "Advisor",
+        "legacy_source": "onboarding_deck",
+        "canonical_role_code": "ADV"
+      },
+      {
+        "legacy_label": "Office Manager",
+        "legacy_source": "onboarding_deck",
+        "canonical_role_code": "OM"
+      },
+      {
+        "legacy_label": "Office Manager (OM)",
+        "legacy_source": "platform",
+        "canonical_role_code": "OM"
+      }
+    ],
+    "requires_review": [
+      {
+        "legacy_label": "Consultant (0.5 FTE)",
+        "legacy_source": "offer_letter",
+        "note": "Employment offer title. The canonical code depends on the individual's assessed grade (T1, T2 or T3) and cannot be derived automatically. Resolve with the MP, then record the code plus the permanent overlay and AHPRA credential modifiers."
+      },
+      {
+        "legacy_label": "Consultant",
+        "legacy_source": "offer_letter",
+        "note": "Ambiguous: may be an employed Consultant or a contractor T-grade. Resolve engagement type and grade with the MP before migrating."
+      }
+    ]
+  }
+}
