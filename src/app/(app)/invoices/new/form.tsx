@@ -14,7 +14,7 @@ type ProjectOption = {
   clientName: string;
 };
 
-type Line = { label: string; amountDollars: string };
+type Line = { label: string; amountDollars: string; projectId?: string };
 
 export type InvoiceFormInitialValues = {
   projectId?: string;
@@ -44,6 +44,19 @@ export function NewInvoiceForm({
 
   const project = projects.find((p) => p.id === projectId);
 
+  // Sibling projects of the invoice's client — the only projects a line
+  // may be attributed to (Option C, feedback #12B). Only offer the
+  // per-line picker when the client actually has more than one
+  // invoiceable project, else it's noise.
+  const siblingProjects = useMemo(
+    () =>
+      project
+        ? projects.filter((p) => p.clientCode === project.clientCode)
+        : [],
+    [projects, project],
+  );
+  const showLineProjects = siblingProjects.length > 1;
+
   const totals = useMemo(() => {
     const ex = lines.reduce((s, l) => s + (Number(l.amountDollars) || 0), 0);
     const gst = Math.round(ex * 10) / 100;
@@ -58,7 +71,7 @@ export function NewInvoiceForm({
     setLines((prev) => prev.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
   }
   function addLine() {
-    setLines((prev) => [...prev, { label: '', amountDollars: '0' }]);
+    setLines((prev) => [...prev, { label: '', amountDollars: '0', projectId: '' }]);
   }
   function removeLine(i: number) {
     setLines((prev) => (prev.length === 1 ? prev : prev.filter((_, idx) => idx !== i)));
@@ -84,7 +97,12 @@ export function NewInvoiceForm({
           name="projectId"
           required
           value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
+          onChange={(e) => {
+            setProjectId(e.target.value);
+            // Header client may have changed — clear any line overrides so
+            // a line can't stay pointed at another client's project.
+            setLines((prev) => prev.map((l) => ({ ...l, projectId: '' })));
+          }}
           className="h-9 w-full rounded-md border border-line bg-surface-elev px-2 text-sm text-ink shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
         >
           <option value="">— Choose project —</option>
@@ -117,10 +135,22 @@ export function NewInvoiceForm({
       <Section title="Line items">
         <p className="text-xs text-ink-3">
           At least one line item<span className="ml-1 text-status-red">*</span> with label and amount.
+          {showLineProjects && (
+            <>
+              {' '}
+              This client has multiple projects — set a line&apos;s project to
+              bill across them on one invoice; leave it as{' '}
+              <span className="font-medium">{project?.code}</span> otherwise.
+            </>
+          )}
         </p>
         <div className="space-y-2">
           {lines.map((l, i) => (
             <div key={i} className="flex items-center gap-2">
+              {/* Always emit one lineProjectId per line so the server can
+                  zip it with lineLabel/lineAmount by index; '' = the
+                  invoice's primary project. */}
+              <input type="hidden" name="lineProjectId" value={l.projectId ?? ''} />
               <Input
                 name="lineLabel"
                 value={l.label}
@@ -129,6 +159,24 @@ export function NewInvoiceForm({
                 className="flex-1"
                 required
               />
+              {showLineProjects && (
+                <select
+                  aria-label="Line project"
+                  value={l.projectId ?? ''}
+                  onChange={(e) => updateLine(i, { projectId: e.target.value })}
+                  className="h-9 w-36 rounded-md border border-line bg-surface-elev px-2 text-xs text-ink shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  title="Attribute this line to a project of the same client"
+                >
+                  <option value="">{project?.code} (invoice project)</option>
+                  {siblingProjects
+                    .filter((p) => p.id !== projectId)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.code}
+                      </option>
+                    ))}
+                </select>
+              )}
               <Input
                 name="lineAmount"
                 type="number"
