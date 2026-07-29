@@ -1,3 +1,5 @@
+import Link from 'next/link';
+import { LayoutGrid } from 'lucide-react';
 import type { Role } from '@prisma/client';
 import { Breadcrumb } from '@/components/shell/breadcrumb';
 import { CommandPaletteTrigger } from '@/components/shell/command-palette-trigger';
@@ -41,6 +43,18 @@ export function Topbar({
       </div>
 
       <div className="flex items-center gap-2 md:gap-3">
+        {/* Platform overview — the role × capability access matrix any
+            user can refer to. Sits beside the search trigger; icon-only
+            on narrow viewports where the palette + user menu take
+            priority. */}
+        <Link
+          href="/platform-overview"
+          title="Platform overview"
+          className="inline-flex h-8 items-center gap-2 rounded-md border border-line bg-surface-elev px-3 text-sm text-ink-3 hover:bg-surface-hover"
+        >
+          <LayoutGrid className="h-3.5 w-3.5" />
+          <span className="hidden lg:inline">Overview</span>
+        </Link>
         <CommandPaletteTrigger />
         <UserMenu
           initials={initials}
