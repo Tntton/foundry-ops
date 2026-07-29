@@ -1397,15 +1397,18 @@ A secondary, smaller surface of `propose_*` tools handles low-field one-shot act
 Migrate personnel fields, functionality and taxonomy to the FY27 role architecture. **Shared reference: [`FY27_ROLE_ARCHITECTURE.md`](FY27_ROLE_ARCHITECTURE.md)** (crosswalk + decisions) and the source package in [`docs/fy27-migration/`](docs/fy27-migration/). Decisions locked by TT 2026-07-28: **hybrid** data model (flat `Person` current-state + effective-dated dimension tables + FY27 reference tables), **phased MVP** for go-live, **new `OPERATIONS`/`OM`** band+code for the Office Manager, **adopt FY27 rate bands**. Do NOT run the four `.sql` files against the Prisma DB — they are the spec, ported into Prisma migrations by these tasks. Schema is `2.3-draft`, `PENDING_MP_SIGNOFF` — nothing in this phase runs against **prod** until the MP signs off and OD-1 is resolved.
 
 ### TASK-400 — FY27 taxonomy constants + legacy crosswalk (code, no DB)
-**status:** todo
+**status:** done
 **depends on:** —
 **acceptance:**
-- [ ] New `src/lib/fy27-roles.ts`: the 17 canonical role codes + `OM`, 8 bands + `OPERATIONS`, engagement types (`permanent`/`contractor`/`program`/`honorary`), workforce statuses (`ACTIVE`/`RESERVE`/`ALUMNI`/`ADVISOR`), pool codes, and per-role metadata (title, band, seniority_rank, permits_*, incentive target) — sourced from `docs/fy27-migration/foundry_roles_schema.json`, not re-keyed by hand.
-- [ ] `legacyLevelToRoleCode(level, band?)` implementing the §3a crosswalk (incl. `L4→P1`, `IO→I0`, `OM→OM`) and `bandForRoleCode(code)`; a `isLeadershipRoleCode` / band predicate that correctly includes L1/L2/L3 under LEADERSHIP.
-- [ ] Pure unit tests covering every current level code → expected (role code, band), the two renames, and the OM/OPERATIONS extension.
-- [ ] `pnpm typecheck && pnpm test && pnpm lint` green. Commit: `feat(TASK-400): FY27 taxonomy constants + legacy crosswalk`.
+- [x] New `src/lib/fy27-roles.ts`: the 17 canonical role codes + `OM`, 8 bands + `OPERATIONS`, engagement types (`permanent`/`contractor`/`program`/`honorary`), workforce statuses (`ACTIVE`/`RESERVE`/`ALUMNI`/`ADVISOR`), pool codes, and per-role metadata (title, band, seniority_rank, permits_*, incentive target) — sourced from `docs/fy27-migration/foundry_roles_schema.json` via `scripts/gen-fy27-roles.mjs` → `src/lib/fy27-roles.generated.ts`, not re-keyed by hand.
+- [x] `legacyLevelToRoleCode(level)` implementing the §3a crosswalk (incl. `L4→P1`, `IO→I0`, `OM→OM`) and `bandForRoleCode(code)`; `isLeadershipRoleCode` / `isLeadershipBandCode` predicates that correctly include L1/L2/L3 under LEADERSHIP. Also `poolForRoleCode`, `titleForRoleCode`, `roleMeta`, `ROLE_CODES`.
+- [x] Pure unit tests covering every current level code → expected (role code, band), the two renames, and the OM/OPERATIONS extension (27 tests).
+- [x] `pnpm typecheck && pnpm lint` green; the 27 new tests pass. (Full suite: 405 pass, 1 **pre-existing** unrelated failure in `assistant-tools.test.ts` from commit `ce5ccb5` — flagged separately, not introduced here.)
+- [x] Commit: `feat(TASK-400): FY27 taxonomy constants + legacy crosswalk`.
 
 **context:** Foundation for the rest of Phase 7 — every later task imports from here. No schema change yet, so it can land and be reviewed independently.
+
+**note on completion:** Generated data (`fy27-roles.generated.ts`) is produced from the canonical schema JSON so the app taxonomy, the SQL seed, and the PDs can't drift. `EngagementType`/`EmploymentBasis`/`WorkforceStatusCode`/`PoolCode` types exported for the downstream tasks. Leadership predicate deliberately now includes L1/L2 (band move) — consumers still read the legacy `isLeadershipBand` until TASK-408 rewires them.
 
 ### TASK-401 — FY27 reference tables: schema + seed (bands, roles, rate bands, statuses, pools, code map)
 **status:** todo
