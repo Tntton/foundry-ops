@@ -988,8 +988,9 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Commit: `fix(TASK-131): WhatsApp re-delivery dedup + stale copy`.
 
 ### TASK-132 — WhatsApp: classify document type (receipt vs supplier invoice) and route
-**status:** todo
+**status:** done (PR — needs live verification)
 **depends on:** TASK-128, TASK-302b (bill prefill)
+**note (2026-07-03):** Built. Added `documentType` (`receipt`|`supplier_invoice`|`unknown`, nullable/defaulted) + a classification rule to the intake-OCR ([extract.ts](src/server/agents/intake-ocr/extract.ts)); pure routing logic in [doc-route.ts](src/server/agents/intent/doc-route.ts) (caption keyword > classifier; confidence gate; RECEIPT/BILL clarify) with 8 unit tests. `handleExpense` now routes: receipt → expense prefill link, supplier_invoice → **bill** prefill link (`/bills/new?prefill=`, reusing the TASK-302b bill payload; no auto-write), ambiguous → asks RECEIPT/BILL and stashes the OCR result in `conversation.state.pendingDoc` (no re-OCR on the reply — no new flow-enum, no migration). Typecheck + 315 tests + lint green. **Not runtime-verified (no live WhatsApp/DB).** Known gap: bill links don't get a TASK-128 reminder dispatch (dispatch tracks timesheet/expense only) — follow-up if bill reminders are wanted.
 **context:** TT (2026-07-03): a user should be able to just send an image and have the agent work out the intended action. Intent auto-detection already works (bare image → expense OCR; free-text → classified). The gap: **every image is currently treated as a personal receipt → Expense.** A supplier *invoice* sent for AP gets mislogged as an expense instead of routed to Bills. Add document-type classification so the agent picks the right flow.
 **what already exists (reuse, don't rebuild):** `PrefillKind` has `'bill'`; [prefill-bill.ts](src/server/agents/assistant/tools/prefill-bill.ts) builds a `/bills/new?prefill=` link; the intake-OCR extractor already reads supplier-invoice fields (`invoiceNumber`, `supplierAbn`, payment terms). Only the *classification + branch* is missing.
 **design:**
