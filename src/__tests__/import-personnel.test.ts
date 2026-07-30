@@ -99,6 +99,99 @@ describe('personnel preview — golden file', () => {
   });
 });
 
+const HEADER =
+  'email,firstName,lastName,band,level,employment,region,rateUnit,rateDollars,startDate,phone,whatsappNumber,personalEmail,linkedinUrl,fte,roles,jobTitle';
+
+function build(rows: string[], existing: ExistingPersonRow[] = []) {
+  const res = buildPersonnelPreviewWithExisting(
+    [HEADER, ...rows].join('\n') + '\n',
+    'inline.csv',
+    existing,
+  );
+  if (!res.ok) throw new Error(`parse failed: ${res.error.message}`);
+  return res.preview;
+}
+
+describe('personnel preview — optional personal email (TASK-304)', () => {
+  it('accepts a new contractor with a blank personalEmail', () => {
+    const p = build([
+      'bob.contractor@foundry.health,Bob,Contractor,Consultant,T2,contractor,AU,hour,200,2025-01-01,,,,,,staff,Consultant',
+    ]);
+    const row = p.rows[0]!;
+    expect(row.action).toBe('new');
+    expect(row.errors).toEqual([]);
+  });
+
+  it('allows a personalEmail equal to the person’s own work email', () => {
+    const p = build([
+      'alice.smith@foundry.health,Alice,Smith,Consultant,T2,contractor,AU,hour,200,2025-01-01,,,alice.smith@foundry.health,,,staff,Consultant',
+    ]);
+    expect(p.rows[0]!.action).toBe('new');
+    expect(p.rows[0]!.errors).toEqual([]);
+  });
+
+  it('rejects a personalEmail that is a different @foundry.health address', () => {
+    const p = build([
+      'carol.jones@foundry.health,Carol,Jones,Consultant,T2,contractor,AU,hour,200,2025-01-01,,,someone.else@foundry.health,,,staff,Consultant',
+    ]);
+    expect(p.rows[0]!.action).toBe('error');
+    expect(p.rows[0]!.errors.some((e) => e.includes('foundry.health'))).toBe(true);
+  });
+});
+
+describe('personnel preview — non-destructive updates (TASK-304)', () => {
+  const matt: ExistingPersonRow = {
+    id: 'p-matt',
+    email: 'matt.byers@foundry.health',
+    firstName: 'Matt',
+    lastName: 'Byers',
+    band: 'Partner',
+    level: 'L4',
+    employment: 'ft',
+    region: 'AU',
+    rateUnit: 'day',
+    rate: 200_000,
+    startDate: new Date('2024-01-15'),
+    phone: null,
+    whatsappNumber: null,
+    personalEmail: null,
+    linkedinUrl: null,
+    fte: { toString: () => '1.00' },
+    roles: ['partner'],
+    initials: 'MB',
+  };
+
+  it('does not diff blank rate / fte / roles cells against the existing record', () => {
+    const p = build(
+      [
+        // rate, fte, roles all blank — everything else matches the existing row.
+        'matt.byers@foundry.health,Matt,Byers,Partner,L4,ft,AU,day,,2024-01-15,,,,,,,Partner',
+      ],
+      [matt],
+    );
+    const row = p.rows[0]!;
+    expect(row.action).toBe('update');
+    const fields = row.diff.map((d) => d.field);
+    expect(fields).not.toContain('rate (¢)');
+    expect(fields).not.toContain('fte');
+    expect(fields).not.toContain('roles');
+    // With every provided column matching, the diff is empty.
+    expect(row.diff).toEqual([]);
+  });
+
+  it('still diffs a rate that is actually provided', () => {
+    const p = build(
+      [
+        'matt.byers@foundry.health,Matt,Byers,Partner,L4,ft,AU,day,900,2024-01-15,,,,,,,Partner',
+      ],
+      [matt],
+    );
+    const row = p.rows[0]!;
+    expect(row.action).toBe('update');
+    expect(row.diff.find((d) => d.field === 'rate (¢)')).toBeDefined();
+  });
+});
+
 describe('personnel preview — empty + missing columns', () => {
   it('errors on an empty file', () => {
     const result = buildPersonnelPreviewWithExisting('', 'empty.csv', []);

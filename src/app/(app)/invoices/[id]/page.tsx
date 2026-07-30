@@ -211,6 +211,16 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
               {rebilledCount === 1 ? '' : 's'} →
             </a>
           )}
+          {invoice.taxInvoiceSharepointUrl && (
+            <a
+              href={invoice.taxInvoiceSharepointUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-md border border-line bg-card px-3 py-1.5 text-xs text-ink hover:bg-surface-hover"
+            >
+              View in SharePoint ↗
+            </a>
+          )}
           {canCreate && invoice.status === 'draft' && (
             <SubmitForApprovalButton invoiceId={invoice.id} />
           )}

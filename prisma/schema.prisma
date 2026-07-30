@@ -1157,6 +1157,15 @@ model Invoice {
   // detail page and a chip on the listings so partners can see at a
   // glance which approved invoices still need to be issued.
   taxInvoiceFinalisedAt  DateTime?
+  // SharePoint pointer for the archived tax-invoice PDF (TASK-068).
+  // Populated the first time the invoice is finalised while Graph is
+  // configured; the app never stores binary content (A3). Paired
+  // driveItemId lets a future inline-preview proxy stream the PDF, and
+  // taxInvoiceSharepointUrl is the browser-openable webUrl surfaced as
+  // "View in SharePoint". Null for invoices finalised before this wiring
+  // landed, or while Graph was unreachable (retried on next finalise).
+  taxInvoiceSharepointUrl String?
+  taxInvoiceDriveItemId  String?
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
 
@@ -1965,4 +1974,26 @@ model WhatsAppPrefillDispatch {
 
   @@index([completedAt, expiresAt])
   @@index([personId, completedAt])
+}
+
+/// Dry-run cache for the two-step bulk-import flow (parse → preview →
+/// Commit). The parsed+validated preview is stashed here under a random
+/// token bound to the uploader, then re-read on the preview render and on
+/// Commit so the commit never re-trusts the raw CSV.
+///
+/// This replaces a per-process in-memory Map, which silently failed on
+/// Vercel: parse and Commit are separate serverless invocations that can
+/// land on different instances, so the Commit couldn't find the stash and
+/// the user saw "preview expired". A shared table fixes that for every
+/// import surface (personnel, timesheets, bills, expenses). Rows are
+/// short-lived (10-min TTL) and GC'd opportunistically on each write.
+model ImportDryRun {
+  token     String   @id
+  userId    String // Person.id of the uploader — reads are bound to this
+  kind      String // 'personnel' | 'timesheets' | 'bills' | 'expenses'
+  data      Json // the serialised *Preview object (JSON-safe by construction)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
 }

@@ -4,6 +4,8 @@ import {
   buildReceiptFilename,
   extensionFromMime,
   receiptFolderPath,
+  buildInvoiceFilename,
+  invoiceFolderPath,
 } from '@/server/integrations/sharepoint-receipts';
 
 /**
@@ -164,5 +166,72 @@ describe('receiptFolderPath', () => {
     expect(receiptFolderPath('expense', new Date('2027-07-01T00:00:00Z'))).toBe(
       'CORPORATE/ADMIN ACCESS/00 Administration/03 Financial/01 Company Administration/FY 27 - 28/Expenses/2027-07',
     );
+  });
+});
+
+// ─── TASK-068 · invoice PDF archival helpers ────────────────────────
+
+describe('invoiceFolderPath', () => {
+  it('files an invoice under the Invoices bucket by issue date', () => {
+    expect(invoiceFolderPath(new Date('2026-08-15T00:00:00Z'))).toBe(
+      'CORPORATE/ADMIN ACCESS/00 Administration/03 Financial/01 Company Administration/FY 26 - 27/Invoices/2026-08',
+    );
+  });
+  it('honours SHAREPOINT_RECEIPTS_ROOT override', () => {
+    process.env['SHAREPOINT_RECEIPTS_ROOT'] = 'CUSTOM/ROOT';
+    expect(invoiceFolderPath(new Date('2026-08-15T00:00:00Z'))).toBe(
+      'CUSTOM/ROOT/FY 26 - 27/Invoices/2026-08',
+    );
+  });
+  it('crosses the FY boundary (Jul 2027 → FY 27 - 28)', () => {
+    expect(invoiceFolderPath(new Date('2027-07-01T00:00:00Z'))).toBe(
+      'CORPORATE/ADMIN ACCESS/00 Administration/03 Financial/01 Company Administration/FY 27 - 28/Invoices/2027-07',
+    );
+  });
+});
+
+describe('buildInvoiceFilename', () => {
+  it('produces the canonical shape with number, dollars and issuer', () => {
+    const name = buildInvoiceFilename({
+      issueDate: new Date('2026-07-08T00:00:00Z'),
+      invoiceNumber: 'IFM001-INV-12',
+      amountTotalCents: 1_870_000,
+      ownerInitials: 'TT',
+      id: 'inv_a1b2c3d4e5',
+    });
+    expect(name).toBe('2026-07-08 - IFM001-INV-12 - $18700 - TT - b2c3d4e5.pdf');
+  });
+  it('sanitises invalid SharePoint chars in the invoice number', () => {
+    const name = buildInvoiceFilename({
+      issueDate: new Date('2026-07-08T00:00:00Z'),
+      invoiceNumber: 'INV/01*x?',
+      amountTotalCents: 5000,
+      ownerInitials: 'JN',
+      id: 'inv_xyz98765',
+    });
+    // "INV/01*x?" → each of / * ? replaced with '-' → "INV-01-x-";
+    // shortId is the last 8 chars of the id → "xyz98765".
+    expect(name).toBe('2026-07-08 - INV-01-x- - $50 - JN - xyz98765.pdf');
+    expect(name).not.toMatch(/[/\\?%*:|"<>]/u);
+  });
+  it('always ends in .pdf', () => {
+    const name = buildInvoiceFilename({
+      issueDate: new Date('2026-07-08T00:00:00Z'),
+      invoiceNumber: 'X-1',
+      amountTotalCents: 100,
+      ownerInitials: 'AA',
+      id: 'inv_1',
+    });
+    expect(name.endsWith('.pdf')).toBe(true);
+  });
+  it('falls back to "no-number" when the number is empty', () => {
+    const name = buildInvoiceFilename({
+      issueDate: new Date('2026-07-08T00:00:00Z'),
+      invoiceNumber: '',
+      amountTotalCents: 100,
+      ownerInitials: 'TT',
+      id: 'inv_1',
+    });
+    expect(name).toContain(' - no-number - ');
   });
 });

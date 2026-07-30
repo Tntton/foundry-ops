@@ -27,7 +27,7 @@ export async function parseBillsCsv(
   }
   const result = await buildBillsPreview(csvText, fileName);
   if (!result.ok) return { ok: false, message: result.error.message };
-  const token = stashBills(session.person.id, result.preview);
+  const token = await stashBills(session.person.id, result.preview);
   return { ok: true, token };
 }
 
@@ -50,7 +50,7 @@ export async function commitBillsCsv(
   if (!token) return { status: 'error', message: 'Missing token.' };
   const mode: CommitBillsMode =
     modeRaw === 'force_create' ? 'force_create' : 'skip_duplicates';
-  const preview = readBills(session.person.id, token);
+  const preview = await readBills(session.person.id, token);
   if (!preview) {
     return {
       status: 'error',
@@ -59,7 +59,7 @@ export async function commitBillsCsv(
   }
   try {
     const result = await commitBillsImport(preview, session.person.id, mode);
-    discard(token);
+    await discard(token);
     revalidatePath('/bills');
     revalidatePath('/admin/audit');
     const params = new URLSearchParams({

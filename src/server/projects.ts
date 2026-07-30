@@ -229,9 +229,58 @@ export async function listActivePeopleOptions() {
   });
 }
 
-export async function listClientOptions() {
-  return prisma.client.findMany({
+export type ClientOption = {
+  id: string;
+  code: string;
+  legalName: string;
+  /** Next free project number for this client (max existing suffix + 1,
+   *  1 if the client has no projects yet). */
+  nextNumber: number;
+  /** Suggested next project code: `${code}${nextNumber padded to 3}`
+   *  (e.g. a client `IFM` whose last project is IFM003 → `IFM004`).
+   *  The new-project form pre-fills the Code field with this when the
+   *  operator picks the client, matching the client + zero-padded-number
+   *  convention the Settings tab derives codes from. */
+  nextCode: string;
+};
+
+/**
+ * Client picker options for the new-project form, each carrying the
+ * next free project code for that client. The code convention is
+ * `clientCode` + a 3-digit sequence (IFM001, IFM002, …); we scan the
+ * client's existing projects for the highest suffix and offer +1 so the
+ * operator doesn't have to remember where the series is up to. Codes
+ * stay editable — this is a suggestion, not a lock.
+ */
+export async function listClientOptions(): Promise<ClientOption[]> {
+  const clients = await prisma.client.findMany({
     orderBy: { code: 'asc' },
-    select: { id: true, code: true, legalName: true },
+    select: {
+      id: true,
+      code: true,
+      legalName: true,
+      projects: { select: { code: true } },
+    },
+  });
+  return clients.map((c) => {
+    // Only count codes shaped like this client's prefix + digits, so a
+    // legacy / hand-entered code that doesn't fit the convention can't
+    // skew the next number. Escape the prefix defensively even though
+    // client codes are uppercase alphanumerics today.
+    const prefix = c.code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`^${prefix}(\\d+)$`);
+    let max = 0;
+    for (const p of c.projects) {
+      const m = p.code.match(re);
+      if (m) max = Math.max(max, Number(m[1]));
+    }
+    const nextNumber = max + 1;
+    return {
+      id: c.id,
+      code: c.code,
+      legalName: c.legalName,
+      nextNumber,
+      nextCode: `${c.code}${String(nextNumber).padStart(3, '0')}`,
+    };
   });
 }

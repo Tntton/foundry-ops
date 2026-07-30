@@ -31,7 +31,7 @@ export async function parsePersonnelCsv(
 
   const result = await buildPersonnelPreview(csvText, fileName);
   if (!result.ok) return { ok: false, message: result.error.message };
-  const token = stashPersonnel(session.person.id, result.preview);
+  const token = await stashPersonnel(session.person.id, result.preview);
   return { ok: true, token };
 }
 
@@ -57,7 +57,7 @@ export async function commitPersonnelCsv(
 
   const token = (formData.get('token') as string | null) ?? '';
   if (!token) return { status: 'error', message: 'Missing token.' };
-  const preview = readPersonnel(session.person.id, token);
+  const preview = await readPersonnel(session.person.id, token);
   if (!preview) {
     return {
       status: 'error',
@@ -73,7 +73,7 @@ export async function commitPersonnelCsv(
 
   try {
     const result = await commitPersonnelImport(preview, session.person.id);
-    discard(token);
+    await discard(token);
     revalidatePath('/directory');
     revalidatePath('/admin/audit');
     const params = new URLSearchParams({

@@ -624,6 +624,90 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Sidebar + relevant screens say "Snapshot · regenerate" not "synced"
 - [ ] Last-snapshot timestamp visible
 
+### TASK-068 — Persist finalised invoice PDF to SharePoint
+**status:** done
+**depends on:** TASK-045
+**acceptance:**
+- [x] Add `taxInvoiceSharepointUrl String?` + `taxInvoiceDriveItemId String?` to `Invoice` in `prisma/schema.prisma`; migration `prisma/migrations/20260731000000_add_invoice_sharepoint_pointer/` (needs manual `prisma migrate deploy` against prod — migrations don't auto-run here)
+- [x] On finalise (`finaliseInvoice` in `src/app/(app)/invoices/[id]/preview/actions.ts`), render via `renderInvoicePdfWithReceipts` and upload to SharePoint via `uploadInvoicePdfToSharePoint` (new, in `src/server/integrations/sharepoint-receipts.ts`); store the returned webUrl + driveItemId on the `Invoice` alongside `taxInvoiceFinalisedAt`. **Folder:** `<RECEIPTS_ROOT>/FY YY - YY+1/Invoices/YYYY-MM/` (sibling to the Bills/Expenses receipt buckets). **Deviation:** targeting the per-project admin/financial folder (`Project.sharepointAdminFolderUrl`) was *not* implemented — it needs a webUrl→drive-path resolver we don't have; the date-partitioned Invoices tree is itself audit-complete. Left as a follow-up (see TASK-068b below).
+- [x] Graceful degradation when Graph is down: finalise still succeeds, pointer stays null, upload retried on the next finalise call (short-circuit only once *both* finalised-at and URL are set), audited with `archiveSkipped` — mirrors TASK-042b/046b
+- [x] Audit event carries `via: 'tax_invoice_archived'` + the SharePoint URL in the delta on success (A9); `via: 'tax_invoice_finalised'` + `archiveSkipped: true` when archival was skipped
+- [x] Invoice detail page shows a "View in SharePoint ↗" link when the pointer is present
+- [x] Tests: `src/__tests__/sharepoint-receipts-helpers.test.ts` (invoiceFolderPath + buildInvoiceFilename); `src/__tests__/invoice-finalise.test.ts` (archived / Graph-down / retry / short-circuit branches — asserts URL persisted + audit `via`)
+- [ ] Commit: `feat(TASK-068): persist finalised invoice PDF to SharePoint` — **not yet committed**; working tree also holds unrelated in-flight bulk-import WIP, so a per-task commit needs hunk-level staging (see note)
+
+**context:** Raised by TT 2026-07-30. Today invoices are rendered on-demand and streamed as a download only — nothing lands in 365 (unlike bill/expense receipts, which upload via `sharepoint-receipts.ts`). This closes that gap and gives the master ledger (TASK-069) a stored-file link column. HANDOFF.md:271 describes the intended "rendered doc in SharePoint" — this is the concrete build of it (PDF, not .docx).
+
+**note on completion:** typecheck + lint + full suite green (417 tests). Migration is hand-authored and **must be applied manually** to prod (`prisma migrate deploy`) — nothing auto-runs it here; until then the two new columns are absent (P2021 on read). Commit deferred: the branch working tree has a large unrelated bulk-import dry-run feature uncommitted (the `admin/import/*`, `imports/*`, `bulk-csv.ts`, `ImportDryRun` model + `20260729…` migration, `grant_jas_admin.ts`), so TASK-068 was not swept into a blanket commit — awaiting direction on isolating it.
+
+### TASK-068b — Invoice archival: target the per-project admin/financial folder
+**status:** todo
+**depends on:** TASK-068
+**acceptance:**
+- [ ] Resolve a `Project.sharepointAdminFolderUrl` (webUrl) to a Graph drive + drive-relative path, and file the finalised invoice PDF there when set (falling back to the `Invoices/FY …` tree from TASK-068 when unset)
+- [ ] Reuse the Graph primitives in `sharepoint-receipts.ts` (extract the shared site/drive/path helpers per the TASK-042c note rather than duplicating)
+- [ ] Tests: webUrl→drive-path resolver unit test
+- [ ] Commit: `feat(TASK-068b): file finalised invoices into the project admin folder`
+
+**context:** Split out of TASK-068 — the original acceptance asked for the project admin folder, but that needs a webUrl→drive-path resolver Foundry Ops doesn't have yet. TASK-068 ships the audit-complete date-partitioned tree; this task adds the nicer per-project placement on top.
+
+### TASK-069 — Master ledger: unified AR/AP aggregation module
+**status:** todo
+**depends on:** TASK-053, TASK-054, TASK-055
+**acceptance:**
+- [ ] `src/server/reports/ledger.ts` exposes `buildLedger(session, filters)` returning normalised rows across **every money flow in and out**: Invoices (AR / in) incl. `paymentReceivedAmount`, Bills (AP / out), Expenses (reimbursables / out), PayRun + PayRunLine (payroll / super / contractor-AP / supplier-AP ABA batches / out), ContractorInvoice (project cost), and BankTransaction (actual bank in/out from the Xero feed)
+- [ ] Each `LedgerRow` carries every audit-relevant field: `direction` (in/out), source type + source id, counterparty name + ABN, project code + client code + **derived internal code** (FHB/FHP/FHO/FHX prefix off `Project.code`/`Client.code` — do not merge the `*000` catch-alls), category / cost centre, issue date, due date, paid date, amount ex-GST, GST, amount total (integer cents) + currency, status, Xero id (invoice/bill/contact/txn), payment reference + BSB + account (from `PayRunLine`), `rebillable` + `rebilledOnInvoiceId`, created/updated timestamps, and the latest `AuditEvent` actor/action/at for the source row
+- [ ] Money stays integer cents through aggregation; `centsToDecimal` (from `src/server/reports/csv.ts`) applied only at serialisation
+- [ ] Deterministic ordering (date desc, then source type, then id) so nightly backup diffs are stable
+- [ ] Tests: golden-file test over a seeded fixture with one row of each source type, asserting field mapping, direction sign, and internal-code derivation
+- [ ] Commit: `feat(TASK-069): master ledger aggregation module`
+
+**context:** TT 2026-07-30 decisions — **(1) scope = comprehensive** (all flows in and out, not just Bills+Invoices); the accountant/audit ledger must reconcile against Xero, so every counterparty/date/GST/code/Xero-id field is required. This module is the single source both the in-app tab (TASK-069b) and the export (TASK-069c) read from — build it once, no duplicate query logic.
+
+### TASK-069b — Master ledger: in-app reporting tab (live)
+**status:** todo
+**depends on:** TASK-069
+**acceptance:**
+- [ ] New capability `report.ledger.view` in `src/server/capabilities.ts` mapped to `['super_admin','admin']` (covers Jas — `jas.navarro@`, granted both roles); tab + data fetch gated server-side via `requireCapability`
+- [ ] `/reports/ledger` renders the ledger **live from the DB** via `buildLedger` — always current, no snapshot dependency (per decision: in-app is live)
+- [ ] Server-side, permission-checked filters: direction (in/out/all), date range, source type, project/client, status
+- [ ] Columns surface all TASK-069 fields; bank BSB/account **masked to last 3 digits** on-screen (full values only in the gated export)
+- [ ] Empty state, loading state, and error state all present (CLAUDE.md — no happy-path-only)
+- [ ] "Export CSV / Excel" controls link to the TASK-069c endpoints; last-backup timestamp shown
+- [ ] Reporting nav entry visible only to `report.ledger.view` holders
+- [ ] Tests: gate test (non-privileged role → 403/redirect); filter-reducer unit test
+- [ ] Commit: `feat(TASK-069b): master ledger reporting tab`
+
+**context:** TT 2026-07-30 decision **(2) — the in-app tab is always live from the DB** so Jas sees current data instantly; the 365 file is the nightly/on-demand backup (TASK-069c). "Easily accessible for Jas within the reporting tabs" = this surface. Reports today are just embedded CSV links with ad-hoc role gates; this introduces the first real reporting-hub page + a dedicated capability rather than another `hasAnyRole` one-off.
+
+### TASK-069c — Master ledger: Excel/CSV export + nightly SharePoint backup
+**status:** todo
+**depends on:** TASK-069, TASK-060
+**acceptance:**
+- [ ] New capability `report.ledger.export` mapped to `['super_admin','admin']`; both export endpoints require it via `requireCapability`
+- [ ] `/api/reports/ledger?format=csv` streams RFC-4180 CSV (`src/server/reports/csv.ts`); `?format=xlsx` streams a workbook via the TASK-060 ExcelJS infra with sheets **All / Receivables (in) / Payables (out)**. Export includes **full payment refs + BSB + account** (PII-bearing — the capability gate is the control; consistent with CLAUDE.md "PII readable only by Super Admin/Admin")
+- [ ] Every download writes an `AuditEvent` (`ledger_export_downloaded` — actor, format, row count, filter delta) (A9)
+- [ ] Nightly + on-demand SharePoint backup: extend the existing snapshot pipeline (`src/server/exports/data-export.ts` + cron `/api/cron/data-export`) to also write `Master-Ledger-<YYYY-MM-DD>.xlsx` to the backups root; on-demand "regenerate" button on `/admin/exports` (or the ledger tab) gated on `report.ledger.export`
+- [ ] Backup audited (`ledger_backup_generated` / `ledger_backup_upload_failed`), graceful skip when Graph unconfigured (mirrors TASK-055 / data-export)
+- [ ] Tests: capability-gate test on both endpoints (unauthorised role → 403); CSV + xlsx row-count and header assertions over the TASK-069 fixture
+- [ ] Commit: `feat(TASK-069c): master ledger export + SharePoint backup`
+
+**context:** TT 2026-07-30 decisions **(2) nightly + on-demand to 365** (not live-regen) and **(3) include payment refs** → the export is PII-bearing, so it is gated to super_admin/admin only and every generation + download is audited. Reuses the ExcelJS infra from TASK-060 and the SharePoint backup pipeline from `data-export.ts` rather than a parallel mechanism. "Updated with every submission" is satisfied by the always-live in-app tab (TASK-069b); the 365 file refreshes nightly and on demand.
+
+### TASK-069d — Direct "Open in 365" links wherever a SharePoint pointer appears
+**status:** todo
+**depends on:** TASK-068
+**acceptance:**
+- [ ] Shared component `src/components/sharepoint-link.tsx` (`<OpenIn365 url={…} label? />`): renders an external-link anchor (`target="_blank" rel="noopener noreferrer"`, link icon + label) to a SharePoint/OneDrive `webUrl`; renders **nothing** when the url is null/empty (no dead links)
+- [ ] Confirm every file/folder pointer stored is a browser-openable `webUrl` (not just a `driveItemId`): `Bill.attachmentSharepointUrl`, `Expense.receiptSharepointUrl`, `Invoice.taxInvoiceSharepointUrl` (TASK-068), and the `Project` folder pointers (`sharepointFolderUrl` / `sharepointAdminFolderUrl` — verify exact field names in `prisma/schema.prisma`). Backfill/store `webUrl` where only an id exists
+- [ ] Wire the link into **every surface where the pointer appears**: bill detail / approval / list, expense detail / approval / reimbursables, invoice detail + preview, project detail (both working folder and admin/financial folder), the master-ledger tab (TASK-069b — per-row link to the stored file when present), and `/admin/exports` (link to each nightly backup ZIP + ledger `.xlsx` in SharePoint)
+- [ ] Direct link opens straight in SharePoint/OneDrive in a new tab (user's own 365 session — no proxy); keep the existing inline-preview proxy (`/api/attachments/*`) for in-app viewing and show the direct "Open in 365" link **alongside** it, not instead of it
+- [ ] Link renders only for users who can already see the underlying record/folder (follows existing record visibility — no new exposure)
+- [ ] Tests: component renders nothing on null/empty url; renders an anchor with the correct `href` + `target="_blank"` on a valid url
+- [ ] Commit: `feat(TASK-069d): direct Open-in-365 links across file/folder surfaces`
+
+**context:** TT 2026-07-30 — wants immediate one-click access to the actual 365 folder/file from wherever it is referenced in-app, not only an inline preview. Cross-cutting UX layer over the existing pointers (bill/expense receipts already upload via `sharepoint-receipts.ts`; invoice pointer lands in TASK-068; project folders provisioned by `sharepoint.ts`). Runs last in Phase 1F because it depends on those pointers — TASK-068 in particular — existing first.
+
 ---
 
 ## Phase 2 — Firm intelligence

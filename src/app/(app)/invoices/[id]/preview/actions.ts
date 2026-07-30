@@ -6,6 +6,11 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
+import { renderInvoicePdfWithReceipts } from '@/server/invoice-pdf';
+import {
+  uploadInvoicePdfToSharePoint,
+  type InvoiceUploadResult,
+} from '@/server/integrations/sharepoint-receipts';
 
 export type PreviewSaveState =
   | { status: 'idle' }
@@ -137,11 +142,14 @@ export type FinaliseState =
 
 /**
  * Record that the rendered tax invoice PDF has been generated &
- * downloaded. Called from the preview page's "Download as PDF" click
- * so the system can flag approved-but-not-yet-issued invoices.
+ * downloaded, and archive a copy to SharePoint (TASK-068). Called from
+ * the preview page's "Download as PDF" click so the system can flag
+ * approved-but-not-yet-issued invoices and keep an audit copy in 365.
  *
- * Idempotent — calling it twice keeps the original timestamp so the
- * audit trail reflects the first issuance time.
+ * Idempotent on the finalisation timestamp — the first issuance time is
+ * preserved. Archival is retried until it succeeds: if Graph was
+ * unreachable on the first finalise (pointer still null), a later call
+ * re-attempts the upload rather than short-circuiting.
  */
 export async function finaliseInvoice(
   invoiceId: string,
@@ -154,26 +162,59 @@ export async function finaliseInvoice(
     select: {
       number: true,
       status: true,
+      issueDate: true,
+      amountTotal: true,
       taxInvoiceFinalisedAt: true,
+      taxInvoiceSharepointUrl: true,
     },
   });
   if (!invoice) return { status: 'error', message: 'Invoice not found' };
 
-  // Only record finalisation once. Subsequent downloads still produce a
-  // PDF but don't overwrite the original issuance timestamp.
-  if (invoice.taxInvoiceFinalisedAt) {
+  // Fully done — finalised AND archived. Subsequent downloads still
+  // produce a PDF client-side but there's nothing left to persist.
+  if (invoice.taxInvoiceFinalisedAt && invoice.taxInvoiceSharepointUrl) {
     return {
       status: 'success',
       finalisedAt: invoice.taxInvoiceFinalisedAt.toISOString(),
     };
   }
 
-  const finalisedAt = new Date();
+  // Preserve the original issuance time; only stamp it on first finalise.
+  const finalisedAt = invoice.taxInvoiceFinalisedAt ?? new Date();
+
+  // Render + upload the PDF to SharePoint. Best-effort: a Graph outage
+  // (or Graph simply not configured) must not block finalisation — the
+  // pointer stays null and the next finalise call retries. Any failure
+  // here is logged and swallowed so the DB record still lands.
+  let upload: InvoiceUploadResult | null = null;
+  try {
+    const pdf = await renderInvoicePdfWithReceipts(invoiceId);
+    upload = await uploadInvoicePdfToSharePoint({
+      issueDate: invoice.issueDate,
+      invoiceNumber: invoice.number,
+      amountTotalCents: invoice.amountTotal,
+      ownerInitials: session.person.initials,
+      id: invoiceId,
+      buffer: Buffer.from(pdf),
+    });
+  } catch (err) {
+    console.error('[invoice.finalise] SharePoint archival failed:', err);
+    upload = null;
+  }
+
   try {
     await prisma.$transaction(async (tx) => {
       await tx.invoice.update({
         where: { id: invoiceId },
-        data: { taxInvoiceFinalisedAt: finalisedAt },
+        data: {
+          taxInvoiceFinalisedAt: finalisedAt,
+          ...(upload
+            ? {
+                taxInvoiceSharepointUrl: upload.webUrl,
+                taxInvoiceDriveItemId: upload.driveItemId,
+              }
+            : {}),
+        },
       });
       await writeAudit(tx, {
         actor: { type: 'person', id: session.person.id },
@@ -182,10 +223,13 @@ export async function finaliseInvoice(
           type: 'invoice',
           id: invoiceId,
           after: {
-            via: 'tax_invoice_finalised',
+            via: upload ? 'tax_invoice_archived' : 'tax_invoice_finalised',
             invoiceNumber: invoice.number,
             finalisedAt: finalisedAt.toISOString(),
             statusAtFinalise: invoice.status,
+            ...(upload
+              ? { sharepointUrl: upload.webUrl }
+              : { archiveSkipped: true }),
           },
         },
         source: 'web',

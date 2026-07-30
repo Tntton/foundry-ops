@@ -7,7 +7,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
 type PersonOpt = { id: string; initials: string; firstName: string; lastName: string };
-type ClientOpt = { id: string; code: string; legalName: string };
+type ClientOpt = {
+  id: string;
+  code: string;
+  legalName: string;
+  /** Suggested next code for this client (e.g. `IFM004`) — auto-filled
+   *  into the Code field when the client is picked. */
+  nextCode: string;
+};
 
 type Prefill = {
   clientId?: string;
@@ -59,15 +66,29 @@ export function NewProjectForm({
   );
   const isInternal = kind === 'internal';
   // When the operator flips to "Internal", swap the code placeholder
-  // / value to the next FHP code. Switching back to "Client" clears
-  // the code so they re-enter their own (e.g. IFM001).
+  // / value to the next FHP code. For a client engagement the code is
+  // derived from the picked client's series (clientCode + next free
+  // number) — pre-fill it if we already know the client (e.g. from a
+  // deal), else leave blank until they pick one.
+  const prefilledClientCode = prefill?.clientId
+    ? clients.find((c) => c.id === prefill.clientId)?.nextCode ?? ''
+    : '';
   const [code, setCode] = useState<string>(
-    isInternal ? nextFhpCode : '',
+    isInternal ? nextFhpCode : prefilledClientCode,
   );
 
   function handleKindChange(next: 'client' | 'internal') {
     setKind(next);
-    setCode(next === 'internal' ? nextFhpCode : '');
+    setCode(next === 'internal' ? nextFhpCode : prefilledClientCode);
+  }
+
+  // Picking a client auto-fills the Code field with that client's next
+  // free code (e.g. IFM004 if IFM003 exists). Overwrites any prior
+  // suggestion — the code follows the selected client's body of work.
+  // The field stays editable for the rare manual override.
+  function handleClientChange(clientId: string) {
+    const c = clients.find((x) => x.id === clientId);
+    if (c) setCode(c.nextCode);
   }
 
   return (
@@ -125,7 +146,7 @@ export function NewProjectForm({
             hint={
               isInternal
                 ? `Next free internal code: ${nextFhpCode}`
-                : 'e.g. IFM001, NIB042'
+                : 'Auto-filled from the client — edit if needed'
             }
             error={errs['code']}
             required
@@ -170,6 +191,7 @@ export function NewProjectForm({
                 <Select
                   name="clientId"
                   required
+                  onChange={handleClientChange}
                   {...(prefill?.clientId ? { defaultValue: prefill.clientId } : {})}
                 >
                   <option value="">— Choose client —</option>
@@ -433,8 +455,8 @@ function CommercialsBlock({
       <FieldRow>
         <Field
           label="Contract value (AUD, ex GST)"
+          hint="Enter 0 if still negotiating — update in Settings once signed"
           error={fieldErrors['contractValueDollars']}
-          required
         >
           <Input
             name="contractValueDollars"
@@ -442,7 +464,7 @@ function CommercialsBlock({
             min="0"
             max="10000000"
             step="1"
-            required
+            placeholder="0"
             value={contractDollars || ''}
             onChange={(e) =>
               setContractDollars(Math.max(0, Number(e.target.value || 0)))
@@ -561,11 +583,13 @@ function Select({
   name,
   required,
   defaultValue,
+  onChange,
   children,
 }: {
   name: string;
   required?: boolean;
   defaultValue?: string;
+  onChange?: (value: string) => void;
   children: React.ReactNode;
 }) {
   return (
@@ -573,6 +597,7 @@ function Select({
       name={name}
       required={required}
       defaultValue={defaultValue}
+      onChange={onChange ? (e) => onChange(e.target.value) : undefined}
       className="flex h-9 w-full rounded-md border border-line bg-surface-elev px-2 text-sm text-ink shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
     >
       {children}
