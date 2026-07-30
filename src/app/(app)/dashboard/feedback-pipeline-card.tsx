@@ -39,12 +39,13 @@ export function FeedbackPipelineCardView({
         </Link>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-6">
           <StatTile label="Open" value={counts.open} tone={counts.critical > 0 ? 'red' : counts.urgent > 0 ? 'amber' : undefined} />
           <StatTile label="Triaged" value={counts.triaged} sub="pending you" />
           <StatTile label="Approved" value={counts.approved} sub="waiting work" />
           <StatTile label="In progress" value={counts.inProgress} />
           <StatTile label="Resolved · 7d" value={counts.resolvedRecent} tone={counts.resolvedRecent > 0 ? 'green' : undefined} />
+          <StatTile label="To archive" value={counts.readyToArchive} sub="completed" tone={counts.readyToArchive > 0 ? 'green' : undefined} />
         </div>
 
         {pipeline.triaged.length > 0 && (

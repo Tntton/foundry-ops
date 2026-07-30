@@ -111,11 +111,19 @@ model FeedbackTicket {
   // Person who approved/declined (super_admin only).
   decidedById  String?
   decidedBy    Person?         @relation("FeedbackDecider", fields: [decidedById], references: [id])
+  // Set when an admin archives a COMPLETED (terminal) ticket. Distinct
+  // from `resolved` — resolved = the work is done/shipped; archived =
+  // TT has seen it and cleared it from the active view. A terminal
+  // ticket with archivedAt=null is "completed, ready to archive" and
+  // stays prominently visible until archived. Null = not archived.
+  archivedAt   DateTime?
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
   @@index([status, urgency])
   @@index([submitterId])
+  // Drives the "completed, ready to archive" lane + the archived view.
+  @@index([archivedAt])
 }
 
 enum Band {
