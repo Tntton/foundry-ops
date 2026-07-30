@@ -3,6 +3,7 @@ import { requireEnv } from '@/server/env';
 import { prisma } from '@/server/db';
 import { generateDataExport } from '@/server/exports/data-export';
 import { uploadDataExportToSharePoint } from '@/server/exports/sharepoint-backup';
+import { generateLedgerBackup } from '@/server/exports/ledger-backup';
 import { writeAudit } from '@/server/audit';
 
 export const runtime = 'nodejs';
@@ -103,12 +104,28 @@ export async function GET(req: Request) {
       });
     });
 
+    // Also refresh the master-ledger workbook in SharePoint (TASK-069c).
+    // Best-effort + independently audited — a ledger-backup failure must
+    // not fail the already-successful data-export run.
+    let ledgerBackup: { rowCount: number; webUrl: string | null; uploadSkipped: boolean } | null =
+      null;
+    try {
+      ledgerBackup = await generateLedgerBackup({
+        actor: { type: 'system' },
+        source: 'integration_sync',
+        via: 'cron',
+      });
+    } catch (ledgerErr) {
+      console.error('[cron/data-export] ledger backup failed:', ledgerErr);
+    }
+
     console.log('[cron/data-export] ok:', {
       filename: manifest.filename,
       sizeBytes: manifest.sizeBytes,
       tables: Object.keys(manifest.tableCounts).length,
       webUrl,
       uploadSkipped,
+      ledgerRows: ledgerBackup?.rowCount ?? null,
     });
     return NextResponse.json({
       ok: true,
@@ -116,6 +133,7 @@ export async function GET(req: Request) {
       webUrl,
       folderPath,
       uploadSkipped,
+      ledgerBackup,
     });
   } catch (err) {
     console.error('[cron/data-export] failed:', err);

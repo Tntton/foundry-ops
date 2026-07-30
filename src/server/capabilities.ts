@@ -66,7 +66,15 @@ export type Capability =
   // / contractor agreement / etc). Partner-tier+ because the act of
   // sending creates legal commitment; managers can prepare a doc
   // but the partner needs to send it for signature.
-  | 'docusign.send';
+  | 'docusign.send'
+  // Master ledger (TASK-069) — the firm-wide AR/AP audit ledger and
+  // its Excel/CSV export. `view` gates the in-app reporting tab;
+  // `export` gates the download + SharePoint backup, which is
+  // PII-bearing (payment refs / BSB / account per PayRunLine), so
+  // both stay at the super_admin / admin tier that may read PII
+  // (CLAUDE.md security). Covers Jas (jas.navarro@, super_admin+admin).
+  | 'report.ledger.view'
+  | 'report.ledger.export';
 
 export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   // Invoices — AP gets the same approval + create rights as partner.
@@ -172,6 +180,13 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   // JWT key rotation) stays gated on `integration.manage` which
   // is super_admin only.
   'docusign.send': ['super_admin', 'admin', 'partner', 'associate_partner'],
+
+  // Master ledger — firm-wide financial audit surface + PII-bearing
+  // export. Both at the super_admin / admin tier (the roles cleared to
+  // read PII); partners are deliberately excluded here even though they
+  // see P&L / AR, because the export carries bank payment refs.
+  'report.ledger.view': ['super_admin', 'admin'],
+  'report.ledger.export': ['super_admin', 'admin'],
 };
 
 export function hasCapability(session: Session | null, capability: Capability): boolean {

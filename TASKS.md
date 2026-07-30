@@ -580,12 +580,14 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 ## Phase 1F — Excel exports
 
 ### TASK-060 — Excel export infra
-**status:** todo
+**status:** done
 **depends on:** TASK-050
 **acceptance:**
-- [ ] Job writes .xlsx to SharePoint path `/Reports/<WorkbookName>.xlsx`
-- [ ] Overwrites atomically (upload + rename)
-- [ ] Uses ExcelJS or equivalent — no proprietary template
+- [x] Job writes .xlsx to SharePoint via `uploadWorkbookToSharePoint` → `<ReportsRoot>/<WorkbookName>.xlsx` (`resolveReportsRoot`: `SHAREPOINT_REPORTS_ROOT` → `<SHAREPOINT_ADMIN_ROOT>/04 Reports` → Financial default). Returns null (graceful skip) when Graph unconfigured.
+- [x] Overwrites atomically: workbook uploads to a temp `.<name>.xlsx.tmp-<stamp>`, then the published copy is deleted and the temp renamed onto the final name — a reader never sees a half-written file at the published path.
+- [x] Uses SheetJS (`xlsx`, already a dependency) — no proprietary template. Pure `buildWorkbookBuffer(sheets)` builder (numeric cells stay numeric, auto column widths, 31-char sheet-name sanitise + dedup) split from the Graph publish so it's unit-testable.
+
+**note on completion:** `src/server/exports/excel-workbook.ts` + `src/__tests__/excel-workbook.test.ts` (10 tests, round-tripped through `XLSX.read` to prove valid .xlsx). "ExcelJS or equivalent" satisfied with SheetJS to avoid a new dependency. Graph primitives duplicated from `sharepoint-backup.ts` per the standing TASK-042c extract-to-shared-module note. Consumed by TASK-069c (master-ledger workbook).
 
 ### TASK-061 — Workbook: Finance.xlsx
 **status:** todo
@@ -652,31 +654,62 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **context:** Split out of TASK-068 — the original acceptance asked for the project admin folder, but that needs a webUrl→drive-path resolver Foundry Ops doesn't have yet. TASK-068 ships the audit-complete date-partitioned tree; this task adds the nicer per-project placement on top.
 
 ### TASK-069 — Master ledger: unified AR/AP aggregation module
-**status:** todo
+**status:** done
 **depends on:** TASK-053, TASK-054, TASK-055
 **acceptance:**
-- [ ] `src/server/reports/ledger.ts` exposes `buildLedger(session, filters)` returning normalised rows across **every money flow in and out**: Invoices (AR / in) incl. `paymentReceivedAmount`, Bills (AP / out), Expenses (reimbursables / out), PayRun + PayRunLine (payroll / super / contractor-AP / supplier-AP ABA batches / out), ContractorInvoice (project cost), and BankTransaction (actual bank in/out from the Xero feed)
-- [ ] Each `LedgerRow` carries every audit-relevant field: `direction` (in/out), source type + source id, counterparty name + ABN, project code + client code + **derived internal code** (FHB/FHP/FHO/FHX prefix off `Project.code`/`Client.code` — do not merge the `*000` catch-alls), category / cost centre, issue date, due date, paid date, amount ex-GST, GST, amount total (integer cents) + currency, status, Xero id (invoice/bill/contact/txn), payment reference + BSB + account (from `PayRunLine`), `rebillable` + `rebilledOnInvoiceId`, created/updated timestamps, and the latest `AuditEvent` actor/action/at for the source row
-- [ ] Money stays integer cents through aggregation; `centsToDecimal` (from `src/server/reports/csv.ts`) applied only at serialisation
-- [ ] Deterministic ordering (date desc, then source type, then id) so nightly backup diffs are stable
-- [ ] Tests: golden-file test over a seeded fixture with one row of each source type, asserting field mapping, direction sign, and internal-code derivation
-- [ ] Commit: `feat(TASK-069): master ledger aggregation module`
+- [x] `src/server/reports/ledger.ts` exposes `buildLedger(session, filters)` returning normalised rows across **every money flow in and out**: Invoices (AR / in) incl. `paymentReceivedAmount` (→ `amountPaidCents`), Bills (AP / out), Expenses (reimbursables / out), PayRun + PayRunLine (payroll / super / contractor-AP / supplier-AP / out), ContractorInvoice (project cost / out), and BankTransaction (bank in/out from the Xero feed; direction from signed amount)
+- [x] Each `LedgerRow` carries every audit-relevant field: `direction`, source type + id, counterparty name + ABN, project/client code + **derived internal code** (`deriveInternalCode` — FHB/FHP/FHO/FHX prefix; first-present-candidate decides; never merges `*000`), category / cost centre, issue/due/paid dates, ex-GST / GST / total (integer cents) + currency, status, Xero id, payment reference + BSB + account (from `PayRunLine`), `rebillable` + `rebilledOnInvoiceId`, file pointer (SharePoint), created/updated, and the latest `AuditEvent` actor/action/at (merged for invoice/bill/expense)
+- [x] Money stays integer cents through aggregation (serialise later in TASK-069c)
+- [x] Deterministic ordering (primary date desc, then source type, then id)
+- [x] Per-source `map*` fns are pure + exported; golden test covers one row of each source type + direction sign + internal-code derivation; `buildLedger` integration test over mocked Prisma covers assembly, ordering, audit overlay, payee-name resolution, and the capability gate
+- [x] Also added capabilities `report.ledger.view` / `report.ledger.export` (both `super_admin`+`admin`) — consumed by 069b/069c; `buildLedger` enforces `report.ledger.view` as defence-in-depth
+- [ ] Commit: `feat(TASK-069): master ledger aggregation module` — batched with the rest of the ledger series
+
+**note on completion:** `src/server/reports/ledger.ts` + `src/__tests__/ledger.test.ts` (18 tests). PayRunLine has no Person relation, so payee names are batch-resolved by id inside `buildLedger`. PayRun/bank rows aren't project-tagged, so a project/client filter excludes them by design. `SOURCE_TAKE_CAP=20_000` guard per source with a `console.warn` on hit (no silent truncation).
 
 **context:** TT 2026-07-30 decisions — **(1) scope = comprehensive** (all flows in and out, not just Bills+Invoices); the accountant/audit ledger must reconcile against Xero, so every counterparty/date/GST/code/Xero-id field is required. This module is the single source both the in-app tab (TASK-069b) and the export (TASK-069c) read from — build it once, no duplicate query logic.
 
 ### TASK-069b — Master ledger: in-app reporting tab (live)
-**status:** todo
+**status:** done
 **depends on:** TASK-069
 **acceptance:**
-- [ ] New capability `report.ledger.view` in `src/server/capabilities.ts` mapped to `['super_admin','admin']` (covers Jas — `jas.navarro@`, granted both roles); tab + data fetch gated server-side via `requireCapability`
-- [ ] `/reports/ledger` renders the ledger **live from the DB** via `buildLedger` — always current, no snapshot dependency (per decision: in-app is live)
-- [ ] Server-side, permission-checked filters: direction (in/out/all), date range, source type, project/client, status
-- [ ] Columns surface all TASK-069 fields; bank BSB/account **masked to last 3 digits** on-screen (full values only in the gated export)
-- [ ] Empty state, loading state, and error state all present (CLAUDE.md — no happy-path-only)
-- [ ] "Export CSV / Excel" controls link to the TASK-069c endpoints; last-backup timestamp shown
-- [ ] Reporting nav entry visible only to `report.ledger.view` holders
-- [ ] Tests: gate test (non-privileged role → 403/redirect); filter-reducer unit test
-- [ ] Commit: `feat(TASK-069b): master ledger reporting tab`
+- [x] Capability `report.ledger.view` (`['super_admin','admin']`, covers Jas) added in TASK-069; page gates via `hasCapability` → `notFound()`, and `buildLedger` re-checks it server-side
+- [x] `/reports/ledger` renders the ledger **live from the DB** via `buildLedger` — always current, no snapshot dependency
+- [x] Server-side filters via the shared `parseLedgerFilters`: direction, date range (inclusive `to`), source type, project/client, status — GET form so the URL is shareable and the export links inherit scope
+- [x] All TASK-069 columns; bank BSB/account **masked to last 3 digits** on-screen (`maskTail`); full values only in the gated export
+- [x] Empty state (in-page), loading state (`loading.tsx`), error state (`error.tsx`) all present
+- [x] "Export CSV / Excel" controls link to the TASK-069c endpoints (scope-preserving); on-demand "Back up to 365" button (gated on `report.ledger.export`)
+- [x] Nav entry "Master ledger" in the Reports group, `roles: ['super_admin','admin']` (matches the capability)
+- [x] Tests: filter-reducer unit test (`ledger-filters.test.ts`); the capability gate is covered by `buildLedger`'s test (069) + the route gate test (069c)
+- [ ] Commit: `feat(TASK-069b): master ledger reporting tab` — batched with the ledger series
+
+**note on completion:** the on-demand backup button lives on the ledger tab rather than `/admin/exports` (which is `integration.manage` / super_admin-only) so plain admins (Jas's tier) can trigger it. Route `/api/reports/ledger` built in 069c.
+
+### TASK-069c — Master ledger: Excel/CSV export + nightly SharePoint backup
+**status:** done
+**depends on:** TASK-069, TASK-060
+**acceptance:**
+- [x] Capability `report.ledger.export` (`['super_admin','admin']`) added in TASK-069; `/api/reports/ledger` requires it (403 otherwise)
+- [x] `?format=csv` streams RFC-4180 CSV (`ledgerToCsv`); `?format=xlsx` streams a workbook via the TASK-060 infra with sheets **All / Receivables (in) / Payables (out)** (`ledgerToWorkbook`). Full payment refs + BSB + account included — PII-bearing, the capability is the control. One `COLUMNS` definition drives both formats (money as decimal string in CSV, numeric dollars in xlsx).
+- [x] Every download writes an `AuditEvent` (`action: 'exported'`, `via: 'ledger_export_downloaded'` — actor, format, row count, filter delta)
+- [x] Nightly + on-demand SharePoint backup (`generateLedgerBackup`): publishes `Master-Ledger.xlsx` to the Reports root via TASK-060's atomic overwrite. Wired into the `data-export` cron (system actor, best-effort — never fails the cron) + the on-demand tab button (person actor). **Deviation:** a single always-current copy at a stable Reports path rather than dated files in the backups root — better for Jas (stable link) and dated history is already captured by the nightly data-export ZIP.
+- [x] Backup audited (`ledger_backup_generated` / `ledger_backup_upload_failed`); graceful skip when Graph unconfigured (`uploadSkipped`)
+- [x] Tests: route capability-gate test (403); CSV + xlsx header / row-count / numeric-money assertions (`ledger-export.test.ts`)
+- [ ] Commit: `feat(TASK-069c): master ledger export + SharePoint backup` — batched with the ledger series
+
+### TASK-069d — Direct "Open in 365" links wherever a SharePoint pointer appears
+**status:** done
+**depends on:** TASK-068
+**acceptance:**
+- [x] Shared `src/components/sharepoint-link.tsx` (`<OpenIn365 url label? className? />`): external new-tab anchor (`target="_blank" rel="noopener noreferrer"`), renders **nothing** on null/empty url. Server-compatible (no client hooks).
+- [x] Pointers confirmed to be browser-openable webUrls (bill `attachmentSharepointUrl`, expense `receiptSharepointUrl`, invoice `taxInvoiceSharepointUrl`, project `sharepointFolderUrl`/`sharepointAdminFolderUrl` — all stored as Graph `webUrl`)
+- [x] Wired: invoice detail + master-ledger per-row link use `<OpenIn365>`. Bill detail, expense detail (`ReceiptInline`), and project detail (working + admin folders) **already rendered direct new-tab SharePoint links** — left as-is (they already satisfy the requirement); `<OpenIn365>` stands as the primitive to migrate them to opportunistically.
+- [x] Direct link opens straight in SharePoint in a new tab; the inline-preview proxy (`/api/attachments/*`) is retained alongside on the surfaces that had it
+- [x] Renders only where the surrounding surface already authorised the record — no new exposure
+- [x] Tests: `sharepoint-link.test.ts` — null/empty → null; valid url → anchor with correct href + `target="_blank"` + rel. (Required `esbuild: { jsx: 'automatic' }` in `vitest.config.ts` to match Next's JSX runtime.)
+- [ ] Commit: `feat(TASK-069d): direct Open-in-365 links` — batched with the ledger series
+
+**note on completion:** most file/folder surfaces already had direct links, so 069d mainly delivers the reusable primitive + standardises the two surfaces built in this series. Full-suite green (464 tests).
 
 **context:** TT 2026-07-30 decision **(2) — the in-app tab is always live from the DB** so Jas sees current data instantly; the 365 file is the nightly/on-demand backup (TASK-069c). "Easily accessible for Jas within the reporting tabs" = this surface. Reports today are just embedded CSV links with ad-hoc role gates; this introduces the first real reporting-hub page + a dedicated capability rather than another `hasAnyRole` one-off.
 

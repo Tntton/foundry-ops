@@ -174,6 +174,17 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         roles: ['super_admin', 'admin'],
       },
       {
+        // Master ledger — the firm-wide AR/AP audit sheet (every money
+        // flow in and out, one row shape). super_admin + admin only,
+        // matching the `report.ledger.view` capability: the surface is
+        // PII-adjacent (the export carries payment refs / BSB / acct).
+        // This is Jas's accountant/audit review surface.
+        label: 'Master ledger',
+        href: '/reports/ledger',
+        icon: ScrollText,
+        roles: ['super_admin', 'admin'],
+      },
+      {
         label: 'Reimbursables',
         href: '/reimbursables',
         icon: Receipt,

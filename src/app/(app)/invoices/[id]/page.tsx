@@ -6,6 +6,7 @@ import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { OpenIn365 } from '@/components/sharepoint-link';
 import { XeroPushInvoiceButton } from './xero-push-button';
 import { DeleteDraftInvoiceButton } from './delete-button';
 import { MarkSentButton, RecordPaymentForm } from './status-forms';
@@ -211,16 +212,11 @@ export default async function InvoiceDetailPage({ params }: { params: { id: stri
               {rebilledCount === 1 ? '' : 's'} →
             </a>
           )}
-          {invoice.taxInvoiceSharepointUrl && (
-            <a
-              href={invoice.taxInvoiceSharepointUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="rounded-md border border-line bg-card px-3 py-1.5 text-xs text-ink hover:bg-surface-hover"
-            >
-              View in SharePoint ↗
-            </a>
-          )}
+          <OpenIn365
+            url={invoice.taxInvoiceSharepointUrl}
+            label="View in SharePoint"
+            className="rounded-md border border-line bg-card px-3 py-1.5 text-xs text-ink hover:bg-surface-hover"
+          />
           {canCreate && invoice.status === 'draft' && (
             <SubmitForApprovalButton invoiceId={invoice.id} />
           )}
