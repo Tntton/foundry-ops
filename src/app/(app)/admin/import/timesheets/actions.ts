@@ -27,7 +27,7 @@ export async function parseTimesheetCsv(
   }
   const result = await buildTimesheetPreview(csvText, fileName);
   if (!result.ok) return { ok: false, message: result.error.message };
-  const token = stashTimesheets(session.person.id, result.preview);
+  const token = await stashTimesheets(session.person.id, result.preview);
   return { ok: true, token };
 }
 
@@ -50,7 +50,7 @@ export async function commitTimesheetCsv(
   if (!token) return { status: 'error', message: 'Missing token.' };
   const mode: CommitTimesheetMode =
     modeRaw === 'overwrite_duplicates' ? 'overwrite_duplicates' : 'skip_duplicates';
-  const preview = readTimesheets(session.person.id, token);
+  const preview = await readTimesheets(session.person.id, token);
   if (!preview) {
     return {
       status: 'error',
@@ -60,7 +60,7 @@ export async function commitTimesheetCsv(
 
   try {
     const result = await commitTimesheetImport(preview, session.person.id, mode);
-    discard(token);
+    await discard(token);
     revalidatePath('/timesheet');
     revalidatePath('/admin/audit');
     const params = new URLSearchParams({
