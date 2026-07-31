@@ -50,6 +50,7 @@ export function Topbar({
         <Link
           href="/platform-overview"
           title="Platform overview"
+          data-tour="overview"
           className="inline-flex h-8 items-center gap-2 rounded-md border border-line bg-surface-elev px-3 text-sm text-ink-3 hover:bg-surface-hover"
         >
           <LayoutGrid className="h-3.5 w-3.5" />
