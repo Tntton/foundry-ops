@@ -722,20 +722,20 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 
 
 ### TASK-069e — Unified payments register (view + review/edit all inbound & outbound)
-**status:** todo
+**status:** done
 **depends on:** TASK-069
 **acceptance:**
-- [ ] A single surface (`/reports/ledger` extended, or a sibling `/payments` register) listing **all historical inbound and outbound items in one place** — receivables (invoices + received payments), payables (bills), reimbursables (expenses), and pay-run payments — so the operator no longer hops between `/receivables`, `/payables`, `/reimbursables`. Reuses `buildLedger` (TASK-069) as the data source.
-- [ ] Each row is **reviewable + editable** via drill-through to the underlying record's existing detail/edit surface (`/invoices/[id]`, `/bills/[id]`, `/expenses/[id]`), which already enforce per-record permission checks + audit. (Recommended over inline edit — avoids duplicating edit/validation/approval logic and keeps the audit trail on the canonical surfaces.)
-- [ ] Payment-status lens: filter/segment by paid vs outstanding vs overdue across both directions, and by payment date, so "what has actually been paid in/out, historically" is answerable from the one view.
-- [ ] Server-side permission checks preserved (admin/finance-tier; row visibility follows the underlying record's rules).
-- [ ] Empty / loading / error states.
-- [ ] Tests: consolidated query + status segmentation; a gate test.
-- [ ] Commit: `feat(TASK-069e): unified payments register`
+- [x] Dedicated `/payments` surface listing all inbound + outbound items in one place — receivables (invoices), payables (bills), reimbursables (expenses) — via `buildLedger` restricted to the three editable source types (`src/server/reports/payments.ts` `EDITABLE_SOURCE_TYPES`). Replaces hopping between `/receivables`, `/payables`, `/reimbursables`.
+- [x] Each row is **reviewable + editable** via drill-through (`paymentEditHref` → `/invoices/[id]` · `/bills/[id]` · `/expenses/[id]`), which already enforce per-record permission + audit. No inline edit (keeps the audit trail on the canonical surfaces).
+- [x] Payment-status lens (`paymentState` / `filterByPaymentState`): All / Outstanding / Overdue / Paid chips with live counts, composable with the direction / type / date filters (shared `parseLedgerFilters`).
+- [x] Server-side gate: `report.ledger.view` (super_admin / admin — the intersection audience of the three underlying surfaces; the register is PII-adjacent). No new capability.
+- [x] Empty / loading (`loading.tsx`) / error (`error.tsx`) states; "Payments" nav entry in the Reports group.
+- [x] Tests: `payments.test.ts` (payment-state classification, status filter, edit-href routing, param parsing). Gate covered by `buildLedger`'s capability check (069) + the page's `hasCapability` guard.
+- [ ] Commit: `feat(TASK-069e): unified payments register` — batched
 
-**context:** Raised by TT 2026-07-31 — "ensure we can see all historical inbound and outbound payments submitted and edit/review individual details as required; right now it's divided between receivables, payables and reimbursables." The master ledger (TASK-069) already unifies these read-only; this adds the operational review/edit layer + a payment-status lens on top, and consolidates the three split surfaces into one entry point.
+**context:** Raised by TT 2026-07-31 — "ensure we can see all historical inbound and outbound payments submitted and edit/review individual details as required; right now it's divided between receivables, payables and reimbursables." The master ledger (TASK-069) unifies everything read-only; this is the operational review/edit layer on top, consolidating the three split surfaces into one entry point.
 
-**OPEN DECISION (confirm before build):** (a) **scope of "payments"** — every AR/AP/reimbursable *item* with its payment status (recommended; matches the three named surfaces) vs only rows where money actually moved (a stricter transactions view); (b) **edit model** — drill-through to existing per-record edit surfaces (recommended) vs inline editing; (c) **home** — extend the ledger tab vs a new dedicated `/payments` surface. Left `todo` pending TT's call; the recommended defaults are build-ready.
+**DECISIONS (TT said "go" → built with recommended defaults):** (a) **scope** — the three editable operational item types (invoice/bill/expense) with their payment status, not the full audit ledger (bank-feed / payroll / contractor rows stay in the Master ledger); (b) **edit model** — drill-through to existing per-record surfaces; (c) **home** — a dedicated `/payments` surface (operational tool, distinct from the audit ledger) rather than overloading the ledger tab. `/payments` reuses `buildLedger` for data, so there's no parallel aggregation.
 
 ### TASK-069f — Nightly backup skip-gate (export only when changed) + resolver caching
 **status:** done

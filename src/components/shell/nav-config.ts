@@ -185,6 +185,17 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         roles: ['super_admin', 'admin'],
       },
       {
+        // Payments register — consolidates receivables / payables /
+        // reimbursables into one reviewable list with a payment-status
+        // lens + drill-through to each record's edit surface. Same
+        // super_admin + admin audience as the ledger (the intersection
+        // of the three underlying surfaces; gated on report.ledger.view).
+        label: 'Payments',
+        href: '/payments',
+        icon: HandCoins,
+        roles: ['super_admin', 'admin'],
+      },
+      {
         label: 'Reimbursables',
         href: '/reimbursables',
         icon: Receipt,
