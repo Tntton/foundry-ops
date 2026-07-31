@@ -737,6 +737,19 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 
 **OPEN DECISION (confirm before build):** (a) **scope of "payments"** — every AR/AP/reimbursable *item* with its payment status (recommended; matches the three named surfaces) vs only rows where money actually moved (a stricter transactions view); (b) **edit model** — drill-through to existing per-record edit surfaces (recommended) vs inline editing; (c) **home** — extend the ledger tab vs a new dedicated `/payments` surface. Left `todo` pending TT's call; the recommended defaults are build-ready.
 
+### TASK-069f — Nightly backup skip-gate (export only when changed) + resolver caching
+**status:** done
+**depends on:** TASK-069c, TASK-061
+**acceptance:**
+- [x] Skip-gate: the nightly `data-export` cron regenerates nothing when no data changed since the last successful backup (`src/server/exports/backup-gate.ts` — `evaluateBackupGate`). Uses the audit log as the change feed (A9): finds the last `*_generated` backup event, counts mutation events since (excluding backup/export/read actions + its own skip marker). Zero → early-return + `nightly_export_skipped` audit. First-ever run (no prior backup) always runs.
+- [x] On-demand triggers (admin buttons, ledger-tab button) are **never** gated — an explicit click always regenerates.
+- [x] SharePoint site/drive resolution cached per process with a 10-min TTL (`src/server/integrations/sharepoint-graph.ts` — `resolveSiteAndDrive`), so the ~9 nightly uploads resolve site+drive once (~2 Graph calls) instead of ~18. `excel-workbook.ts` (ledger + 7 workbooks) and `sharepoint-backup.ts` (continuity ZIP) migrated to it; their private resolvers removed (first step of the standing TASK-042c dedup).
+- [x] Tests: `backup-gate.test.ts` (run/skip decision + exclusion set); `sharepoint-graph.test.ts` (cache hit + clear).
+- [x] Also broadened `/admin/exports` recent-runs to show workbook/ledger backups (landed with TASK-067) so a skipped night is visible by the absence of new rows + the `nightly_export_skipped` marker.
+- [ ] Commit: `perf(TASK-069f): skip nightly backup when unchanged + cache site/drive` — batched
+
+**context:** Raised by TT 2026-07-31 — asked whether the 24h regeneration is intensive and whether to export only when new data landed. Assessment: not compute-intensive at firm scale; the cost is Graph latency (site/drive re-resolved per upload). So: added the change-gate (cheap, avoids quiet-day churn) + the resolver cache (the bigger latency win). Deliberately a single global gate, not per-workbook change detection — the granular version is real complexity for negligible payoff at this scale.
+
 ---
 
 ## Phase 2 — Firm intelligence

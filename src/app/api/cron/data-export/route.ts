@@ -5,6 +5,7 @@ import { generateDataExport } from '@/server/exports/data-export';
 import { uploadDataExportToSharePoint } from '@/server/exports/sharepoint-backup';
 import { generateLedgerBackup } from '@/server/exports/ledger-backup';
 import { runAllReportWorkbookBackups } from '@/server/exports/report-workbooks';
+import { evaluateBackupGate } from '@/server/exports/backup-gate';
 import { writeAudit } from '@/server/audit';
 
 export const runtime = 'nodejs';
@@ -46,6 +47,38 @@ export async function GET(req: Request) {
   }
 
   try {
+    // Skip-gate: if nothing has changed since the last successful backup,
+    // don't regenerate/upload anything (TASK-069f). On-demand triggers are
+    // never gated, so a false negative is harmless.
+    const gate = await evaluateBackupGate();
+    if (!gate.changed) {
+      console.log('[cron/data-export] no changes since last backup — skipping', {
+        lastBackupAt: gate.lastBackupAt,
+      });
+      await prisma.$transaction(async (tx) => {
+        await writeAudit(tx, {
+          actor: { type: 'system' },
+          action: 'nightly_export_skipped',
+          entity: {
+            type: 'integration',
+            id: 'sharepoint-backup',
+            after: {
+              via: 'cron',
+              reason: 'no_changes',
+              lastBackupAt: gate.lastBackupAt?.toISOString() ?? null,
+            },
+          },
+          source: 'integration_sync',
+        });
+      });
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        reason: 'no_changes',
+        lastBackupAt: gate.lastBackupAt,
+      });
+    }
+
     const { manifest, buffer } = await generateDataExport();
     let webUrl: string | null = null;
     let folderPath: string | null = null;

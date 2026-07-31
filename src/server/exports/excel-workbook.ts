@@ -6,6 +6,7 @@ import {
   GraphError,
 } from '@/server/graph';
 import { optionalEnv } from '@/server/env';
+import { resolveSiteAndDrive } from '@/server/integrations/sharepoint-graph';
 
 /**
  * Excel export infrastructure (TASK-060).
@@ -147,8 +148,7 @@ export async function uploadWorkbookToSharePoint(opts: {
   const siteUrl = optionalEnv('SHAREPOINT_SITE_URL');
   if (!siteUrl) return null;
 
-  const siteId = await resolveSiteId(siteUrl);
-  const driveId = await resolveDriveId(siteId);
+  const { driveId } = await resolveSiteAndDrive(siteUrl);
 
   const root = resolveReportsRoot();
   await ensureFolderTree(driveId, root);
@@ -180,21 +180,6 @@ export async function uploadWorkbookToSharePoint(opts: {
 // mid-feature.
 
 type DriveItem = { id: string; webUrl: string; name: string };
-
-async function resolveSiteId(siteUrl: string): Promise<string> {
-  const parsed = new URL(siteUrl);
-  const path = parsed.pathname.replace(/\/+$/u, '');
-  const site = await graph<{ id: string }>(
-    'GET',
-    `/sites/${parsed.hostname}:${path}`,
-  );
-  return site.id;
-}
-
-async function resolveDriveId(siteId: string): Promise<string> {
-  const drive = await graph<{ id: string }>('GET', `/sites/${siteId}/drive`);
-  return drive.id;
-}
 
 async function ensureFolderTree(driveId: string, path: string): Promise<void> {
   const segments = path
