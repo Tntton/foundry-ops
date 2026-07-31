@@ -600,11 +600,13 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note on completion:** introduced `report-workbooks.ts` — a registry the cron + admin button both loop over, so TASK-062…066 each land as one registry entry (no per-task cron/button wiring). Pure `financeSheets(pnl,cash,ar,ap)` split out for tests (`finance-workbook.test.ts`). Full suite green (469).
 
 ### TASK-062 — Workbook: Timesheet.xlsx
-**status:** todo
+**status:** done
 **depends on:** TASK-060
 **acceptance:**
-- [ ] Sheets: by person, by project, utilisation
-- [ ] Covers current FY + last FY
+- [x] Sheets: by person, by project, utilisation (`src/server/exports/timesheet-workbook.ts`; utilisation reuses `computeFirmUtilisation`)
+- [x] Covers current FY + last FY (`financialYearWindow` — AU FY, approved/billed entries only)
+- [x] Registered in `report-workbooks.ts` (nightly cron + admin regenerate button pick it up automatically); pure `timesheetSheets` split for tests (`timesheet-workbook.test.ts`)
+- [ ] Commit: `feat(TASK-062): Timesheet.xlsx workbook` — batched
 
 ### TASK-063 — Workbook: Invoices.xlsx
 **status:** todo
@@ -714,37 +716,22 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [x] Tests: `sharepoint-link.test.ts` — null/empty → null; valid url → anchor with correct href + `target="_blank"` + rel. (Required `esbuild: { jsx: 'automatic' }` in `vitest.config.ts` to match Next's JSX runtime.)
 - [ ] Commit: `feat(TASK-069d): direct Open-in-365 links` — batched with the ledger series
 
-**note on completion:** most file/folder surfaces already had direct links, so 069d mainly delivers the reusable primitive + standardises the two surfaces built in this series. Full-suite green (464 tests).
 
-**context:** TT 2026-07-30 decision **(2) — the in-app tab is always live from the DB** so Jas sees current data instantly; the 365 file is the nightly/on-demand backup (TASK-069c). "Easily accessible for Jas within the reporting tabs" = this surface. Reports today are just embedded CSV links with ad-hoc role gates; this introduces the first real reporting-hub page + a dedicated capability rather than another `hasAnyRole` one-off.
-
-### TASK-069c — Master ledger: Excel/CSV export + nightly SharePoint backup
+### TASK-069e — Unified payments register (view + review/edit all inbound & outbound)
 **status:** todo
-**depends on:** TASK-069, TASK-060
+**depends on:** TASK-069
 **acceptance:**
-- [ ] New capability `report.ledger.export` mapped to `['super_admin','admin']`; both export endpoints require it via `requireCapability`
-- [ ] `/api/reports/ledger?format=csv` streams RFC-4180 CSV (`src/server/reports/csv.ts`); `?format=xlsx` streams a workbook via the TASK-060 ExcelJS infra with sheets **All / Receivables (in) / Payables (out)**. Export includes **full payment refs + BSB + account** (PII-bearing — the capability gate is the control; consistent with CLAUDE.md "PII readable only by Super Admin/Admin")
-- [ ] Every download writes an `AuditEvent` (`ledger_export_downloaded` — actor, format, row count, filter delta) (A9)
-- [ ] Nightly + on-demand SharePoint backup: extend the existing snapshot pipeline (`src/server/exports/data-export.ts` + cron `/api/cron/data-export`) to also write `Master-Ledger-<YYYY-MM-DD>.xlsx` to the backups root; on-demand "regenerate" button on `/admin/exports` (or the ledger tab) gated on `report.ledger.export`
-- [ ] Backup audited (`ledger_backup_generated` / `ledger_backup_upload_failed`), graceful skip when Graph unconfigured (mirrors TASK-055 / data-export)
-- [ ] Tests: capability-gate test on both endpoints (unauthorised role → 403); CSV + xlsx row-count and header assertions over the TASK-069 fixture
-- [ ] Commit: `feat(TASK-069c): master ledger export + SharePoint backup`
+- [ ] A single surface (`/reports/ledger` extended, or a sibling `/payments` register) listing **all historical inbound and outbound items in one place** — receivables (invoices + received payments), payables (bills), reimbursables (expenses), and pay-run payments — so the operator no longer hops between `/receivables`, `/payables`, `/reimbursables`. Reuses `buildLedger` (TASK-069) as the data source.
+- [ ] Each row is **reviewable + editable** via drill-through to the underlying record's existing detail/edit surface (`/invoices/[id]`, `/bills/[id]`, `/expenses/[id]`), which already enforce per-record permission checks + audit. (Recommended over inline edit — avoids duplicating edit/validation/approval logic and keeps the audit trail on the canonical surfaces.)
+- [ ] Payment-status lens: filter/segment by paid vs outstanding vs overdue across both directions, and by payment date, so "what has actually been paid in/out, historically" is answerable from the one view.
+- [ ] Server-side permission checks preserved (admin/finance-tier; row visibility follows the underlying record's rules).
+- [ ] Empty / loading / error states.
+- [ ] Tests: consolidated query + status segmentation; a gate test.
+- [ ] Commit: `feat(TASK-069e): unified payments register`
 
-**context:** TT 2026-07-30 decisions **(2) nightly + on-demand to 365** (not live-regen) and **(3) include payment refs** → the export is PII-bearing, so it is gated to super_admin/admin only and every generation + download is audited. Reuses the ExcelJS infra from TASK-060 and the SharePoint backup pipeline from `data-export.ts` rather than a parallel mechanism. "Updated with every submission" is satisfied by the always-live in-app tab (TASK-069b); the 365 file refreshes nightly and on demand.
+**context:** Raised by TT 2026-07-31 — "ensure we can see all historical inbound and outbound payments submitted and edit/review individual details as required; right now it's divided between receivables, payables and reimbursables." The master ledger (TASK-069) already unifies these read-only; this adds the operational review/edit layer + a payment-status lens on top, and consolidates the three split surfaces into one entry point.
 
-### TASK-069d — Direct "Open in 365" links wherever a SharePoint pointer appears
-**status:** todo
-**depends on:** TASK-068
-**acceptance:**
-- [ ] Shared component `src/components/sharepoint-link.tsx` (`<OpenIn365 url={…} label? />`): renders an external-link anchor (`target="_blank" rel="noopener noreferrer"`, link icon + label) to a SharePoint/OneDrive `webUrl`; renders **nothing** when the url is null/empty (no dead links)
-- [ ] Confirm every file/folder pointer stored is a browser-openable `webUrl` (not just a `driveItemId`): `Bill.attachmentSharepointUrl`, `Expense.receiptSharepointUrl`, `Invoice.taxInvoiceSharepointUrl` (TASK-068), and the `Project` folder pointers (`sharepointFolderUrl` / `sharepointAdminFolderUrl` — verify exact field names in `prisma/schema.prisma`). Backfill/store `webUrl` where only an id exists
-- [ ] Wire the link into **every surface where the pointer appears**: bill detail / approval / list, expense detail / approval / reimbursables, invoice detail + preview, project detail (both working folder and admin/financial folder), the master-ledger tab (TASK-069b — per-row link to the stored file when present), and `/admin/exports` (link to each nightly backup ZIP + ledger `.xlsx` in SharePoint)
-- [ ] Direct link opens straight in SharePoint/OneDrive in a new tab (user's own 365 session — no proxy); keep the existing inline-preview proxy (`/api/attachments/*`) for in-app viewing and show the direct "Open in 365" link **alongside** it, not instead of it
-- [ ] Link renders only for users who can already see the underlying record/folder (follows existing record visibility — no new exposure)
-- [ ] Tests: component renders nothing on null/empty url; renders an anchor with the correct `href` + `target="_blank"` on a valid url
-- [ ] Commit: `feat(TASK-069d): direct Open-in-365 links across file/folder surfaces`
-
-**context:** TT 2026-07-30 — wants immediate one-click access to the actual 365 folder/file from wherever it is referenced in-app, not only an inline preview. Cross-cutting UX layer over the existing pointers (bill/expense receipts already upload via `sharepoint-receipts.ts`; invoice pointer lands in TASK-068; project folders provisioned by `sharepoint.ts`). Runs last in Phase 1F because it depends on those pointers — TASK-068 in particular — existing first.
+**OPEN DECISION (confirm before build):** (a) **scope of "payments"** — every AR/AP/reimbursable *item* with its payment status (recommended; matches the three named surfaces) vs only rows where money actually moved (a stricter transactions view); (b) **edit model** — drill-through to existing per-record edit surfaces (recommended) vs inline editing; (c) **home** — extend the ledger tab vs a new dedicated `/payments` surface. Left `todo` pending TT's call; the recommended defaults are build-ready.
 
 ---
 

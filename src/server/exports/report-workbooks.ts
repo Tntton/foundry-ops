@@ -3,6 +3,7 @@ import { prisma } from '@/server/db';
 import { writeAudit, type AuditActor } from '@/server/audit';
 import { uploadWorkbookToSharePoint } from '@/server/exports/excel-workbook';
 import { buildFinanceWorkbook } from '@/server/exports/finance-workbook';
+import { buildTimesheetWorkbook } from '@/server/exports/timesheet-workbook';
 
 /**
  * Registry of the themed reporting workbooks (Phase 1F). Each entry
@@ -26,6 +27,11 @@ export const REPORT_WORKBOOKS: readonly ReportWorkbook[] = [
     name: 'Finance',
     label: 'Finance (P&L · Cash · AR aging · AP aging)',
     build: buildFinanceWorkbook,
+  },
+  {
+    name: 'Timesheet',
+    label: 'Timesheet (by person · by project · utilisation)',
+    build: buildTimesheetWorkbook,
   },
 ];
 
