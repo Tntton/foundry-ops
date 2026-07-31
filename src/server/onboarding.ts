@@ -56,10 +56,31 @@ function opener(firstName: string): OnboardingSlide {
   };
 }
 
+/**
+ * See-who-can-do-what reference. Shown to every role near the end of
+ * the tour; points at the Overview button in the top bar.
+ */
+const OVERVIEW: OnboardingSlide = {
+  title: 'See who can do what, any time.',
+  body: 'The Overview button in the top bar opens a single page that lays out every screen and what each role can do, with your own access highlighted. You can download it as a PDF. It is the quickest way to get your bearings or settle a "can I see that?" question.',
+  spotlight: '[data-tour="overview"]',
+  links: [{ label: 'Platform overview', href: '/platform-overview' }],
+};
+
 const CLOSER: OnboardingSlide = {
-  title: 'You are set.',
-  body: 'The floating pill on the bottom-right is the in-app assistant. Ask it what is on your plate, what you have logged this week, or which screen does X. Feedback and bug reports go through the smaller pill next to it.',
+  title: 'The assistant is one question away.',
+  body: 'The bright pill on the bottom-right is the in-app assistant. Ask it what is on your plate, what you have logged this week, or which screen does X, and it will take you there.',
   spotlight: '[data-tour="assistant"]',
+};
+
+/**
+ * Closing ask: use the feedback pill. Shown last so the tour ends on an
+ * invitation to shape the platform. Points at the feedback pill.
+ */
+const FEEDBACK_ASK: OnboardingSlide = {
+  title: 'Tell us what is not working.',
+  body: 'The feedback pill on the bottom-right is the fastest way to flag anything broken, confusing, or missing. Every note lands in the triage queue and gets read. Please use it early and often; this platform gets better the more you do.',
+  spotlight: '[data-tour="feedback"]',
 };
 
 function slidesFor(role: Role): OnboardingSlide[] {
@@ -193,6 +214,12 @@ export function onboardingFor(
 ): OnboardingProfile {
   return {
     role,
-    slides: [opener(firstName), ...slidesFor(role), CLOSER],
+    slides: [
+      opener(firstName),
+      ...slidesFor(role),
+      OVERVIEW,
+      CLOSER,
+      FEEDBACK_ASK,
+    ],
   };
 }
