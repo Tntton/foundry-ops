@@ -6,6 +6,7 @@ import {
   receiptFolderPath,
   buildInvoiceFilename,
   invoiceFolderPath,
+  encodeSharingToken,
 } from '@/server/integrations/sharepoint-receipts';
 
 /**
@@ -233,5 +234,21 @@ describe('buildInvoiceFilename', () => {
       id: 'inv_1',
     });
     expect(name).toContain(' - no-number - ');
+  });
+});
+
+// ─── TASK-068b · admin-folder webUrl → sharing token ────────────────
+
+describe('encodeSharingToken', () => {
+  it('produces a u!-prefixed URL-safe token that round-trips the webUrl', () => {
+    const url =
+      'https://foundry.sharepoint.com/sites/Foundry/Shared Documents/Admin/IFM001?x=1';
+    const tok = encodeSharingToken(url);
+    expect(tok.startsWith('u!')).toBe(true);
+    // URL-safe: no +, /, or = in the encoded portion.
+    expect(tok.slice(2)).not.toMatch(/[+/=]/u);
+    // Reverse the transforms → original bytes.
+    const b64 = tok.slice(2).replace(/-/gu, '+').replace(/_/gu, '/');
+    expect(Buffer.from(b64, 'base64').toString('utf8')).toBe(url);
   });
 });

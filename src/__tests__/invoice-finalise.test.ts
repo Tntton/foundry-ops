@@ -41,7 +41,7 @@ vi.mock('@/server/invoice-pdf', () => ({
   renderInvoicePdfWithReceipts: mocks.render,
 }));
 vi.mock('@/server/integrations/sharepoint-receipts', () => ({
-  uploadInvoicePdfToSharePoint: mocks.upload,
+  archiveInvoicePdf: mocks.upload,
 }));
 
 import { finaliseInvoice } from '@/app/(app)/invoices/[id]/preview/actions';
@@ -57,6 +57,7 @@ const BASE_INVOICE = {
   amountTotal: 1_870_000,
   taxInvoiceFinalisedAt: null as Date | null,
   taxInvoiceSharepointUrl: null as string | null,
+  project: { sharepointAdminFolderUrl: null as string | null },
 };
 
 beforeEach(() => {
@@ -112,6 +113,27 @@ describe('finaliseInvoice · archival', () => {
     expect(auditArg.entity.after.via).toBe('tax_invoice_archived');
     expect(auditArg.entity.after.sharepointUrl).toBe(
       'https://foundry.sharepoint.com/inv/IFM001-INV-12.pdf',
+    );
+  });
+
+  it('passes the project admin folder through to the archiver when set', async () => {
+    mocks.findUnique.mockResolvedValue({
+      ...BASE_INVOICE,
+      project: { sharepointAdminFolderUrl: 'https://foundry.sharepoint.com/admin/IFM001' },
+    });
+    mocks.upload.mockResolvedValue({
+      webUrl: 'https://foundry.sharepoint.com/admin/IFM001/inv.pdf',
+      driveItemId: 'drv_admin',
+      folderPath: 'x',
+      filename: 'y.pdf',
+    });
+
+    await finaliseInvoice('inv_1');
+    expect(mocks.upload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adminFolderWebUrl: 'https://foundry.sharepoint.com/admin/IFM001',
+        invoiceNumber: 'IFM001-INV-12',
+      }),
     );
   });
 

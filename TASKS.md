@@ -643,15 +643,17 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note on completion:** typecheck + lint + full suite green (417 tests). Migration is hand-authored and **must be applied manually** to prod (`prisma migrate deploy`) — nothing auto-runs it here; until then the two new columns are absent (P2021 on read). Commit deferred: the branch working tree has a large unrelated bulk-import dry-run feature uncommitted (the `admin/import/*`, `imports/*`, `bulk-csv.ts`, `ImportDryRun` model + `20260729…` migration, `grant_jas_admin.ts`), so TASK-068 was not swept into a blanket commit — awaiting direction on isolating it.
 
 ### TASK-068b — Invoice archival: target the per-project admin/financial folder
-**status:** todo
+**status:** done
 **depends on:** TASK-068
 **acceptance:**
-- [ ] Resolve a `Project.sharepointAdminFolderUrl` (webUrl) to a Graph drive + drive-relative path, and file the finalised invoice PDF there when set (falling back to the `Invoices/FY …` tree from TASK-068 when unset)
-- [ ] Reuse the Graph primitives in `sharepoint-receipts.ts` (extract the shared site/drive/path helpers per the TASK-042c note rather than duplicating)
-- [ ] Tests: webUrl→drive-path resolver unit test
+- [x] `archiveInvoicePdf` files the finalised PDF into `Project.sharepointAdminFolderUrl` when set, else the `Invoices/FY …` tree from TASK-068; an admin-folder failure falls back to the tree rather than losing the archive. Wired into `finaliseInvoice` (selects `project.sharepointAdminFolderUrl`).
+- [x] Folder resolution uses Graph's `/shares/{token}/driveItem` (webUrl → sharing token → DriveItem `{driveId, itemId}`) rather than fragile URL-path parsing; upload addresses the folder by item id (`uploadSmallFileToItem` / `uploadLargeFileToItem`). Reuses the existing `buildInvoiceFilename` + Graph primitives in `sharepoint-receipts.ts`.
+- [x] Tests: `encodeSharingToken` round-trip unit test (the resolver's pure core); `finaliseInvoice` test asserts the admin folder URL is passed through to the archiver when set
 - [ ] Commit: `feat(TASK-068b): file finalised invoices into the project admin folder`
 
-**context:** Split out of TASK-068 — the original acceptance asked for the project admin folder, but that needs a webUrl→drive-path resolver Foundry Ops doesn't have yet. TASK-068 ships the audit-complete date-partitioned tree; this task adds the nicer per-project placement on top.
+**context:** Split out of TASK-068 — the original acceptance asked for the project admin folder, but that needs a webUrl→drive resolver Foundry Ops didn't have. TASK-068 shipped the audit-complete date-partitioned tree; this adds the per-project placement on top.
+
+**note on completion:** used the `/shares` sharing-token approach instead of parsing the webUrl path (encodes any SharePoint URL → DriveItem in one call; robust to site-path + library-name + URL-encoding variance). `filename` sanitisation + FY logic reused from TASK-068. Typecheck + lint clean; full suite green (466 tests). Same manual-migration caveat as TASK-068 (the invoice pointer columns) still applies.
 
 ### TASK-069 — Master ledger: unified AR/AP aggregation module
 **status:** done

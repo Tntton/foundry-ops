@@ -8,7 +8,7 @@ import { hasCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
 import { renderInvoicePdfWithReceipts } from '@/server/invoice-pdf';
 import {
-  uploadInvoicePdfToSharePoint,
+  archiveInvoicePdf,
   type InvoiceUploadResult,
 } from '@/server/integrations/sharepoint-receipts';
 
@@ -166,6 +166,7 @@ export async function finaliseInvoice(
       amountTotal: true,
       taxInvoiceFinalisedAt: true,
       taxInvoiceSharepointUrl: true,
+      project: { select: { sharepointAdminFolderUrl: true } },
     },
   });
   if (!invoice) return { status: 'error', message: 'Invoice not found' };
@@ -189,7 +190,8 @@ export async function finaliseInvoice(
   let upload: InvoiceUploadResult | null = null;
   try {
     const pdf = await renderInvoicePdfWithReceipts(invoiceId);
-    upload = await uploadInvoicePdfToSharePoint({
+    upload = await archiveInvoicePdf({
+      adminFolderWebUrl: invoice.project?.sharepointAdminFolderUrl ?? null,
       issueDate: invoice.issueDate,
       invoiceNumber: invoice.number,
       amountTotalCents: invoice.amountTotal,

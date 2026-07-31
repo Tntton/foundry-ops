@@ -320,6 +320,154 @@ export async function uploadInvoicePdfToSharePoint(
   };
 }
 
+/**
+ * Encode a SharePoint / OneDrive web URL into a Graph sharing token so
+ * the `/shares/{token}/driveItem` endpoint resolves it to a DriveItem.
+ * Per the Graph docs: `u!` + base64(url), with `+`/`/` → `-`/`_` and
+ * trailing `=` trimmed. Pure — exported for tests.
+ */
+export function encodeSharingToken(webUrl: string): string {
+  const b64 = Buffer.from(webUrl, 'utf8').toString('base64');
+  const safe = b64.replace(/=+$/u, '').replace(/\//gu, '_').replace(/\+/gu, '-');
+  return `u!${safe}`;
+}
+
+/**
+ * Resolve a folder web URL to its `{ driveId, itemId }` via the shares
+ * API. Returns null when the URL can't be resolved (bad/renamed folder,
+ * permissions) so the caller falls back to the date-partitioned tree.
+ */
+async function resolveFolderByWebUrl(
+  webUrl: string,
+): Promise<{ driveId: string; itemId: string } | null> {
+  try {
+    const token = encodeSharingToken(webUrl);
+    const item = await graph<{
+      id: string;
+      parentReference?: { driveId?: string };
+    }>('GET', `/shares/${token}/driveItem?$select=id,parentReference`);
+    const driveId = item.parentReference?.driveId;
+    if (!driveId || !item.id) return null;
+    return { driveId, itemId: item.id };
+  } catch (err) {
+    if (err instanceof GraphError) {
+      console.error(
+        '[invoice-archive] could not resolve admin folder webUrl:',
+        err.status,
+      );
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Upload a finalised invoice PDF into a project's admin/financial folder,
+ * addressed by its stored `webUrl` (TASK-068b). Returns null when Graph
+ * is unconfigured or the folder can't be resolved, so the caller can
+ * fall back to the shared `Invoices/FY …` tree.
+ */
+export async function uploadInvoicePdfToAdminFolder(input: {
+  adminFolderWebUrl: string;
+  issueDate: Date;
+  invoiceNumber: string;
+  amountTotalCents: number;
+  ownerInitials: string;
+  id: string;
+  buffer: Buffer;
+}): Promise<InvoiceUploadResult | null> {
+  if (!graphConfigured()) return null;
+
+  const folder = await resolveFolderByWebUrl(input.adminFolderWebUrl);
+  if (!folder) return null;
+
+  const filename = buildInvoiceFilename({
+    issueDate: input.issueDate,
+    invoiceNumber: input.invoiceNumber,
+    amountTotalCents: input.amountTotalCents,
+    ownerInitials: input.ownerInitials,
+    id: input.id,
+  });
+
+  const item =
+    input.buffer.length < CHUNKED_UPLOAD_THRESHOLD
+      ? await uploadSmallFileToItem(
+          folder.driveId,
+          folder.itemId,
+          filename,
+          input.buffer,
+          'application/pdf',
+        )
+      : await uploadLargeFileToItem(
+          folder.driveId,
+          folder.itemId,
+          filename,
+          input.buffer,
+        );
+
+  return {
+    webUrl: item.webUrl,
+    driveItemId: item.id,
+    folderPath: input.adminFolderWebUrl,
+    filename: item.name,
+  };
+}
+
+/**
+ * Archive a finalised invoice PDF: into the project's admin/financial
+ * folder when one is set (TASK-068b), else the shared date-partitioned
+ * `Invoices/FY …` tree (TASK-068). An admin-folder failure falls back to
+ * the tree rather than losing the archive.
+ */
+export async function archiveInvoicePdf(input: {
+  adminFolderWebUrl: string | null;
+  issueDate: Date;
+  invoiceNumber: string;
+  amountTotalCents: number;
+  ownerInitials: string;
+  id: string;
+  buffer: Buffer;
+}): Promise<InvoiceUploadResult | null> {
+  const {
+    adminFolderWebUrl,
+    issueDate,
+    invoiceNumber,
+    amountTotalCents,
+    ownerInitials,
+    id,
+    buffer,
+  } = input;
+
+  if (adminFolderWebUrl) {
+    try {
+      const res = await uploadInvoicePdfToAdminFolder({
+        adminFolderWebUrl,
+        issueDate,
+        invoiceNumber,
+        amountTotalCents,
+        ownerInitials,
+        id,
+        buffer,
+      });
+      if (res) return res;
+    } catch (err) {
+      console.error(
+        '[invoice-archive] admin-folder upload failed, falling back to Invoices tree:',
+        err,
+      );
+    }
+  }
+
+  return uploadInvoicePdfToSharePoint({
+    issueDate,
+    invoiceNumber,
+    amountTotalCents,
+    ownerInitials,
+    id,
+    buffer,
+  });
+}
+
 // ─── Graph primitives ───────────────────────────────────────────────
 //
 // Copies of the primitives in `src/server/exports/sharepoint-backup.ts`
@@ -427,6 +575,75 @@ async function uploadLargeFile(
         name: filename,
       },
     },
+  );
+  const chunkSize = 5 * 1024 * 1024;
+  let offset = 0;
+  let lastResponse: DriveItem | null = null;
+  while (offset < buffer.length) {
+    const end = Math.min(offset + chunkSize, buffer.length);
+    const slice = buffer.subarray(offset, end);
+    const res = await fetch(session.uploadUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Length': String(slice.length),
+        'Content-Range': `bytes ${offset}-${end - 1}/${buffer.length}`,
+      },
+      body: slice as unknown as BodyInit,
+    });
+    if (res.status === 202 || res.status === 201 || res.status === 200) {
+      if (end === buffer.length) {
+        lastResponse = (await res.json()) as DriveItem;
+      }
+    } else {
+      const text = await res.text();
+      throw new GraphError(res.status, text);
+    }
+    offset = end;
+  }
+  if (!lastResponse) throw new Error('Upload completed but no DriveItem returned');
+  return lastResponse;
+}
+
+/**
+ * Upload a small file into a folder addressed by its DriveItem id (used
+ * for the project admin-folder path, TASK-068b, where we resolved the
+ * folder via /shares rather than a root-relative path).
+ */
+async function uploadSmallFileToItem(
+  driveId: string,
+  folderItemId: string,
+  filename: string,
+  buffer: Buffer,
+  contentType: string,
+): Promise<DriveItem> {
+  const token = await getAppToken();
+  const url =
+    `https://graph.microsoft.com/v1.0/drives/${driveId}` +
+    `/items/${folderItemId}:/${encodeURIComponent(filename)}:/content` +
+    `?@microsoft.graph.conflictBehavior=rename`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType },
+    body: buffer as unknown as BodyInit,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new GraphError(res.status, text);
+  }
+  return (await res.json()) as DriveItem;
+}
+
+/** Chunked upload session into a folder addressed by its DriveItem id. */
+async function uploadLargeFileToItem(
+  driveId: string,
+  folderItemId: string,
+  filename: string,
+  buffer: Buffer,
+): Promise<DriveItem> {
+  const session = await graph<{ uploadUrl: string }>(
+    'POST',
+    `/drives/${driveId}/items/${folderItemId}:/${encodeURIComponent(filename)}:/createUploadSession`,
+    { item: { '@microsoft.graph.conflictBehavior': 'rename', name: filename } },
   );
   const chunkSize = 5 * 1024 * 1024;
   let offset = 0;
