@@ -35,6 +35,13 @@ import {
   getDashboardActionPrefs,
   countVisibleActions,
 } from '@/server/dashboard-prefs';
+import {
+  getDashboardLayout,
+  resolveDashboardLayout,
+  type DashboardSectionKey,
+} from '@/server/dashboard-sections';
+import { SectionShell, DashboardLayoutTray } from './dashboard/section-shell';
+import type { ReactNode } from 'react';
 import { LatestUpdatesCard } from './dashboard/latest-updates-card';
 import { StaffActionStrip } from './dashboard/staff-action-strip';
 import { LeaderActionStrip } from './dashboard/leader-action-strip';
@@ -202,6 +209,65 @@ export default async function DashboardPage({
     ? countVisibleActions(leaderPayload.actions, actionPrefs, now)
     : 0;
 
+  // Build the customisable section map. Only sections with real content
+  // for this viewer (role + data gated) are included; anything absent
+  // never appears in their layout or restore tray. The stored per-person
+  // layout then decides the column, order, collapse + hide of each.
+  const sectionNodes: Partial<Record<DashboardSectionKey, ReactNode>> = {
+    action_strip: leaderPayload ? (
+      <LeaderActionStrip
+        pending={leaderPayload.actions}
+        counts={leaderPayload.counts}
+        role={leaderRole}
+        prefs={actionPrefs}
+        now={now}
+      />
+    ) : undefined,
+    latest_updates: <LatestUpdatesCard updates={myUpdates} />,
+    feedback_pipeline:
+      isAdmin && feedbackPipeline ? (
+        <FeedbackPipelineCardView pipeline={feedbackPipeline} />
+      ) : undefined,
+    top_stats: <TopStats stats={data.topStats} />,
+    invoice_suggestions: invoiceSuggestions ? (
+      <InvoiceSuggestionsCard
+        suggestions={invoiceSuggestions}
+        canCreate={canDraftInvoices}
+        emptyHint="No invoices pending. Every active project either has invoices in flight or no overdue milestone."
+      />
+    ) : undefined,
+    operational_qc: <OperationalQcSection projects={data.projects} />,
+    bd_pipeline: adminBdPipeline ? (
+      <AdminBdPipelineSection data={adminBdPipeline} />
+    ) : undefined,
+    expense_report: adminExpenseReport ? (
+      <AdminExpenseReportSection data={adminExpenseReport} />
+    ) : undefined,
+    budget_watch: budgetWatch ? (
+      <BudgetWatchSection data={budgetWatch} />
+    ) : undefined,
+    team_week: (
+      <TeamWeekSection
+        rows={data.teamWeek.rows}
+        columns={data.teamWeek.projectColumns}
+      />
+    ),
+    firm_overview:
+      data.firmOverview.total > 0 ? (
+        <FirmOverviewCard firm={data.firmOverview} />
+      ) : undefined,
+    this_week: <ThisWeekCard projects={data.projects} />,
+    alerts: <AlertsCard alerts={data.alerts} />,
+  };
+
+  const layout = await getDashboardLayout(session.person.id);
+  const available = new Set(
+    (Object.keys(sectionNodes) as DashboardSectionKey[]).filter(
+      (k) => sectionNodes[k] != null,
+    ),
+  );
+  const resolvedLayout = resolveDashboardLayout(layout, available);
+
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -250,54 +316,44 @@ export default async function DashboardPage({
         </div>
       </header>
 
-      {leaderPayload && (
-        <LeaderActionStrip
-          pending={leaderPayload.actions}
-          counts={leaderPayload.counts}
-          role={leaderRole}
-          prefs={actionPrefs}
-          now={now}
-        />
-      )}
-
-      <LatestUpdatesCard updates={myUpdates} />
-
-      {/* Admin-only: feedback pipeline summary so TT can scan
-          pending decisions + recently shipped tickets without
-          leaving the dashboard. */}
-      {isAdmin && feedbackPipeline && (
-        <FeedbackPipelineCardView pipeline={feedbackPipeline} />
-      )}
-
+      {/* Customisable section grid. Each section carries a slim toolbar
+          (move up/down, jump column, collapse, hide); order + column +
+          collapse + hide come from this leader's saved layout. */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-6">
-          <TopStats stats={data.topStats} />
-          {invoiceSuggestions && (
-            <InvoiceSuggestionsCard
-              suggestions={invoiceSuggestions}
-              canCreate={canDraftInvoices}
-              emptyHint="No invoices pending. Every active project either has invoices in flight or no overdue milestone."
-            />
-          )}
-          <OperationalQcSection projects={data.projects} />
-          {adminBdPipeline && (
-            <AdminBdPipelineSection data={adminBdPipeline} />
-          )}
-          {adminExpenseReport && (
-            <AdminExpenseReportSection data={adminExpenseReport} />
-          )}
-          {budgetWatch && <BudgetWatchSection data={budgetWatch} />}
-          <TeamWeekSection
-            rows={data.teamWeek.rows}
-            columns={data.teamWeek.projectColumns}
-          />
+        <div className="space-y-4">
+          {resolvedLayout.main.map((key, i) => (
+            <SectionShell
+              key={key}
+              sectionKey={key}
+              column="main"
+              collapsed={resolvedLayout.collapsed.has(key)}
+              isFirst={i === 0}
+              isLast={i === resolvedLayout.main.length - 1}
+            >
+              {sectionNodes[key]}
+            </SectionShell>
+          ))}
         </div>
         <aside className="space-y-4">
-          <FirmOverviewCard firm={data.firmOverview} />
-          <ThisWeekCard projects={data.projects} />
-          <AlertsCard alerts={data.alerts} />
+          {resolvedLayout.aside.map((key, i) => (
+            <SectionShell
+              key={key}
+              sectionKey={key}
+              column="aside"
+              collapsed={resolvedLayout.collapsed.has(key)}
+              isFirst={i === 0}
+              isLast={i === resolvedLayout.aside.length - 1}
+            >
+              {sectionNodes[key]}
+            </SectionShell>
+          ))}
         </aside>
       </div>
+
+      <DashboardLayoutTray
+        hidden={resolvedLayout.hidden}
+        isCustomised={resolvedLayout.isCustomised}
+      />
     </div>
   );
 }
