@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   applyForecast,
   parseAdjustments,
+  parseHypotheticals,
+  hypotheticalContribution,
   type BaselineProject,
+  type HypotheticalProject,
 } from '@/server/reports/forecast';
 
 /**
@@ -74,6 +77,42 @@ describe('applyForecast', () => {
   });
 });
 
+describe('hypothetical projects', () => {
+  const hypo: HypotheticalProject = {
+    id: 'h1',
+    name: 'Acme diligence',
+    contractValueCents: 5_000_000,
+    marginPct: 40,
+  };
+
+  it('computes a hypothetical contribution (full contract as revenue, contract × margin%)', () => {
+    expect(hypotheticalContribution(hypo)).toEqual({
+      contractCents: 5_000_000,
+      revenueCents: 5_000_000,
+      marginCents: 2_000_000,
+    });
+  });
+
+  it('adds hypotheticals to the scenario totals only (baseline unchanged)', () => {
+    const r = applyForecast(projects, [], [hypo]);
+    // Baselines are the real book; scenario adds the hypothetical.
+    expect(r.baselineContractCents).toBe(15_000_000);
+    expect(r.scenarioContractCents).toBe(20_000_000);
+    expect(r.revenue.baselineCents).toBe(5_000_000); // real booked revenue only
+    expect(r.revenue.scenarioCents).toBe(10_000_000); // + 5M hypothetical
+    expect(r.margin.deltaCents).toBe(2_000_000);
+    expect(r.hypotheticalCount).toBe(1);
+    expect(r.scenarioCount).toBe(4); // 3 real + 1 hypothetical
+  });
+
+  it('handles a negative-margin hypothetical', () => {
+    const r = applyForecast(projects, [], [
+      { id: 'h2', name: 'Loss leader', contractValueCents: 1_000_000, marginPct: -20 },
+    ]);
+    expect(r.margin.deltaCents).toBe(-200_000);
+  });
+});
+
 describe('parseAdjustments', () => {
   it('accepts a valid blob', () => {
     const raw = [{ projectId: 'p1', included: true, contractValueCents: 100 }];
@@ -83,5 +122,14 @@ describe('parseAdjustments', () => {
     expect(parseAdjustments('nope')).toEqual([]);
     expect(parseAdjustments([{ projectId: 'p1' }])).toEqual([]);
     expect(parseAdjustments(null)).toEqual([]);
+  });
+});
+
+describe('parseHypotheticals', () => {
+  it('accepts a valid blob and drops malformed', () => {
+    const raw = [{ id: 'h1', name: 'X', contractValueCents: 100, marginPct: 30 }];
+    expect(parseHypotheticals(raw)).toEqual(raw);
+    expect(parseHypotheticals([{ id: 'h1' }])).toEqual([]);
+    expect(parseHypotheticals('nope')).toEqual([]);
   });
 });

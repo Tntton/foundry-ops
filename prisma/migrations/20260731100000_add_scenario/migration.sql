@@ -7,6 +7,8 @@ CREATE TABLE "Scenario" (
     "ownerId" TEXT NOT NULL,
     "note" TEXT,
     "adjustments" JSONB NOT NULL DEFAULT '[]',
+    -- Hypothetical (not-yet-real) projects modelled in the scenario.
+    "hypotheticals" JSONB NOT NULL DEFAULT '[]',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 

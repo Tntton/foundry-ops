@@ -24,6 +24,17 @@ export type ProjectAdjustment = z.infer<typeof ProjectAdjustmentSchema>;
 
 export const AdjustmentsSchema = z.array(ProjectAdjustmentSchema);
 
+// A hypothetical (not-yet-real) project added to a scenario (TASK-072b).
+// Modelled in the projection but never written as a real Project.
+export const HypotheticalProjectSchema = z.object({
+  id: z.string().min(1), // client-generated
+  name: z.string().trim().min(1).max(120),
+  contractValueCents: z.number().int().min(0),
+  marginPct: z.number().min(-100).max(100),
+});
+export type HypotheticalProject = z.infer<typeof HypotheticalProjectSchema>;
+export const HypotheticalsSchema = z.array(HypotheticalProjectSchema);
+
 export type BaselineProject = {
   id: string;
   code: string;
@@ -68,12 +79,31 @@ export type ForecastResult = {
   // (it doesn't retroactively change already-booked revenue/margin).
   revenue: ForecastMetric;
   margin: ForecastMetric;
+  hypotheticalCount: number;
 };
 
-/** Pure — apply per-project adjustments over the baseline set. */
+/**
+ * A hypothetical project contributes to the scenario only: its full
+ * contract value counts as projected contract + revenue, and its margin
+ * is `contractValue × marginPct`.
+ */
+export function hypotheticalContribution(h: HypotheticalProject): {
+  contractCents: number;
+  revenueCents: number;
+  marginCents: number;
+} {
+  return {
+    contractCents: h.contractValueCents,
+    revenueCents: h.contractValueCents,
+    marginCents: Math.round((h.contractValueCents * h.marginPct) / 100),
+  };
+}
+
+/** Pure — apply per-project adjustments + hypotheticals over the baseline set. */
 export function applyForecast(
   projects: BaselineProject[],
   adjustments: ProjectAdjustment[],
+  hypotheticals: HypotheticalProject[] = [],
 ): ForecastResult {
   const adjById = new Map(adjustments.map((a) => [a.projectId, a]));
   const rows: ForecastProjectRow[] = projects.map((p) => {
@@ -92,16 +122,31 @@ export function applyForecast(
       overridden: overrideValue !== p.contractValueCents,
     };
   });
+
+  // Hypothetical contributions (scenario-only).
+  const hypo = hypotheticals.reduce(
+    (acc, h) => {
+      const c = hypotheticalContribution(h);
+      acc.contract += c.contractCents;
+      acc.revenue += c.revenueCents;
+      acc.margin += c.marginCents;
+      return acc;
+    },
+    { contract: 0, revenue: 0, margin: 0 },
+  );
+
   const baselineContractCents = rows.reduce((s, r) => s + r.baselineContractCents, 0);
-  const scenarioContractCents = rows.reduce((s, r) => s + r.scenarioContractCents, 0);
+  const scenarioContractCents =
+    rows.reduce((s, r) => s + r.scenarioContractCents, 0) + hypo.contract;
 
   const included = new Set(rows.filter((r) => r.included).map((r) => r.projectId));
-  const metric = (pick: (p: BaselineProject) => number): ForecastMetric => {
+  const metric = (
+    pick: (p: BaselineProject) => number,
+    hypoAdd: number,
+  ): ForecastMetric => {
     const baselineCents = projects.reduce((s, p) => s + pick(p), 0);
-    const scenarioCents = projects.reduce(
-      (s, p) => s + (included.has(p.id) ? pick(p) : 0),
-      0,
-    );
+    const scenarioCents =
+      projects.reduce((s, p) => s + (included.has(p.id) ? pick(p) : 0), 0) + hypoAdd;
     return { baselineCents, scenarioCents, deltaCents: scenarioCents - baselineCents };
   };
 
@@ -111,9 +156,10 @@ export function applyForecast(
     scenarioContractCents,
     deltaCents: scenarioContractCents - baselineContractCents,
     baselineCount: rows.length,
-    scenarioCount: rows.filter((r) => r.included).length,
-    revenue: metric((p) => p.revenueCents),
-    margin: metric((p) => p.marginCents),
+    scenarioCount: rows.filter((r) => r.included).length + hypotheticals.length,
+    revenue: metric((p) => p.revenueCents, hypo.revenue),
+    margin: metric((p) => p.marginCents, hypo.margin),
+    hypotheticalCount: hypotheticals.length,
   };
 }
 
@@ -165,5 +211,11 @@ export async function computeForecast(
  *  adjustments, dropping anything malformed (defensive on read). */
 export function parseAdjustments(raw: unknown): ProjectAdjustment[] {
   const parsed = AdjustmentsSchema.safeParse(raw);
+  return parsed.success ? parsed.data : [];
+}
+
+/** Coerce a persisted `Scenario.hypotheticals` blob into typed rows. */
+export function parseHypotheticals(raw: unknown): HypotheticalProject[] {
+  const parsed = HypotheticalsSchema.safeParse(raw);
   return parsed.success ? parsed.data : [];
 }

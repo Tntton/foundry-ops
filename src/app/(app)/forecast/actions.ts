@@ -6,7 +6,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { writeAudit } from '@/server/audit';
-import { AdjustmentsSchema } from '@/server/reports/forecast';
+import { AdjustmentsSchema, HypotheticalsSchema } from '@/server/reports/forecast';
 
 const PLANNER_ROLES = ['super_admin', 'admin', 'partner'] as const;
 
@@ -44,8 +44,12 @@ export async function saveScenarioAction(
   }
 
   let adjustments: z.infer<typeof AdjustmentsSchema>;
+  let hypotheticals: z.infer<typeof HypotheticalsSchema>;
   try {
     adjustments = AdjustmentsSchema.parse(JSON.parse((formData.get('adjustments') as string) || '[]'));
+    hypotheticals = HypotheticalsSchema.parse(
+      JSON.parse((formData.get('hypotheticals') as string) || '[]'),
+    );
   } catch {
     return { status: 'error', message: 'Invalid scenario adjustments' };
   }
@@ -68,7 +72,7 @@ export async function saveScenarioAction(
       const row = parsed.data.scenarioId
         ? await tx.scenario.update({
             where: { id: parsed.data.scenarioId },
-            data: { name: parsed.data.name, note: parsed.data.note, adjustments },
+            data: { name: parsed.data.name, note: parsed.data.note, adjustments, hypotheticals },
           })
         : await tx.scenario.create({
             data: {
@@ -76,6 +80,7 @@ export async function saveScenarioAction(
               note: parsed.data.note,
               ownerId: personId,
               adjustments,
+              hypotheticals,
             },
           });
       await writeAudit(tx, {
@@ -84,7 +89,11 @@ export async function saveScenarioAction(
         entity: {
           type: 'scenario',
           id: row.id,
-          after: { name: row.name, projectCount: adjustments.length },
+          after: {
+            name: row.name,
+            projectCount: adjustments.length,
+            hypotheticalCount: hypotheticals.length,
+          },
         },
         source: 'web',
       });

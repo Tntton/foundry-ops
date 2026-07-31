@@ -793,8 +793,10 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [x] Baseline-vs-scenario comparison on **revenue + margin** (not only contract value) — `loadBaselineProjects` folds each project's `computeFirmPnL` revenue/margin into the sandbox; `applyForecast` projects contract / revenue / margin (include-exclude drives revenue+margin; a contract-value override only moves the contract metric — it can't retroactively change booked revenue). Editor shows a Contract / Revenue / Margin × baseline/scenario/delta summary that recomputes live. Tested.
 - [ ] Shift project start dates in a scenario → re-phase the monthly projection (needs `computeFirmPnL` to accept per-project overrides, or a projection that models phasing)
 - [ ] Change rates → project revenue/margin under the scenario from adjusted rates (not just current actuals)
-- [ ] Add hypothetical (not-yet-real) projects to a scenario without creating real `Project` rows
+- [x] Add hypothetical (not-yet-real) projects to a scenario without creating real `Project` rows — `Scenario.hypotheticals` JSON (`[{id,name,contractValueCents,marginPct}]`), modelled scenario-only in `applyForecast` (full contract as contract+revenue, contract×margin% as margin); editor "Add hypothetical" section recomputes totals live; Zod-validated + persisted. The unapplied `20260731100000_add_scenario` migration was extended in place to add the column.
 - [ ] Tests + commit: `feat(TASK-072b): richer forecast what-ifs`
+
+**progress (2026-07-31):** revenue/margin projection + hypothetical projects landed. Remaining: date-shift re-phasing + rate-change revenue — both need a per-project monthly-phasing / rate-driven projection engine (a larger build than the current static-actuals model).
 
 **context:** carved out of the original TASK-072 so the sandbox could ship a complete first slice (TASK-072a). The revenue+margin projection landed (2026-07-31); the remaining three edit dimensions each need a projection model richer than static actuals (per-project phasing / rate overrides / hypothetical rows), so they stay grouped here.
 

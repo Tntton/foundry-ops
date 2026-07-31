@@ -1643,6 +1643,10 @@ model Scenario {
   ownerId     String
   note        String?
   adjustments Json     @default("[]")
+  // Hypothetical (not-yet-real) projects added to the scenario (TASK-072b):
+  //   [{ id, name, contractValueCents, marginPct }]
+  // Modelled in the projection but never materialised as real Project rows.
+  hypotheticals Json   @default("[]")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

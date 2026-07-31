@@ -7,6 +7,7 @@ import {
   loadBaselineProjects,
   applyForecast,
   parseAdjustments,
+  parseHypotheticals,
 } from '@/server/reports/forecast';
 import { ForecastEditor } from './editor';
 import { deleteScenarioAction } from './actions';
@@ -34,7 +35,14 @@ export default async function ForecastPage({
     prisma.scenario.findMany({
       where: { ownerId: session!.person.id },
       orderBy: { updatedAt: 'desc' },
-      select: { id: true, name: true, note: true, adjustments: true, updatedAt: true },
+      select: {
+        id: true,
+        name: true,
+        note: true,
+        adjustments: true,
+        hypotheticals: true,
+        updatedAt: true,
+      },
     }),
   ]);
 
@@ -42,6 +50,7 @@ export default async function ForecastPage({
     ? scenarios.find((s) => s.id === searchParams.scenario)
     : undefined;
   const initialAdjustments = selected ? parseAdjustments(selected.adjustments) : [];
+  const initialHypotheticals = selected ? parseHypotheticals(selected.hypotheticals) : [];
   const baseline = applyForecast(projects, []);
 
   return (
@@ -66,6 +75,7 @@ export default async function ForecastPage({
         <ForecastEditor
           projects={projects}
           initialAdjustments={initialAdjustments}
+          initialHypotheticals={initialHypotheticals}
           selectedScenario={
             selected ? { id: selected.id, name: selected.name, note: selected.note } : null
           }
@@ -81,7 +91,11 @@ export default async function ForecastPage({
         ) : (
           <ul className="divide-y divide-line rounded-lg border border-line">
             {scenarios.map((s) => {
-              const res = applyForecast(projects, parseAdjustments(s.adjustments));
+              const res = applyForecast(
+                projects,
+                parseAdjustments(s.adjustments),
+                parseHypotheticals(s.hypotheticals),
+              );
               return (
                 <li key={s.id} className="flex items-center justify-between gap-3 px-4 py-2 text-sm">
                   <div className="min-w-0">
