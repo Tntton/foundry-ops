@@ -34,11 +34,27 @@ export default async function ExportsPage() {
   // so the operator can see the full trail in one place.
   const recent = await prisma.auditEvent.findMany({
     where: {
-      entityType: 'integration',
-      entityId: 'sharepoint-backup',
-      action: {
-        in: ['data_export_generated', 'data_export_upload_failed'],
-      },
+      OR: [
+        {
+          entityType: 'integration',
+          entityId: 'sharepoint-backup',
+          action: { in: ['data_export_generated', 'data_export_upload_failed'] },
+        },
+        // Report-workbook + master-ledger backups (Phase 1F / TASK-069c)
+        // so the last-snapshot list covers every 365 backup, not just the
+        // continuity ZIP.
+        {
+          entityType: 'report',
+          action: {
+            in: [
+              'report_workbook_generated',
+              'report_workbook_failed',
+              'ledger_backup_generated',
+              'ledger_backup_upload_failed',
+            ],
+          },
+        },
+      ],
     },
     orderBy: { at: 'desc' },
     take: 30,
@@ -323,7 +339,16 @@ export default async function ExportsPage() {
                         error?: string;
                       }
                     | null;
-                  const isFailure = r.action === 'data_export_upload_failed';
+                  const isFailure = r.action.endsWith('_failed');
+                  // Derive a filename for the report/ledger backups (which
+                  // audit by entityId rather than carrying a `filename`).
+                  const fileLabel =
+                    after?.filename ??
+                    (r.entityId.startsWith('workbook:')
+                      ? `${r.entityId.slice('workbook:'.length)}.xlsx`
+                      : r.entityId === 'ledger_backup'
+                        ? 'Master-Ledger.xlsx'
+                        : null);
                   const actorLabel =
                     r.actor
                       ? `${r.actor.firstName} ${r.actor.lastName}`
@@ -349,7 +374,7 @@ export default async function ExportsPage() {
                         </span>
                       </td>
                       <td className="px-3 py-2 font-mono text-[11px] text-ink-2">
-                        {after?.filename ?? '—'}
+                        {fileLabel ?? '—'}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-ink-3">
                         {after?.sizeBytes

@@ -609,27 +609,31 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Commit: `feat(TASK-062): Timesheet.xlsx workbook` — batched
 
 ### TASK-063 — Workbook: Invoices.xlsx
-**status:** todo
+**status:** done
 **depends on:** TASK-060
+**note:** `invoicesSheet` / `buildInvoicesWorkbook` in `src/server/exports/list-workbooks.ts` (full AR list: number, client, project, status, dates, ex-GST/GST/total, paid, Xero). Registered in `report-workbooks.ts`; pure builder tested (`list-workbooks.test.ts`).
 
 ### TASK-064 — Workbook: Expenses.xlsx
-**status:** todo
+**status:** done
 **depends on:** TASK-060
+**note:** `expensesSheet` / `buildExpensesWorkbook` (date, submitter, category, vendor, project/OPEX, status, amount, GST). Registered + tested.
 
 ### TASK-065 — Workbook: Pipeline.xlsx
-**status:** todo
+**status:** done
 **depends on:** TASK-060
+**note:** `pipelineSheet` / `buildPipelineWorkbook` from `computeAdminBdPipeline` (code, name, stage, sector, client, expected, probability, weighted, owner, target close, age). Registered + tested.
 
 ### TASK-066 — Workbook: Partner-pool.xlsx
-**status:** todo
+**status:** done
 **depends on:** TASK-060
+**note:** `partnerPoolSheets` / `buildPartnerPoolWorkbook` from `computePartnerScoreboard` — Full partners + Associate partners sheets (clients led, projects, invoiced, WIP, margin, deals, pipeline, hours). Registered + tested.
 
 ### TASK-067 — Remove "2-way synced" language
-**status:** todo
+**status:** done
 **depends on:** TASK-060
 **acceptance:**
-- [ ] Sidebar + relevant screens say "Snapshot · regenerate" not "synced"
-- [ ] Last-snapshot timestamp visible
+- [x] No "2-way synced" language exists in the build — the prototype's Excel "synced" wording was never ported (A1 established read-only snapshots); export surfaces already say "Snapshot / regenerate / Run export now". Remaining `synced` strings are legitimate Uber/Navan/Xero integration syncs, unrelated to exports.
+- [x] Last-snapshot timestamp visible on `/admin/exports` (recent-runs table, `formatLocalDateTime`). Broadened the recent-runs query to also include the report-workbook + master-ledger backups (`report_workbook_*` / `ledger_backup_*`) so the timestamp covers every 365 backup, not just the continuity ZIP.
 
 ### TASK-068 — Persist finalised invoice PDF to SharePoint
 **status:** done

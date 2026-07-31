@@ -4,6 +4,12 @@ import { writeAudit, type AuditActor } from '@/server/audit';
 import { uploadWorkbookToSharePoint } from '@/server/exports/excel-workbook';
 import { buildFinanceWorkbook } from '@/server/exports/finance-workbook';
 import { buildTimesheetWorkbook } from '@/server/exports/timesheet-workbook';
+import {
+  buildInvoicesWorkbook,
+  buildExpensesWorkbook,
+  buildPipelineWorkbook,
+  buildPartnerPoolWorkbook,
+} from '@/server/exports/list-workbooks';
 
 /**
  * Registry of the themed reporting workbooks (Phase 1F). Each entry
@@ -32,6 +38,14 @@ export const REPORT_WORKBOOKS: readonly ReportWorkbook[] = [
     name: 'Timesheet',
     label: 'Timesheet (by person · by project · utilisation)',
     build: buildTimesheetWorkbook,
+  },
+  { name: 'Invoices', label: 'Invoices (AR list)', build: buildInvoicesWorkbook },
+  { name: 'Expenses', label: 'Expenses (reimbursables list)', build: buildExpensesWorkbook },
+  { name: 'Pipeline', label: 'BD pipeline', build: buildPipelineWorkbook },
+  {
+    name: 'Partner-pool',
+    label: 'Partner pool (full + associate scorecards)',
+    build: buildPartnerPoolWorkbook,
   },
 ];
 
