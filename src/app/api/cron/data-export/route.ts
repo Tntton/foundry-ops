@@ -4,6 +4,7 @@ import { prisma } from '@/server/db';
 import { generateDataExport } from '@/server/exports/data-export';
 import { uploadDataExportToSharePoint } from '@/server/exports/sharepoint-backup';
 import { generateLedgerBackup } from '@/server/exports/ledger-backup';
+import { runAllReportWorkbookBackups } from '@/server/exports/report-workbooks';
 import { writeAudit } from '@/server/audit';
 
 export const runtime = 'nodejs';
@@ -119,6 +120,21 @@ export async function GET(req: Request) {
       console.error('[cron/data-export] ledger backup failed:', ledgerErr);
     }
 
+    // Refresh the themed reporting workbooks (Phase 1F) too. Each entry
+    // is independently audited and best-effort — never fails the cron.
+    let reportWorkbooks: { name: string; ok: boolean }[] = [];
+    try {
+      reportWorkbooks = (
+        await runAllReportWorkbookBackups({
+          actor: { type: 'system' },
+          source: 'integration_sync',
+          via: 'cron',
+        })
+      ).map((r) => ({ name: r.name, ok: r.ok }));
+    } catch (wbErr) {
+      console.error('[cron/data-export] report workbooks failed:', wbErr);
+    }
+
     console.log('[cron/data-export] ok:', {
       filename: manifest.filename,
       sizeBytes: manifest.sizeBytes,
@@ -126,6 +142,7 @@ export async function GET(req: Request) {
       webUrl,
       uploadSkipped,
       ledgerRows: ledgerBackup?.rowCount ?? null,
+      reportWorkbooks,
     });
     return NextResponse.json({
       ok: true,
@@ -134,6 +151,7 @@ export async function GET(req: Request) {
       folderPath,
       uploadSkipped,
       ledgerBackup,
+      reportWorkbooks,
     });
   } catch (err) {
     console.error('[cron/data-export] failed:', err);

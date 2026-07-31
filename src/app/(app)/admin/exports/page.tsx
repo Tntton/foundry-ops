@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { RunExportNowButton } from './run-export-button';
+import { RunWorkbooksNowButton } from './run-workbooks-button';
 
 /**
  * Admin business-continuity exports page. Shows:
@@ -204,6 +205,22 @@ export default async function ExportsPage() {
             </div>
           )}
           <RunExportNowButton />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Regenerate report workbooks</CardTitle>
+          <p className="text-xs text-ink-3">
+            Rebuilds the themed reporting workbooks (Finance — P&amp;L,
+            Cash, AR &amp; AP aging — and more as they ship) and publishes
+            each to the SharePoint Reports folder, overwriting the previous
+            copy. Runs automatically every night; use this for an on-demand
+            refresh.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <RunWorkbooksNowButton />
         </CardContent>
       </Card>
 

@@ -590,11 +590,14 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **note on completion:** `src/server/exports/excel-workbook.ts` + `src/__tests__/excel-workbook.test.ts` (10 tests, round-tripped through `XLSX.read` to prove valid .xlsx). "ExcelJS or equivalent" satisfied with SheetJS to avoid a new dependency. Graph primitives duplicated from `sharepoint-backup.ts` per the standing TASK-042c extract-to-shared-module note. Consumed by TASK-069c (master-ledger workbook).
 
 ### TASK-061 — Workbook: Finance.xlsx
-**status:** todo
+**status:** done
 **depends on:** TASK-060
 **acceptance:**
-- [ ] Sheets: P&L, Cash, AR aging, AP aging
-- [ ] Nightly + on-demand "regenerate" button on admin screen
+- [x] Sheets: P&L, Cash, AR aging, AP aging (`src/server/exports/finance-workbook.ts`, drawing on `computeFirmPnL` / `computeCashflow` / `computeFirmAging` / `computeFirmApAging` — the same aggregators the on-screen reports use, so the workbook can't drift). Money numeric; P&L carries a TOTAL row.
+- [x] Nightly (data-export cron) + on-demand "Regenerate report workbooks" button on `/admin/exports`, via the shared `report-workbooks.ts` registry + runner. Publishes `Finance.xlsx` to the Reports folder (TASK-060 atomic overwrite); each run audited (`report_workbook_generated`/`_failed`), graceful skip when Graph unconfigured.
+- [ ] Commit: `feat(TASK-061): Finance.xlsx workbook` — batched
+
+**note on completion:** introduced `report-workbooks.ts` — a registry the cron + admin button both loop over, so TASK-062…066 each land as one registry entry (no per-task cron/button wiring). Pure `financeSheets(pnl,cash,ar,ap)` split out for tests (`finance-workbook.test.ts`). Full suite green (469).
 
 ### TASK-062 — Workbook: Timesheet.xlsx
 **status:** todo
