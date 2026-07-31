@@ -137,7 +137,6 @@ export async function listLeaderPendingActions(
         stage: true,
         startDate: true,
         createdAt: true,
-        milestones: { select: { id: true } },
         timesheetEntries: {
           orderBy: { date: 'desc' as const },
           take: 1,
@@ -225,8 +224,9 @@ export async function listLeaderPendingActions(
 
   // ── 3. Project ops gaps on projects I lead ───────────────────
   // Stale = no timesheet activity in 14d for an active project,
-  // and the project is >14d old (skip fresh ones). Missing
-  // milestones = kickoff stage > 14d old with zero milestones.
+  // and the project is >14d old (skip fresh ones). Milestones are
+  // no longer a requirement here — a kickoff project without
+  // milestones set is not a dashboard action to clear.
   const TWO_WEEKS_MS = 14 * 24 * 3600 * 1000;
   const now = Date.now();
   for (const p of projectsILead) {
@@ -248,41 +248,17 @@ export async function listLeaderPendingActions(
         tone: days >= 30 ? 'red' : 'amber',
       });
     }
-    // Missing milestones on kickoff stage.
-    if (p.stage === 'kickoff' && p.milestones.length === 0) {
-      actions.push({
-        kind: 'project_missing_milestones',
-        title: `${p.code} — no milestones set`,
-        detail: `${p.name} kicked off but hasn't been broken into deliverables yet.`,
-        href: `/projects/${p.code}?tab=milestones`,
-        tone: 'amber',
-      });
-    }
   }
 
   // ── 4. Invoice-to-draft suggestions (partner+) ───────────────
   // (suggestions list already fetched above — use the count for the tile badge.)
   const invoicesToDraft = (isAdmin || isPartner || isManager) ? suggestions.length : 0;
 
-  // ── 5. BD pipeline gaps (partner+) ───────────────────────────
-  // Open deals I own with no activity in 14d+ — partner needs to
-  // nudge the conversation along.
+  // ── 5. BD pipeline (partner+) ────────────────────────────────
+  // The open-deal count still feeds the BD quick-action tile, but
+  // stalling alerts are disabled for now — an open deal going quiet
+  // is not surfaced as a dashboard action to clear.
   const myBdDeals = (isPartner || isAdmin) ? myDeals.length : 0;
-  if (isPartner || isAdmin) {
-    for (const d of myDeals) {
-      const lastTouch = d.lastConversationAt ?? d.updatedAt;
-      const ageDays = Math.floor((now - lastTouch.getTime()) / (24 * 3600 * 1000));
-      if (ageDays >= 14) {
-        actions.push({
-          kind: 'deal_stale',
-          title: `${d.code} stalling at ${d.stage} (${ageDays}d quiet)`,
-          detail: `${d.name ?? d.prospectiveName ?? 'Unnamed deal'} — nudge or move stage.`,
-          href: `/bd/${d.id}`,
-          tone: ageDays >= 30 ? 'red' : 'amber',
-        });
-      }
-    }
-  }
 
   // ── 6. Self carry-through ────────────────────────────────────
   // Leaders submit timesheets and expenses too. Reuse the staff
