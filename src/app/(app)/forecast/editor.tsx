@@ -51,15 +51,29 @@ export function ForecastEditor({
     return init;
   });
 
-  const scenarioTotal = useMemo(
-    () =>
-      projects.reduce((sum, p) => {
-        const r = rows[p.id];
-        return sum + (r && r.included ? r.valueCents : 0);
-      }, 0),
-    [projects, rows],
-  );
-  const delta = scenarioTotal - baselineContractCents;
+  // Contract total responds to both include/exclude and value overrides;
+  // revenue + margin respond only to include/exclude (a contract-value
+  // what-if doesn't move already-booked revenue).
+  const totals = useMemo(() => {
+    let contract = 0;
+    let revenue = 0;
+    let margin = 0;
+    let baseRevenue = 0;
+    let baseMargin = 0;
+    for (const p of projects) {
+      const r = rows[p.id];
+      baseRevenue += p.revenueCents;
+      baseMargin += p.marginCents;
+      if (r?.included) {
+        contract += r.valueCents;
+        revenue += p.revenueCents;
+        margin += p.marginCents;
+      }
+    }
+    return { contract, revenue, margin, baseRevenue, baseMargin };
+  }, [projects, rows]);
+
+  const scenarioTotal = totals.contract;
 
   const adjustmentsJson = JSON.stringify(
     projects.map((p) => ({
@@ -73,15 +87,23 @@ export function ForecastEditor({
 
   return (
     <div className="space-y-4">
-      {/* Projection summary */}
-      <div className="grid grid-cols-3 gap-3">
-        <Stat label="Baseline" value={money(baselineContractCents)} />
-        <Stat label="Scenario" value={money(scenarioTotal)} />
-        <Stat
-          label="Delta"
-          value={`${delta >= 0 ? '+' : ''}${money(delta)}`}
-          tone={delta === 0 ? 'neutral' : delta > 0 ? 'green' : 'red'}
-        />
+      {/* Projection summary — contract / revenue / margin, baseline vs scenario */}
+      <div className="overflow-x-auto rounded-lg border border-line">
+        <table className="w-full min-w-[520px] text-sm">
+          <thead className="bg-surface-subtle text-xs text-ink-3">
+            <tr>
+              <th className="px-3 py-2 text-left">Metric</th>
+              <th className="px-3 py-2 text-right">Baseline</th>
+              <th className="px-3 py-2 text-right">Scenario</th>
+              <th className="px-3 py-2 text-right">Delta</th>
+            </tr>
+          </thead>
+          <tbody>
+            <MetricRow label="Contract value" baseline={baselineContractCents} scenario={scenarioTotal} />
+            <MetricRow label="Revenue (booked)" baseline={totals.baseRevenue} scenario={totals.revenue} />
+            <MetricRow label="Margin" baseline={totals.baseMargin} scenario={totals.margin} />
+          </tbody>
+        </table>
       </div>
 
       <div className="overflow-x-auto rounded-lg border border-line">
@@ -194,21 +216,27 @@ function SaveButton({ isUpdate }: { isUpdate: boolean }) {
   );
 }
 
-function Stat({
+function MetricRow({
   label,
-  value,
-  tone = 'neutral',
+  baseline,
+  scenario,
 }: {
   label: string;
-  value: string;
-  tone?: 'neutral' | 'green' | 'red';
+  baseline: number;
+  scenario: number;
 }) {
+  const delta = scenario - baseline;
   const toneCls =
-    tone === 'green' ? 'text-status-green' : tone === 'red' ? 'text-status-red' : 'text-ink';
+    delta === 0 ? 'text-ink-3' : delta > 0 ? 'text-status-green' : 'text-status-red';
   return (
-    <div className="rounded-lg border border-line bg-card p-4">
-      <div className="text-xs text-ink-3">{label}</div>
-      <div className={`mt-1 text-2xl font-semibold tabular-nums ${toneCls}`}>{value}</div>
-    </div>
+    <tr className="border-t border-line">
+      <td className="px-3 py-2 text-ink-2">{label}</td>
+      <td className="px-3 py-2 text-right tabular-nums text-ink-3">{money(baseline)}</td>
+      <td className="px-3 py-2 text-right font-medium tabular-nums text-ink">{money(scenario)}</td>
+      <td className={`px-3 py-2 text-right tabular-nums ${toneCls}`}>
+        {delta >= 0 ? '+' : ''}
+        {money(delta)}
+      </td>
+    </tr>
   );
 }

@@ -790,13 +790,13 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 **status:** todo
 **depends on:** TASK-072a
 **acceptance:**
+- [x] Baseline-vs-scenario comparison on **revenue + margin** (not only contract value) — `loadBaselineProjects` folds each project's `computeFirmPnL` revenue/margin into the sandbox; `applyForecast` projects contract / revenue / margin (include-exclude drives revenue+margin; a contract-value override only moves the contract metric — it can't retroactively change booked revenue). Editor shows a Contract / Revenue / Margin × baseline/scenario/delta summary that recomputes live. Tested.
 - [ ] Shift project start dates in a scenario → re-phase the monthly projection (needs `computeFirmPnL` to accept per-project overrides, or a projection that models phasing)
-- [ ] Change rates → project revenue/margin under the scenario, not just contract value
+- [ ] Change rates → project revenue/margin under the scenario from adjusted rates (not just current actuals)
 - [ ] Add hypothetical (not-yet-real) projects to a scenario without creating real `Project` rows
-- [ ] Baseline-vs-scenario comparison on revenue + margin (not only contract value)
 - [ ] Tests + commit: `feat(TASK-072b): richer forecast what-ifs`
 
-**context:** carved out of the original TASK-072 so the sandbox could ship a complete first slice (TASK-072a). These three edit dimensions each need a projection model richer than the contract-value sum, so they're grouped here.
+**context:** carved out of the original TASK-072 so the sandbox could ship a complete first slice (TASK-072a). The revenue+margin projection landed (2026-07-31); the remaining three edit dimensions each need a projection model richer than static actuals (per-project phasing / rate overrides / hypothetical rows), so they stay grouped here.
 
 ### TASK-073 — Cost planning + OPEX
 **status:** deferred
@@ -806,6 +806,8 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Drawer to edit
 - [ ] Rolls into P&L
 
+
+**AUDIT (2026-07-31):** likely **largely covered / superseded** — the app already has an `OpexLine` + `FyBudgetOpexLine` model and `/admin/opex` (FY-budget planned-vs-actual OPEX tracker by ATO category), plus `/budget-watch`, `/cashflow`, `fy-budget`. A separate editable `/costplan` risks duplicating that. **Do not build until TT confirms** what `/costplan` would add beyond the existing OPEX/FY-budget surfaces (e.g. per-line vendor + monthly phasing + roll-into-forecast). Left `deferred`.
 ### TASK-074 — BD pipeline
 **status:** done
 **depends on:** TASK-009
@@ -840,6 +842,8 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Payout rows per partner
 - [ ] Approve → generates bill entries for each partner
 
+
+**BLOCKER / OPEN DECISION (2026-07-31):** the true-up **pool formula is underspecified**. The data exists (`ProjectPartnerContribution` per project + `computePartnerScoreboard` contribution-weighted value), but "revenue × partner-share rules" needs TT to define: what forms the distributable pool (gross profit? net of OPEX? a fixed %?), the per-partner share rule (contribution-weighted? seniority tiers? fixed splits?), and the period basis. Not guessing a partner-compensation formula. Needs a spec before build; left `deferred`.
 ### TASK-078 — Manager dashboard + Staff "My week"
 **status:** deferred
 **depends on:** TASK-041
@@ -847,6 +851,8 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] `/mgrhome`: team utilisation, project health cards
 - [ ] `/myweek`: personal utilisation, gaps highlighted
 
+
+**AUDIT (2026-07-31):** **largely covered** by the role-adaptive root dashboard (`/`) — it already branches staff vs leader (`staff-action-strip.tsx` / `leader-action-strip.tsx` where LeaderRole = manager|partner|admin), with per-person section layout persistence. Dedicated `/mgrhome` + `/myweek` routes don't exist, but their content (team utilisation / project health for managers; personal utilisation / gaps for staff) is served on `/`. **Confirm with TT** whether standalone routes add enough over the adaptive dashboard before building. Left `deferred`.
 ---
 
 ## Phase 3A — Agent infrastructure

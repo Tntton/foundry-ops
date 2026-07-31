@@ -12,9 +12,9 @@ import {
  */
 
 const projects: BaselineProject[] = [
-  { id: 'p1', code: 'IFM001', name: 'Galileo', stage: 'delivery', clientCode: 'IFM', contractValueCents: 10_000_000 },
-  { id: 'p2', code: 'GNC004', name: 'Pricing', stage: 'kickoff', clientCode: 'GNC', contractValueCents: 4_000_000 },
-  { id: 'p3', code: 'FHP001', name: 'Internal', stage: 'standing', clientCode: 'FHP', contractValueCents: 1_000_000 },
+  { id: 'p1', code: 'IFM001', name: 'Galileo', stage: 'delivery', clientCode: 'IFM', contractValueCents: 10_000_000, revenueCents: 4_000_000, marginCents: 2_800_000 },
+  { id: 'p2', code: 'GNC004', name: 'Pricing', stage: 'kickoff', clientCode: 'GNC', contractValueCents: 4_000_000, revenueCents: 1_000_000, marginCents: 600_000 },
+  { id: 'p3', code: 'FHP001', name: 'Internal', stage: 'standing', clientCode: 'FHP', contractValueCents: 1_000_000, revenueCents: 0, marginCents: -200_000 },
 ];
 
 describe('applyForecast', () => {
@@ -35,6 +35,24 @@ describe('applyForecast', () => {
     expect(r.deltaCents).toBe(-1_000_000);
     expect(r.scenarioCount).toBe(2);
     expect(r.rows.find((x) => x.projectId === 'p3')!.scenarioContractCents).toBe(0);
+    // Dropping the loss-making internal project lifts scenario margin.
+    expect(r.margin.baselineCents).toBe(3_200_000);
+    expect(r.margin.scenarioCents).toBe(3_400_000);
+    expect(r.margin.deltaCents).toBe(200_000);
+  });
+
+  it('projects revenue by include/exclude, not by contract override', () => {
+    // Overriding p2's contract value must not move revenue/margin.
+    const r = applyForecast(projects, [
+      { projectId: 'p2', included: true, contractValueCents: 9_000_000 },
+    ]);
+    expect(r.scenarioContractCents).toBe(20_000_000); // 10 + 9(override) + 1
+    expect(r.revenue.scenarioCents).toBe(r.revenue.baselineCents); // all still included
+    // Now exclude p2 → revenue drops by p2's booked revenue only.
+    const r2 = applyForecast(projects, [
+      { projectId: 'p2', included: false, contractValueCents: 4_000_000 },
+    ]);
+    expect(r2.revenue.deltaCents).toBe(-1_000_000);
   });
 
   it('applies a contract-value override and flags it', () => {
