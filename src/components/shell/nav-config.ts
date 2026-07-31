@@ -149,6 +149,15 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         roles: ['super_admin', 'admin', 'partner'],
       },
       {
+        // Forecast sandbox — what-if over the book of business (toggle
+        // projects, adjust contract values), saved as personal scenarios.
+        // Same planner audience as P&L; read-only against real data.
+        label: 'Forecast',
+        href: '/forecast',
+        icon: LineChart,
+        roles: ['super_admin', 'admin', 'partner'],
+      },
+      {
         // Operational balance sheet — AR + AP + WIP + bank. NOT a
         // substitute for Xero's official BS; flagged on the page
         // itself. Firm financial reporting — same audience as P&L, and

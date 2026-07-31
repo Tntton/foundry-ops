@@ -757,27 +757,46 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 > **Deferred from MVP (scope cut confirmed 2026-04-19).** MVP = Phases 0 + 1 only, for parallel-run testing from 2026-04-24. Phase 2 tasks remain fully specified below and should be picked up once the MVP is in TT/JN's hands and steady-state. The ralph loop should not enter Phase 2 automatically — user will flip individual statuses back to `todo` when ready.
 
 ### TASK-070 — Firm dashboard (Super Admin / Partner views)
-**status:** deferred
+**status:** done
 **depends on:** TASK-048, TASK-053
 **acceptance:**
 - [ ] `/dashboard`: KPIs + section grid (cash, AR aging, utilisation, partner pool, BD pipeline, milestones due)
 - [ ] Section layout persisted per user in `UserPreference`
 
+**note (verified 2026-07-31, built ahead of the deferred plan):** `/dashboard` (routed at `/`) — KPI section grid + per-person layout persistence via `dashboard-sections` / `layout-actions.ts` (move/collapse/hide).
 ### TASK-071 — P&L overview
-**status:** deferred
+**status:** done
 **depends on:** TASK-055, TASK-044, TASK-046
 **acceptance:**
 - [ ] `/pnl`: revenue / cost / margin by month
 - [ ] Waterfall chart for selected period
 - [ ] Drill-down to project
 
-### TASK-072 — Forecast sandbox
-**status:** deferred
+**note (verified 2026-07-31, built ahead of the deferred plan):** `/pnl` — revenue/cost/margin by month, firm `WaterfallChart`, scope tabs + project drill-down.
+### TASK-072a — Forecast sandbox: foundation (toggle/adjust + save scenarios)
+**status:** done
 **depends on:** TASK-071
 **acceptance:**
-- [ ] Editable what-if overlay: add/remove projects, shift start dates, change rates
-- [ ] "Save scenario" persists to `Scenario` table
-- [ ] Doesn't touch real project data
+- [x] `Scenario` model + migration `20260731100000_add_scenario` (name, ownerId, note, `adjustments` JSON, timestamps) — **apply manually to prod** (`prisma migrate deploy`)
+- [x] `/forecast` sandbox: editable overlay over active projects — toggle each in/out + override contract value; baseline / scenario / delta recompute **live** (client) and authoritatively on the server (`src/server/reports/forecast.ts` `applyForecast`, pure + tested). Never mutates real project data.
+- [x] Save / update / delete named scenarios (owner-scoped; super_admin override); scenarios list with per-scenario projected total + delta + load link. Zod-validated adjustments, audit on every write.
+- [x] Gated on `hasAnyRole(['super_admin','admin','partner'])` (P&L planner audience); empty/loading/error states; "Forecast" nav entry in Reports.
+- [x] Tests: `forecast.test.ts` (include/exclude, value override, unknown-id ignore, defensive `parseAdjustments`).
+- [ ] Commit: `feat(TASK-072a): forecast sandbox foundation` — batched
+
+**note on completion:** split from TASK-072 — this delivers the working sandbox (include/exclude + contract-value what-ifs, saved scenarios). The richer edit dimensions (date-shift re-phasing, rate change, hypothetical new projects) are TASK-072b. Projection is contract-value based for now (the firm's book of business); wiring it through `computeFirmPnL`'s revenue/margin model is part of 072b. Full suite green (523).
+
+### TASK-072b — Forecast sandbox: richer what-ifs (dates / rates / hypothetical projects)
+**status:** todo
+**depends on:** TASK-072a
+**acceptance:**
+- [ ] Shift project start dates in a scenario → re-phase the monthly projection (needs `computeFirmPnL` to accept per-project overrides, or a projection that models phasing)
+- [ ] Change rates → project revenue/margin under the scenario, not just contract value
+- [ ] Add hypothetical (not-yet-real) projects to a scenario without creating real `Project` rows
+- [ ] Baseline-vs-scenario comparison on revenue + margin (not only contract value)
+- [ ] Tests + commit: `feat(TASK-072b): richer forecast what-ifs`
+
+**context:** carved out of the original TASK-072 so the sandbox could ship a complete first slice (TASK-072a). These three edit dimensions each need a projection model richer than the contract-value sum, so they're grouped here.
 
 ### TASK-073 — Cost planning + OPEX
 **status:** deferred
@@ -788,28 +807,31 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Rolls into P&L
 
 ### TASK-074 — BD pipeline
-**status:** deferred
+**status:** done
 **depends on:** TASK-009
 **acceptance:**
 - [ ] `/bd`: kanban by stage (lead / qualifying / proposal / negotiation / won / lost)
 - [ ] Deal drawer: value, probability, owner, target close, notes
 - [ ] Weighted value rolls up per stage
 
+**note (verified 2026-07-31, built ahead of the deferred plan):** `/bd` — stage kanban (lead→won/lost), deal drawer, weighted-value rollup.
 ### TASK-075 — Deal → Project conversion
-**status:** deferred
+**status:** done
 **depends on:** TASK-074, TASK-030
 **acceptance:**
 - [ ] "Convert" action on won deal → prefills New Project wizard
 - [ ] `converted_project_id` stored on Deal; can't be undone
 
+**note (verified 2026-07-31, built ahead of the deferred plan):** `Deal.convertedProjectId @unique`, explicit convert action on the deal detail page, New Project wizard prefill from the deal.
 ### TASK-076 — Resource planning
-**status:** deferred
+**status:** done
 **depends on:** TASK-035
 **acceptance:**
 - [ ] `/resource`: matrix of people × weeks, cells = allocation %
 - [ ] Overallocation flagged red
 - [ ] Drag-to-adjust (phase 2 polish; initial = click-to-edit drawer)
 
+**note (verified 2026-07-31, built ahead of the deferred plan):** `/resource-planning` — people×weeks bandwidth heatmap, overallocation flagged, click-to-edit (spec’s `/resource` shipped as `/resource-planning`).
 ### TASK-077 — Partner true-up
 **status:** deferred
 **depends on:** TASK-071

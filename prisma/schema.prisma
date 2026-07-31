@@ -1631,6 +1631,24 @@ model UserPreference {
   updatedAt   DateTime @updatedAt
 }
 
+// Forecast sandbox scenarios (TASK-072). A saved what-if over the firm's
+// book of business — never touches real project data. `adjustments` is a
+// JSON array of per-project overrides:
+//   [{ projectId, included, contractValueCents }]
+// ownerId is a plain Person.id (no FK relation kept intentionally — a
+// scenario is a personal scratchpad, not a referential entity).
+model Scenario {
+  id          String   @id @default(cuid())
+  name        String
+  ownerId     String
+  note        String?
+  adjustments Json     @default("[]")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([ownerId, updatedAt])
+}
+
 model FeatureFlag {
   key         String   @id
   enabled     Boolean  @default(false)
