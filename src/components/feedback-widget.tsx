@@ -87,6 +87,7 @@ export function FeedbackWidget() {
         <button
           type="button"
           onClick={() => setOpen(true)}
+          data-tour="feedback"
           className="fixed bottom-4 right-[8.5rem] z-40 flex items-center gap-1.5 rounded-full border border-line bg-card px-3 py-2 text-xs font-medium text-ink-2 shadow-lg transition-all hover:bg-surface-hover hover:text-ink"
           title="Submit feedback or request a feature"
         >

@@ -16,6 +16,16 @@ export type OnboardingSlide = {
   body: string;
   /** Optional list of "here's where to go" links (relative URLs). */
   links?: Array<{ label: string; href: string }>;
+  /**
+   * Optional CSS selector for the live UI element this slide describes.
+   * The wizard spotlights it — a cut-out highlight ring with the card
+   * anchored beside it, the way product tours point at the thing they
+   * mention. Nav items expose `data-tour="nav-<href>"`; the floating
+   * pills expose `data-tour="assistant"` / `data-tour="feedback"`.
+   * Falls back to a centred card when the target isn't on screen
+   * (e.g. the collapsed sidebar on mobile).
+   */
+  spotlight?: string;
 };
 
 export type OnboardingProfile = {
@@ -49,6 +59,7 @@ function opener(firstName: string): OnboardingSlide {
 const CLOSER: OnboardingSlide = {
   title: 'You are set.',
   body: 'The floating pill on the bottom-right is the in-app assistant. Ask it what is on your plate, what you have logged this week, or which screen does X. Feedback and bug reports go through the smaller pill next to it.',
+  spotlight: '[data-tour="assistant"]',
 };
 
 function slidesFor(role: Role): OnboardingSlide[] {
@@ -59,6 +70,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
         {
           title: 'The dashboard is your triage view.',
           body: 'Anything pending your action is grouped there: approvals awaiting a decision, projects going stale, invoices ready to draft, expenses over threshold. Cards you dismiss stay dismissed until the underlying state changes.',
+          spotlight: '[data-tour="nav-/"]',
           links: [
             { label: 'Dashboard', href: '/' },
             { label: 'Firm P&L', href: '/pnl' },
@@ -67,6 +79,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
         {
           title: 'Directory is the identity master.',
           body: 'Every person, client, and contractor lives here. Adding someone provisions their M365 account and Entra group membership drives their role. Rate card, expert rate, and agency markup all sit on their profile.',
+          spotlight: '[data-tour="nav-/directory"]',
           links: [
             { label: 'Team directory', href: '/directory' },
             { label: 'Rate card', href: '/admin/rate-card' },
@@ -75,6 +88,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
         {
           title: 'Integrations, feedback, feature flags.',
           body: 'Xero, DocuSign, WhatsApp, SharePoint, M365 all live under Admin. Feedback triage picks up bug reports and feature requests logged from the floating pill. Feature flags gate anything not yet ready for the whole firm.',
+          spotlight: '[data-tour="nav-/admin/integrations"]',
           links: [
             { label: 'Integrations', href: '/admin/integrations' },
             { label: 'Feedback', href: '/admin/feedback' },
@@ -87,6 +101,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
         {
           title: 'Your dashboard is BD-first.',
           body: 'Pipeline, deals, invoices ready to send, approvals waiting on your sign-off. The partner scorecard has your revenue, hours, and portfolio at a glance.',
+          spotlight: '[data-tour="nav-/bd"]',
           links: [
             { label: 'Dashboard', href: '/' },
             { label: 'BD pipeline', href: '/bd' },
@@ -96,6 +111,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
         {
           title: 'Projects, teams, and delivery.',
           body: 'Every engagement you own lives under Projects. Add team members, edit the contract value, run through the tracker, and archive when done. Team hours roll straight into project cost.',
+          spotlight: '[data-tour="nav-/projects"]',
           links: [
             { label: 'Projects', href: '/projects' },
           ],
@@ -103,6 +119,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
         {
           title: 'Approvals over $20k need MFA.',
           body: 'High-value invoices, bills, and expense approvals require a second factor. WhatsApp approvals are supported for anything under the threshold; the web app is required above it.',
+          spotlight: '[data-tour="nav-/approvals"]',
           links: [
             { label: 'My approvals', href: '/approvals' },
           ],
@@ -113,6 +130,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
         {
           title: 'Your dashboard groups the work.',
           body: 'Approvals for your team, projects you are managing, and any actions waiting on you. The kanban view on Projects gives you a per-stage picture.',
+          spotlight: '[data-tour="nav-/"]',
           links: [
             { label: 'Dashboard', href: '/' },
             { label: 'Projects', href: '/projects' },
@@ -121,6 +139,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
         {
           title: 'Resource planning is where you allocate.',
           body: 'The bandwidth heatmap shows who is under- and over-loaded across the coming weeks. Drag allocations, edit team membership, and forecast against the pyramid baseline.',
+          spotlight: '[data-tour="nav-/resource-planning"]',
           links: [
             { label: 'Resource planning', href: '/resource-planning' },
             { label: 'My approvals', href: '/approvals' },
@@ -129,6 +148,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
         {
           title: 'Timesheet weekly, expenses as they hit.',
           body: 'Fill in your own timesheet weekly and approve your team submissions as they come in. Contractor invoices arrive via email or WhatsApp and route to you for approval when they are on your project.',
+          spotlight: '[data-tour="nav-/timesheet"]',
           links: [
             { label: 'My timesheet', href: '/timesheet' },
             { label: 'My expenses', href: '/expenses' },
@@ -141,6 +161,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
         {
           title: 'The dashboard shows what needs you.',
           body: 'Timesheet due, expenses to file, updates from your team. Everything is one click away. The nav on the left is your full toolbox.',
+          spotlight: '[data-tour="nav-/"]',
           links: [
             { label: 'Dashboard', href: '/' },
           ],
@@ -148,6 +169,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
         {
           title: 'Log your time weekly.',
           body: 'Timesheet by day and project. The regular-days feature pre-fills your standard week so you only edit exceptions. Your manager approves what you submit.',
+          spotlight: '[data-tour="nav-/timesheet"]',
           links: [
             { label: 'My timesheet', href: '/timesheet' },
           ],
@@ -155,6 +177,7 @@ function slidesFor(role: Role): OnboardingSlide[] {
         {
           title: 'Expenses go through the receipt agent.',
           body: 'Take a photo, upload it, or forward the receipt to finance@foundry.health. The extraction fills in the fields, you check them, and it routes to your manager. WhatsApp works too, same address book.',
+          spotlight: '[data-tour="nav-/bills/intake"]',
           links: [
             { label: 'File expense', href: '/expenses/new' },
             { label: 'My expenses', href: '/expenses' },
