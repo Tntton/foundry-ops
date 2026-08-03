@@ -602,13 +602,13 @@ export default async function MyProfilePage() {
               bankCountry: me.bankCountry,
               bankAccountName: me.bankAccountName,
               bankName: me.bankName,
-              // BSB + acc are stored encrypted — decrypt for the owner's
-              // own prefill (tryDecryptText passes through any legacy
-              // plaintext row unchanged during the migration window).
+              // Bank identifiers are stored encrypted — decrypt for the
+              // owner's own prefill (tryDecryptText passes through any
+              // legacy plaintext row unchanged during the migration window).
               bankBsb: tryDecryptText(me.bankBsb),
               bankAcc: tryDecryptText(me.bankAcc),
-              bankSwift: me.bankSwift,
-              bankIban: me.bankIban,
+              bankSwift: tryDecryptText(me.bankSwift),
+              bankIban: tryDecryptText(me.bankIban),
             }}
           />
         </CardContent>

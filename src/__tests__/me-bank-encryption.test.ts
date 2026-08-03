@@ -63,6 +63,24 @@ describe('updateOwnBankDetails', () => {
     expect(decryptText(data.bankAcc as string)).toBe('12345678');
   });
 
+  it('encrypts SWIFT + IBAN for an international account', async () => {
+    const res = await updateOwnBankDetails(
+      { status: 'idle' },
+      fd({
+        bankCountry: 'GB',
+        bankAccountName: 'Chris',
+        bankSwift: 'BARCGB22',
+        bankIban: 'GB29NWBK60161331926819',
+      }),
+    );
+    expect(res.status).toBe('success');
+    const data = mocks.update.mock.calls[0]![0].data as Record<string, string | null>;
+    expect(data.bankSwift).not.toBe('BARCGB22');
+    expect(data.bankIban).not.toBe('GB29NWBK60161331926819');
+    expect(decryptText(data.bankSwift as string)).toBe('BARCGB22');
+    expect(decryptText(data.bankIban as string)).toBe('GB29NWBK60161331926819');
+  });
+
   it('stores null (not an encrypted empty) when bank fields are blank', async () => {
     const res = await updateOwnBankDetails(
       { status: 'idle' },

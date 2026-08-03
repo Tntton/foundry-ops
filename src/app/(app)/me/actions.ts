@@ -175,14 +175,15 @@ export async function updateOwnBankDetails(
           bankCountry: data.bankCountry,
           bankAccountName: data.bankAccountName,
           bankName: data.bankName,
-          // BSB + account are PII — encrypt at rest (mirrors the admin
-          // bank path; payroll/ABA decrypts these). Never store the raw
-          // digits. SWIFT/IBAN stay as-is for now (see TASK note) — no
-          // decrypt contract exists for them yet.
+          // All bank identifiers are PII — encrypt at rest. BSB + account
+          // are decrypted by payroll/ABA; SWIFT + IBAN are decrypted only
+          // for the owner's own prefill (me/page.tsx). Never store raw
+          // digits. (bankAccountName / bankName are display labels, not
+          // account secrets, so they stay plaintext.)
           bankBsb: data.bankBsb ? encryptText(data.bankBsb) : null,
           bankAcc: data.bankAcc ? encryptText(data.bankAcc) : null,
-          bankSwift: data.bankSwift,
-          bankIban: data.bankIban,
+          bankSwift: data.bankSwift ? encryptText(data.bankSwift) : null,
+          bankIban: data.bankIban ? encryptText(data.bankIban) : null,
         },
       });
       // Audit row stores ONLY a structural diff — never the actual digits.

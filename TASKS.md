@@ -1192,10 +1192,10 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [x] Tests: `crypto.test.ts` (envelope round-trip + `tryDecryptText` legacy fallback), `me-bank-encryption.test.ts` (action stores ciphertext that decrypts back; blanks store null).
 - [ ] Commit: `fix(TASK-199): encrypt self-service bank details at rest`
 
-**REMAINING PII GAPS (todo — follow-up, not the regression):**
-- [ ] `bankSwift` / `bankIban` are stored **plaintext in both** the `/me` and admin paths (international staff). Not in CLAUDE.md's explicit encrypt list, and no decrypt-on-read contract exists yet — encrypt them + add `tryDecryptText` on every read/display (prefill, admin view) as a set.
-- [ ] `taxFileNumber` / `superFundId` are schema columns marked `// encrypted` but have **no write path anywhere** — no form captures them yet. When a capture UI is added, it must `encryptText` on write.
-- [ ] Optional: migrate `directory/people/[id]/bank/page.tsx` display + `payruns.ts` presence-read to `tryDecryptText` for uniformity.
+**REMAINING PII GAPS:**
+- [x] `bankSwift` / `bankIban` now encrypted at rest — only the `/me` form writes them (there is no admin SWIFT/IBAN path), so `me/actions.ts` `encryptText`s on write and `me/page.tsx` `tryDecryptText`s for the owner's prefill. Test extended (`me-bank-encryption.test.ts` GB/IBAN case).
+- [ ] `taxFileNumber` / `superFundId` — schema columns marked `// encrypted` but **no write path exists anywhere** (no form captures them). Nothing to fix now; when a capture UI is added it MUST `encryptText` on write. (N/A until then.)
+- [ ] Optional uniformity: migrate `directory/people/[id]/bank/page.tsx` display (already try/catch-safe) + `payruns.ts` presence-read to `tryDecryptText`.
 
 **context:** Found during the 2026-08-03 operational-readiness audit (TT asked "what else for this to be operational"). The plaintext-bank write was the one true go-live blocker in the security must-haves; fixed here. The remaining items are pre-existing broader PII-hardening gaps, not the regression.
 
