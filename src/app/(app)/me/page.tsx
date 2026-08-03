@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { prisma } from '@/server/db';
+import { tryDecryptText } from '@/server/crypto';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -601,8 +602,11 @@ export default async function MyProfilePage() {
               bankCountry: me.bankCountry,
               bankAccountName: me.bankAccountName,
               bankName: me.bankName,
-              bankBsb: me.bankBsb,
-              bankAcc: me.bankAcc,
+              // BSB + acc are stored encrypted — decrypt for the owner's
+              // own prefill (tryDecryptText passes through any legacy
+              // plaintext row unchanged during the migration window).
+              bankBsb: tryDecryptText(me.bankBsb),
+              bankAcc: tryDecryptText(me.bankAcc),
               bankSwift: me.bankSwift,
               bankIban: me.bankIban,
             }}

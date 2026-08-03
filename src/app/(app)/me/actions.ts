@@ -6,6 +6,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { writeAudit } from '@/server/audit';
+import { encryptText } from '@/server/crypto';
 import { BankSchema } from './bank-schema';
 
 export type MeUpdateState =
@@ -174,8 +175,12 @@ export async function updateOwnBankDetails(
           bankCountry: data.bankCountry,
           bankAccountName: data.bankAccountName,
           bankName: data.bankName,
-          bankBsb: data.bankBsb,
-          bankAcc: data.bankAcc,
+          // BSB + account are PII — encrypt at rest (mirrors the admin
+          // bank path; payroll/ABA decrypts these). Never store the raw
+          // digits. SWIFT/IBAN stay as-is for now (see TASK note) — no
+          // decrypt contract exists for them yet.
+          bankBsb: data.bankBsb ? encryptText(data.bankBsb) : null,
+          bankAcc: data.bankAcc ? encryptText(data.bankAcc) : null,
           bankSwift: data.bankSwift,
           bankIban: data.bankIban,
         },

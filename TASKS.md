@@ -1183,6 +1183,22 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 
 ## Phase 5 — Polish
 
+### TASK-199 — PII-at-rest: encrypt self-service bank details (+ remaining gaps)
+**status:** done
+**depends on:** —
+**acceptance:**
+- [x] **Fixed the regression:** the self-service `/me` bank form wrote `bankBsb`/`bankAcc` in **plaintext** while the admin path encrypts and payroll `decryptText`s them — a PII-at-rest violation that also broke pay runs (decrypt throws on plaintext). `me/actions.ts` now encrypts BSB + account on write (mirrors `directory/people/[id]/bank/actions.ts`); `me/page.tsx` decrypts them for the owner's own prefill.
+- [x] Migration-safe read: new `tryDecryptText` (`src/server/crypto.ts`) passes any legacy plaintext row through unchanged so the transition window doesn't lose values; payroll already surfaces a clear "re-enter" error on a hard decrypt failure. Verified `payruns.ts` only uses the encrypted `supplierBsb` as a truthy presence check (not a payout) — not a second bug.
+- [x] Tests: `crypto.test.ts` (envelope round-trip + `tryDecryptText` legacy fallback), `me-bank-encryption.test.ts` (action stores ciphertext that decrypts back; blanks store null).
+- [ ] Commit: `fix(TASK-199): encrypt self-service bank details at rest`
+
+**REMAINING PII GAPS (todo — follow-up, not the regression):**
+- [ ] `bankSwift` / `bankIban` are stored **plaintext in both** the `/me` and admin paths (international staff). Not in CLAUDE.md's explicit encrypt list, and no decrypt-on-read contract exists yet — encrypt them + add `tryDecryptText` on every read/display (prefill, admin view) as a set.
+- [ ] `taxFileNumber` / `superFundId` are schema columns marked `// encrypted` but have **no write path anywhere** — no form captures them yet. When a capture UI is added, it must `encryptText` on write.
+- [ ] Optional: migrate `directory/people/[id]/bank/page.tsx` display + `payruns.ts` presence-read to `tryDecryptText` for uniformity.
+
+**context:** Found during the 2026-08-03 operational-readiness audit (TT asked "what else for this to be operational"). The plaintext-bank write was the one true go-live blocker in the security must-haves; fixed here. The remaining items are pre-existing broader PII-hardening gaps, not the regression.
+
 ### TASK-200 — Remove role switcher (prod)
 **status:** todo
 **depends on:** TASK-005
