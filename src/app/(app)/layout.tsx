@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation';
+import type { Role } from '@prisma/client';
 import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
+import { canOverlayAs } from '@/server/capabilities';
 import { countUnreadUpdates } from '@/server/user-updates';
 import { Sidebar } from '@/components/shell/sidebar';
 import { Topbar } from '@/components/shell/topbar';
@@ -55,6 +57,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const isViewing =
     activeOverlayRoles !== null && activeOverlayRoles.length > 0;
   const viewAsLabel = isViewing ? activeOverlayRoles!.join(' + ') : null;
+  // Which single-role overlays this person may preview. Super_admins get
+  // all four (every role is a strict downgrade of super_admin); admins
+  // get partner/manager/staff (each grants strictly fewer capabilities
+  // than admin, so no escalation) but never super_admin. Everyone else
+  // gets an empty list → the picker doesn't render.
+  const viewAsChoices = (
+    ['admin', 'partner', 'associate_partner', 'manager', 'staff'] as Role[]
+  ).filter((r) => canOverlayAs([r], session.realRoles));
 
   return (
     <MobileNavProvider>
@@ -84,7 +94,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             email={session.person.email}
             headshotUrl={session.person.headshotUrl}
             roles={session.person.roles}
-            isRealSuperAdmin={session.isRealSuperAdmin}
+            viewAsChoices={viewAsChoices}
             viewAsRoles={session.viewAsRoles}
           />
           {/* Persistent view-as banner — always visible while the overlay

@@ -160,6 +160,70 @@ export async function toggleChecklistItem(
   }
 }
 
+const AssignItemSchema = z.object({
+  // Empty string clears the assignee; any other value must be a person id.
+  assigneeId: z.string(),
+});
+
+export async function assignChecklistItem(
+  projectId: string,
+  itemId: string,
+  _prev: ChecklistActionState,
+  formData: FormData,
+): Promise<ChecklistActionState> {
+  try {
+    const { session, project } = await requireProjectAccess(projectId);
+    const parsed = AssignItemSchema.safeParse({ assigneeId: formData.get('assigneeId') });
+    if (!parsed.success) return { status: 'error', message: 'Invalid assignee' };
+
+    const item = await prisma.projectChecklistItem.findUnique({
+      where: { id: itemId },
+      select: { id: true, checklistId: true, assigneeId: true, checklist: { select: { projectId: true } } },
+    });
+    if (!item || item.checklist.projectId !== projectId) {
+      return { status: 'error', message: 'Item not found' };
+    }
+
+    const nextAssigneeId = parsed.data.assigneeId === '' ? null : parsed.data.assigneeId;
+    if (nextAssigneeId) {
+      // Only an active person can own an item — guards against a stale
+      // option or a hand-crafted id.
+      const person = await prisma.person.findFirst({
+        where: { id: nextAssigneeId, endDate: null },
+        select: { id: true },
+      });
+      if (!person) return { status: 'error', message: 'Unknown assignee' };
+    }
+
+    if (nextAssigneeId === item.assigneeId) {
+      return { status: 'success', message: 'No change.' };
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const updated = await tx.projectChecklistItem.update({
+        where: { id: itemId },
+        data: { assigneeId: nextAssigneeId },
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'updated',
+        entity: {
+          type: 'project_checklist_item',
+          id: updated.id,
+          before: { assigneeId: item.assigneeId },
+          after: { assigneeId: updated.assigneeId },
+        },
+        source: 'web',
+      });
+    });
+
+    revalidatePath(`/projects/${project.code}`);
+    return { status: 'success', message: nextAssigneeId ? 'Assigned.' : 'Unassigned.' };
+  } catch (err) {
+    return mapError(err);
+  }
+}
+
 export async function deleteChecklistItem(
   projectId: string,
   itemId: string,

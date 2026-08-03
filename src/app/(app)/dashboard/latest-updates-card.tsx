@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import type { UserUpdateRow } from '@/server/user-updates';
 import { markMyUpdatesRead } from './updates-actions';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -74,16 +74,20 @@ function timeAgo(d: Date): string {
  * The card always renders, even with zero updates, so the user has a
  * stable focal point for "what changed about my work."
  */
+const COLLAPSED_COUNT = 5;
+
 export function LatestUpdatesCard({ updates }: { updates: UserUpdateRow[] }) {
   const [, startMark] = useTransition();
+  const [expanded, setExpanded] = useState(false);
   const hasUnread = updates.some((u) => u.readAt === null);
+  const visibleCount = expanded ? updates.length : COLLAPSED_COUNT;
 
   useEffect(() => {
     if (hasUnread) {
-      // Only mark the 8 rendered items read — items below the fold
+      // Only mark the collapsed-view items read — items below the fold
       // stay unread (and keep the nav badge) until viewed on /updates.
       const renderedUnreadIds = updates
-        .slice(0, 8)
+        .slice(0, COLLAPSED_COUNT)
         .filter((u) => u.readAt === null)
         .map((u) => u.id);
       if (renderedUnreadIds.length > 0) {
@@ -106,7 +110,12 @@ export function LatestUpdatesCard({ updates }: { updates: UserUpdateRow[] }) {
         </CardTitle>
         {updates.length > 0 && (
           <span className="flex items-center gap-2 text-[11px] text-ink-3">
-            {updates.length > 8 && <span>showing 8 of {updates.length}</span>}
+            {updates.length > COLLAPSED_COUNT && (
+              <span>
+                showing {Math.min(visibleCount, updates.length)} of{' '}
+                {updates.length}
+              </span>
+            )}
             <Link href="/updates" className="text-brand hover:underline">
               View all →
             </Link>
@@ -119,7 +128,7 @@ export function LatestUpdatesCard({ updates }: { updates: UserUpdateRow[] }) {
             No new updates. You&apos;re all caught up.
           </p>
         ) : (
-          updates.slice(0, 8).map((u) => {
+          updates.slice(0, visibleCount).map((u) => {
             const isUnread = u.readAt === null;
             const inner = (
               <div
@@ -154,6 +163,17 @@ export function LatestUpdatesCard({ updates }: { updates: UserUpdateRow[] }) {
               <div key={u.id}>{inner}</div>
             );
           })
+        )}
+        {updates.length > COLLAPSED_COUNT && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-1 w-full rounded-md px-2 py-1.5 text-xs font-medium text-brand hover:bg-surface-hover"
+          >
+            {expanded
+              ? 'Show less'
+              : `Show ${updates.length - COLLAPSED_COUNT} more`}
+          </button>
         )}
       </CardContent>
     </Card>

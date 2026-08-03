@@ -80,6 +80,12 @@ export type ProjectListFilter = {
   partnerId?: string;
   active?: boolean;
   search?: string;
+  /** Restrict to projects the session person is connected to (manager /
+   *  lead partner / team member). Off by default: project-level
+   *  visibility is firm-wide, so the /projects list returns everything.
+   *  Callers that want a personal slice (dashboard "your projects", the
+   *  scoped CSV export for non-commercial roles) opt in explicitly. */
+  mineOnly?: boolean;
 };
 
 /**
@@ -99,11 +105,19 @@ export async function listProjects(
   session: Session,
   filter: ProjectListFilter = {},
 ): Promise<ProjectListRow[]> {
+  // Project-level visibility is firm-wide (per TT, 2026-07-20): every
+  // signed-in user sees every project in the list at the project level
+  // (code / name / client / stage). Ops + commercial detail stays gated
+  // downstream — `$` figures are hidden by `canSeeCommercials` on the
+  // list, and the detail page shows non-connected staff a project-level
+  // summary only. So no automatic row-level scope filter.
+  //
+  // `mineOnly` is the explicit opt-in for callers that DO want a personal
+  // slice (dashboard "your projects", the scoped CSV for non-commercial
+  // roles) rather than the firm-wide list.
   const personId = session.person.id;
-  const roles = session.person.roles;
-
   const scopeFilter: Record<string, unknown>[] = [];
-  if (!roles.some((r) => r === 'super_admin' || r === 'admin' || r === 'partner')) {
+  if (filter.mineOnly) {
     scopeFilter.push({
       OR: [
         { managerId: personId },

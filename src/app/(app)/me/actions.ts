@@ -6,6 +6,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { writeAudit } from '@/server/audit';
+import { BankSchema } from './bank-schema';
 
 export type MeUpdateState =
   | { status: 'idle' }
@@ -126,92 +127,8 @@ export async function updateOwnContactDetails(
 }
 
 // ─── Bank account ──────────────────────────────────────────────────────
-//
-// International-friendly. The `bankCountry` ISO code selects which
-// fields are required: AU asks for BSB+Acc, everything else asks for
-// SWIFT/IBAN. The schema lets you fill any combination — useful for
-// staff with hybrid arrangements (e.g. AU bank, intl IBAN).
-
-const BankSchema = z
-  .object({
-    bankCountry: z
-      .string()
-      .trim()
-      .max(2)
-      .transform((s) => s.toUpperCase())
-      .default('AU'),
-    bankAccountName: z
-      .string()
-      .trim()
-      .max(120)
-      .optional()
-      .or(z.literal('').transform(() => null)),
-    bankName: z
-      .string()
-      .trim()
-      .max(120)
-      .optional()
-      .or(z.literal('').transform(() => null)),
-    bankBsb: z
-      .string()
-      .trim()
-      .transform((s) => s.replace(/[\s-]/g, ''))
-      .nullable()
-      .or(z.literal('').transform(() => null))
-      .refine(
-        (s) => s === null || /^[0-9]{6}$/.test(s),
-        'BSB must be 6 digits',
-      ),
-    bankAcc: z
-      .string()
-      .trim()
-      .max(40)
-      .optional()
-      .or(z.literal('').transform(() => null)),
-    bankSwift: z
-      .string()
-      .trim()
-      .transform((s) => s.toUpperCase().replace(/\s/g, ''))
-      .nullable()
-      .or(z.literal('').transform(() => null))
-      .refine(
-        (s) => s === null || /^[A-Z0-9]{8}([A-Z0-9]{3})?$/.test(s),
-        'SWIFT/BIC must be 8 or 11 alphanumeric characters',
-      ),
-    bankIban: z
-      .string()
-      .trim()
-      .transform((s) => s.toUpperCase().replace(/\s/g, ''))
-      .nullable()
-      .or(z.literal('').transform(() => null))
-      .refine(
-        (s) => s === null || /^[A-Z]{2}[0-9]{2}[A-Z0-9]{1,30}$/.test(s),
-        'IBAN format invalid',
-      ),
-  })
-  .refine(
-    (v) => {
-      // AU requires BSB + Acc when filling in. Other countries expect
-      // SWIFT or IBAN. Empty rows are fine — staff can save partial.
-      const filledAny =
-        v.bankAccountName ||
-        v.bankBsb ||
-        v.bankAcc ||
-        v.bankSwift ||
-        v.bankIban ||
-        v.bankName;
-      if (!filledAny) return true;
-      if (v.bankCountry === 'AU') {
-        return Boolean(v.bankBsb && v.bankAcc);
-      }
-      return Boolean(v.bankSwift || v.bankIban);
-    },
-    {
-      message:
-        'AU accounts need BSB + Acc. Other countries need SWIFT/BIC or IBAN.',
-      path: ['bankCountry'],
-    },
-  );
+// BankSchema lives in ./bank-schema (a plain module) so it can be
+// unit-tested — a `'use server'` file may only export async actions.
 
 export async function updateOwnBankDetails(
   _prev: MeUpdateState,

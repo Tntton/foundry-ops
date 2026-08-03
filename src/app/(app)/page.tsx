@@ -133,7 +133,7 @@ export default async function DashboardPage({
     isSuperAdmin ? listInvoiceSuggestions(session) : Promise.resolve(null),
     isLeader ? listLeaderPendingActions(session) : Promise.resolve(null),
     listUserUpdates(session.person.id, 30),
-    isLeader ? Promise.resolve([] as ProjectListRow[]) : listProjects(session, { active: true }),
+    isLeader ? Promise.resolve([] as ProjectListRow[]) : listProjects(session, { active: true, mineOnly: true }),
     isAdmin ? getFeedbackPipeline() : Promise.resolve(null),
   ]) as [
     ManagerDashboard,

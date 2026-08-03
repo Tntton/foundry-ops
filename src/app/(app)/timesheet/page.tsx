@@ -191,21 +191,31 @@ export default async function TimesheetPage({
   const overviewFrom = new Date();
   overviewFrom.setUTCDate(overviewFrom.getUTCDate() - 26 * 7);
 
+  // Firm-overhead expense buckets (FHB000 / FHO000 / FHX000) are for OPEX
+  // bills, not timesheet time — keep them out of the picker (matches the
+  // hiding in server/projects.ts). Internal FHP projects stay: FHP000 is
+  // the home for non-project / admin time (feedback #12), later
+  // reallocated to a real project by editing the draft entry.
+  const OPEX_BUCKET_CODES = ['FHB000', 'FHO000', 'FHX000'];
   // Active projects (everything not archived) are visible to anyone via
-  // the picker. Archived projects only show when the target person has
-  // a footprint there — team membership history OR prior timesheet
-  // entries — so the picker doesn't balloon with every long-finished
-  // engagement. Late hours on closed engagements always route through
-  // approval (saveTimesheet excludes archived projects from auto-approve).
+  // the picker. ALL closed/archived projects are also offered now —
+  // grouped separately and flagged "needs approval" — so late/correcting
+  // hours can be booked to any finished engagement (Matt Byers,
+  // feedback #12), not just ones the person already had a footprint on.
+  // saveTimesheet still excludes archived-project entries from
+  // auto-approve, so they route through normal approval.
   const [
     activeProjects,
     teamMemberships,
     submittedHistory,
     targetPerson,
-    pastEntryProjects,
+    archivedProjects,
   ] = await Promise.all([
     prisma.project.findMany({
-      where: { stage: { not: 'archived' } },
+      where: {
+        stage: { not: 'archived' },
+        code: { notIn: OPEX_BUCKET_CODES },
+      },
       orderBy: { code: 'asc' },
       select: { id: true, code: true, name: true, stage: true },
     }),
@@ -218,27 +228,12 @@ export default async function TimesheetPage({
       where: { id: target.id },
       select: { rate: true, rateUnit: true, inactiveAt: true },
     }),
-    prisma.timesheetEntry.findMany({
-      where: { personId: target.id },
-      distinct: ['projectId'],
-      select: { projectId: true },
+    prisma.project.findMany({
+      where: { stage: 'archived', code: { notIn: OPEX_BUCKET_CODES } },
+      orderBy: { code: 'asc' },
+      select: { id: true, code: true, name: true, stage: true },
     }),
   ]);
-  const historicalProjectIds = new Set<string>([
-    ...teamMemberships.map((t) => t.projectId),
-    ...pastEntryProjects.map((e) => e.projectId),
-  ]);
-  // Only fetch archived projects the user has a footprint on.
-  const archivedProjects = historicalProjectIds.size === 0
-    ? []
-    : await prisma.project.findMany({
-        where: {
-          id: { in: Array.from(historicalProjectIds) },
-          stage: 'archived',
-        },
-        orderBy: { code: 'asc' },
-        select: { id: true, code: true, name: true, stage: true },
-      });
   const allProjects = [...activeProjects, ...archivedProjects];
   const teamProjectIds = new Set(teamMemberships.map((t) => t.projectId));
   // Hourly rate in cents — Person.rate is per `rateUnit` (hour or day). Day rate / 8 ≈ hourly.

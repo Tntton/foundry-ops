@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import type { Band, Employment } from '@prisma/client';
+import type { Band, Employment, Role } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { listPeople, type PersonSortKey } from '@/server/directory';
@@ -21,11 +21,49 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card } from '@/components/ui/card';
 import { formatFte, formatRateCents } from '@/lib/format';
-import { labelForLevel } from '@/lib/levels';
+import { labelForLevel, FOUNDRY_LEVELS } from '@/lib/levels';
+import { waLink } from '@/lib/phone';
 
-const BAND_OPTIONS: readonly Band[] = ['MP', 'Partner', 'Expert', 'Consultant', 'Analyst'];
+const BAND_OPTIONS: readonly Band[] = [
+  'MP',
+  'Partner',
+  'Associate_Partner',
+  'Expert',
+  'Consultant',
+  'Analyst',
+  'Support_Staff',
+];
 const REGION_OPTIONS: readonly string[] = ['AU', 'NZ', 'US', 'CA', 'GB'];
 const EMPLOYMENT_OPTIONS: readonly Employment[] = ['ft', 'contractor'];
+const ROLE_OPTIONS: readonly Role[] = [
+  'super_admin',
+  'admin',
+  'partner',
+  'associate_partner',
+  'manager',
+  'staff',
+];
+const ROLE_LABELS: Record<Role, string> = {
+  super_admin: 'Super Admin',
+  admin: 'Admin',
+  partner: 'Partner',
+  associate_partner: 'Associate Partner',
+  manager: 'Manager',
+  staff: 'Staff',
+};
+const LEVEL_OPTIONS: readonly string[] = FOUNDRY_LEVELS.map((l) => l.code);
+const LEVEL_LABELS: Record<string, string> = Object.fromEntries(
+  FOUNDRY_LEVELS.map((l) => [l.code, `${l.code} · ${l.label}`]),
+);
+const BAND_LABELS: Record<string, string> = {
+  MP: 'MP',
+  Partner: 'Partner',
+  Associate_Partner: 'Associate Partner',
+  Expert: 'Expert',
+  Consultant: 'Consultant',
+  Analyst: 'Analyst',
+  Support_Staff: 'Support Staff',
+};
 
 export default async function DirectoryPage({
   searchParams,
@@ -35,6 +73,8 @@ export default async function DirectoryPage({
     band?: string;
     region?: string;
     employment?: string;
+    role?: string;
+    level?: string;
     active?: string;
     deleted?: string;
     sort?: string;
@@ -147,9 +187,9 @@ export default async function DirectoryPage({
                     </a>
                   </TableCell>
                   <TableCell>
-                    {p.whatsappNumber ? (
+                    {waLink(p.whatsappNumber) ? (
                       <a
-                        href={`https://wa.me/${p.whatsappNumber.replace(/[^0-9]/g, '')}`}
+                        href={waLink(p.whatsappNumber)!}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="font-mono text-xs text-ink-2 hover:text-brand hover:underline"
@@ -180,6 +220,12 @@ export default async function DirectoryPage({
   const employment = EMPLOYMENT_OPTIONS.includes(searchParams.employment as Employment)
     ? (searchParams.employment as Employment)
     : undefined;
+  const role = ROLE_OPTIONS.includes(searchParams.role as Role)
+    ? (searchParams.role as Role)
+    : undefined;
+  const level = LEVEL_OPTIONS.includes(searchParams.level ?? '')
+    ? searchParams.level
+    : undefined;
   const active: 'active' | 'archived' | 'all' =
     searchParams.active === 'archived' || searchParams.active === 'all'
       ? searchParams.active
@@ -189,7 +235,7 @@ export default async function DirectoryPage({
   const canCreate = hasCapability(session, 'person.create');
   const canSeePay = hasCapability(session, 'ratecard.view');
 
-  const people = await listPeople({ search: q, band, region, employment, active, sort, dir });
+  const people = await listPeople({ search: q, band, region, employment, role, level, active, sort, dir });
   // Client roster moved to /directory/clients (per TT, 2026-05-10):
   // people-tab now focuses on people only; client-tab carries the
   // active client list with the LTM filter.
@@ -238,6 +284,8 @@ export default async function DirectoryPage({
           <PeopleTab
             q={q}
             band={band}
+            level={level}
+            role={role}
             region={region}
             employment={employment}
             active={active}
@@ -279,6 +327,8 @@ function formatLastLogin(d: Date): string {
 function PeopleTab({
   q,
   band,
+  level,
+  role,
   region,
   employment,
   active,
@@ -288,6 +338,8 @@ function PeopleTab({
 }: {
   q: string;
   band: Band | undefined;
+  level: string | undefined;
+  role: Role | undefined;
   region: string | undefined;
   employment: Employment | undefined;
   active: 'active' | 'archived' | 'all';
@@ -309,7 +361,9 @@ function PeopleTab({
           placeholder="Search by name, initials, or email…"
           className="min-w-[240px] max-w-xs"
         />
-        <SelectFilter label="Band" name="band" value={band} options={BAND_OPTIONS} />
+        <SelectFilter label="Band" name="band" value={band} options={BAND_OPTIONS} labels={BAND_LABELS} />
+        <SelectFilter label="Level" name="level" value={level} options={LEVEL_OPTIONS} labels={LEVEL_LABELS} />
+        <SelectFilter label="Role" name="role" value={role} options={ROLE_OPTIONS} labels={ROLE_LABELS} />
         <SelectFilter label="Region" name="region" value={region} options={REGION_OPTIONS} />
         <SelectFilter
           label="Employment"
@@ -472,11 +526,15 @@ function SelectFilter<T extends string>({
   name,
   value,
   options,
+  labels,
 }: {
   label: string;
   name: string;
   value: T | undefined;
   options: readonly T[];
+  /** Optional display labels keyed by option value. Falls back to the
+   *  raw value when a key is missing. */
+  labels?: Record<string, string>;
 }) {
   return (
     <label className="flex items-center gap-1 text-xs text-ink-3">
@@ -489,7 +547,7 @@ function SelectFilter<T extends string>({
         <option value="">All</option>
         {options.map((o) => (
           <option key={o} value={o}>
-            {o}
+            {labels?.[o] ?? o}
           </option>
         ))}
       </select>

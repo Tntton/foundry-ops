@@ -72,21 +72,23 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       // remains reachable via direct URL for the full history if
       // anyone needs it; simply not promoted in the sidebar.
       {
-        // Projects is the leader's working surface — kanban / grid /
-        // table across the whole firm. Staff don't need it; their
-        // active projects already live on the dashboard.
+        // Projects is a firm-wide working surface — kanban / grid /
+        // table across every engagement. All staff can see projects at
+        // the project level (code / name / client / stage); ops and
+        // commercial detail stay gated on the detail page.
         label: 'Projects',
         href: '/projects',
         icon: FolderKanban,
-        roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'],
+        roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'],
       },
       {
         // BD sits directly under Projects so the pipeline → delivery
-        // path reads top-to-bottom in the sidebar.
+        // path reads top-to-bottom in the sidebar. Managers now get BD
+        // access too (per TT, 2026-07-20).
         label: 'BD pipeline',
         href: '/bd',
         icon: TrendingUp,
-        roles: ['super_admin', 'admin', 'partner', 'associate_partner'],
+        roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'],
       },
       {
         label: 'Approvals',
@@ -98,10 +100,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: 'Resource planning',
         href: '/resource-planning',
         icon: Gauge,
-        // Delivery-side capacity tool. Support_Staff (Office Manager
-        // etc.) hold the admin role for ops work but have no business
-        // looking at the bandwidth heatmap — explicitly excluded.
-        roles: ['super_admin', 'admin', 'partner', 'associate_partner'],
+        // Delivery-side capacity tool. Managers resource-plan their own
+        // teams, so they're included (per TT, 2026-07-20). Support_Staff
+        // (Office Manager etc.) hold the admin role for ops work but have
+        // no business looking at the bandwidth heatmap — excluded. Plain
+        // staff never see it.
+        roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'],
         denyBands: ['Support_Staff'],
       },
       {

@@ -509,12 +509,18 @@ function AddRowPicker({
       }),
     [projects],
   );
-  // "On the project team" group is active-only; archived projects route
-  // to the dedicated "Closed projects (needs approval)" group below
-  // regardless of team membership, so the approval-required label is
-  // never hidden behind the "your team" shorthand.
+  // Internal FH projects (FHP series) are the home for non-project /
+  // admin time — surfaced in their own group so it's obvious where to
+  // book it (FHP000 is the catch-all; reallocate to a real project later
+  // by editing the draft entry). feedback #12.
+  const isInternal = (p: ProjectOption) => p.code.startsWith('FHP');
+  // "On the project team" group is active-only + excludes internal;
+  // archived projects route to the dedicated "Closed projects (needs
+  // approval)" group below regardless of team membership, so the
+  // approval-required label is never hidden behind the "your team"
+  // shorthand.
   const onTeamCount = projects.filter(
-    (p) => p.isTeamMember && p.stage !== 'archived',
+    (p) => p.isTeamMember && p.stage !== 'archived' && !isInternal(p),
   ).length;
 
   return (
@@ -529,7 +535,10 @@ function AddRowPicker({
           {onTeamCount > 0 && (
             <optgroup label="On the project team">
               {sorted
-                .filter((p) => p.isTeamMember && p.stage !== 'archived')
+                .filter(
+                  (p) =>
+                    p.isTeamMember && p.stage !== 'archived' && !isInternal(p),
+                )
                 .map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.code} · {p.name}
@@ -537,10 +546,26 @@ function AddRowPicker({
                 ))}
             </optgroup>
           )}
-          {sorted.some((p) => !p.isTeamMember && p.stage !== 'archived') && (
+          {sorted.some((p) => isInternal(p) && p.stage !== 'archived') && (
+            <optgroup label="Internal / non-project">
+              {sorted
+                .filter((p) => isInternal(p) && p.stage !== 'archived')
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.code} · {p.name}
+                  </option>
+                ))}
+            </optgroup>
+          )}
+          {sorted.some(
+            (p) => !p.isTeamMember && p.stage !== 'archived' && !isInternal(p),
+          ) && (
             <optgroup label="Other active projects (will auto-join the team)">
               {sorted
-                .filter((p) => !p.isTeamMember && p.stage !== 'archived')
+                .filter(
+                  (p) =>
+                    !p.isTeamMember && p.stage !== 'archived' && !isInternal(p),
+                )
                 .map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.code} · {p.name}

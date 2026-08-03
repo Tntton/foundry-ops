@@ -47,6 +47,8 @@ export type PersonListFilter = {
   band?: Band;
   region?: string;
   employment?: Employment;
+  role?: Role;
+  level?: string;
   active?: 'active' | 'archived' | 'all';
   /** Optional sort override. Falls back to the default
    *  band-then-lastName ordering used by the directory listing. */
@@ -80,12 +82,14 @@ const SORT_FIELD: Record<PersonSortKey, string> = {
 };
 
 export async function listPeople(filter: PersonListFilter = {}): Promise<PersonListRow[]> {
-  const { search, band, region, employment, active = 'active', sort, dir = 'asc' } = filter;
+  const { search, band, region, employment, role, level, active = 'active', sort, dir = 'asc' } = filter;
 
   const where: Record<string, unknown> = {};
   if (band) where['band'] = band;
   if (region) where['region'] = region;
   if (employment) where['employment'] = employment;
+  if (role) where['roles'] = { has: role };
+  if (level) where['level'] = level;
   if (active === 'active') where['endDate'] = null;
   else if (active === 'archived') where['endDate'] = { not: null };
   if (search && search.trim()) {

@@ -143,7 +143,10 @@ export default async function ResourcePlanningPage({
   searchParams: { weeks?: string };
 }) {
   const session = await getSession();
-  if (!session || !hasAnyRole(session, ['super_admin', 'admin', 'partner'])) {
+  if (
+    !session ||
+    !hasAnyRole(session, ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'])
+  ) {
     notFound();
   }
   // Support_Staff hold admin role for ops work but the bandwidth

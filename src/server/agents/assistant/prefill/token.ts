@@ -38,6 +38,7 @@ export type PrefillKind =
   // Prefill family (TASK-302a / 302b) — token unlocks a prefilled
   // form on the web; the user submits via the form's normal flow.
   | 'timesheet'
+  | 'availability'
   | 'expense'
   | 'bill'
   | 'invoice'
