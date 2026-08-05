@@ -138,6 +138,65 @@ export async function updateFeedbackTriage(
   return { status: 'success' };
 }
 
+export type ArchiveState =
+  | { status: 'idle' }
+  | { status: 'error'; message: string }
+  | { status: 'success' };
+
+/**
+ * Archive (or un-archive) a COMPLETED feedback ticket. Archiving only
+ * clears a terminal ticket (resolved / declined / duplicate) out of the
+ * active "ready to archive" lane — it never hides in-flight work, so the
+ * platform always shows what's been completed until it's deliberately
+ * archived. super_admin / admin only. Sets `archivedAt` and audits.
+ */
+export async function setFeedbackArchived(
+  ticketId: string,
+  archived: boolean,
+): Promise<ArchiveState> {
+  const session = await getSession();
+  if (!hasAnyRole(session, ['super_admin', 'admin'])) {
+    return { status: 'error', message: 'Not authorized' };
+  }
+  const existing = await prisma.feedbackTicket.findUnique({
+    where: { id: ticketId },
+    select: { id: true, status: true, archivedAt: true },
+  });
+  if (!existing) return { status: 'error', message: 'Ticket not found' };
+  // Only completed (terminal) tickets can be archived — you can't archive
+  // something that's still open / in progress; that would hide live work.
+  if (archived && !['resolved', 'declined', 'duplicate'].includes(existing.status)) {
+    return {
+      status: 'error',
+      message: 'Only completed tickets (resolved / declined / duplicate) can be archived.',
+    };
+  }
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.feedbackTicket.update({
+        where: { id: ticketId },
+        data: { archivedAt: archived ? new Date() : null },
+      });
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session!.person.id },
+        action: 'updated',
+        entity: {
+          type: 'feedback_ticket',
+          id: ticketId,
+          before: { archived: existing.archivedAt !== null },
+          after: { archived, via: archived ? 'archive' : 'unarchive' },
+        },
+        source: 'web',
+      });
+    });
+  } catch (err) {
+    console.error('[feedback.setArchived] failed:', err);
+    return { status: 'error', message: 'Failed — try again.' };
+  }
+  revalidatePath('/admin/feedback');
+  return { status: 'success' };
+}
+
 export type RouteToDevState =
   | { status: 'idle' }
   | { status: 'error'; message: string }

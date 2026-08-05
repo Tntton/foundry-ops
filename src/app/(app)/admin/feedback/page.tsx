@@ -4,7 +4,9 @@ import { hasAnyRole } from '@/server/roles';
 import { prisma } from '@/server/db';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { feedbackLane } from '@/server/feedback';
 import { TriageForm } from './triage-form';
+import { ArchiveButton } from './archive-button';
 
 /**
  * Feedback triage queue — super_admin + admin. Lists every
@@ -37,29 +39,31 @@ export default async function AdminFeedbackPage() {
     },
   });
 
-  // Re-sort: critical first, then urgent, then routine, then by date
+  // Three lanes (feedbackLane): active (in flight), ready_to_archive
+  // (completed but not archived — stays visible so nothing finished
+  // silently disappears), and archived (cleared from the active view).
   const URGENCY_ORDER = { critical: 0, urgent: 1, routine: 2 } as const;
   const open = tickets
-    .filter(
-      (t) =>
-        t.status === 'open' ||
-        t.status === 'triaged' ||
-        t.status === 'approved' ||
-        t.status === 'in_progress',
-    )
+    .filter((t) => feedbackLane(t.status, t.archivedAt) === 'active')
     .sort((a, b) => {
       const u = URGENCY_ORDER[a.urgency] - URGENCY_ORDER[b.urgency];
       if (u !== 0) return u;
       return b.createdAt.getTime() - a.createdAt.getTime();
     });
-  const closed = tickets.filter(
-    (t) => t.status === 'resolved' || t.status === 'declined' || t.status === 'duplicate',
-  );
+  // Completed, awaiting archive — newest completion first.
+  const readyToArchive = tickets
+    .filter((t) => feedbackLane(t.status, t.archivedAt) === 'ready_to_archive')
+    .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  const archived = tickets
+    .filter((t) => feedbackLane(t.status, t.archivedAt) === 'archived')
+    .sort(
+      (a, b) => (b.archivedAt?.getTime() ?? 0) - (a.archivedAt?.getTime() ?? 0),
+    );
 
   const counts = {
     critical: open.filter((t) => t.urgency === 'critical' && t.status === 'open').length,
     urgent: open.filter((t) => t.urgency === 'urgent' && t.status === 'open').length,
-    routine: open.filter((t) => t.urgency === 'routine' && t.status === 'open').length,
+    readyToArchive: readyToArchive.length,
     total: tickets.length,
   };
 
@@ -86,7 +90,11 @@ export default async function AdminFeedbackPage() {
           value={counts.urgent}
           tone={counts.urgent > 0 ? 'amber' : undefined}
         />
-        <SummaryTile label="Routine · open" value={counts.routine} />
+        <SummaryTile
+          label="Ready to archive"
+          value={counts.readyToArchive}
+          tone={counts.readyToArchive > 0 ? 'green' : undefined}
+        />
         <SummaryTile label="Total ever" value={counts.total} />
       </div>
 
@@ -109,15 +117,43 @@ export default async function AdminFeedbackPage() {
         </CardContent>
       </Card>
 
-      {closed.length > 0 && (
+      {/* Completed — ready to archive. Kept EXPANDED (not tucked into a
+          collapsible) so what's been finished is always visible; each
+          shows its resolution + commit/PR and an Archive button to clear
+          it once TT has seen it. */}
+      {readyToArchive.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">
+              Completed · ready to archive
+              <span className="ml-2 text-xs tabular-nums text-ink-3">
+                {readyToArchive.length}
+              </span>
+            </CardTitle>
+            <p className="text-[11px] text-ink-3">
+              Finished work. A green <span className="text-status-green">✓ Shipped</span>{' '}
+              with a commit/PR link means it&apos;s been actioned and verified —
+              archive to clear it. Amber means no code link is attached yet;
+              confirm before archiving.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {readyToArchive.map((t) => (
+              <TicketRow key={t.id} t={t} archivable />
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {archived.length > 0 && (
         <details className="rounded-lg border border-line bg-card">
           <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-ink">
-            Closed
-            <span className="ml-2 text-xs tabular-nums text-ink-3">{closed.length}</span>
+            Archived
+            <span className="ml-2 text-xs tabular-nums text-ink-3">{archived.length}</span>
           </summary>
           <div className="space-y-3 border-t border-line px-4 py-3">
-            {closed.map((t) => (
-              <TicketRow key={t.id} t={t} />
+            {archived.map((t) => (
+              <TicketRow key={t.id} t={t} archivable />
             ))}
           </div>
         </details>
@@ -131,9 +167,10 @@ type Ticket = Awaited<ReturnType<typeof prisma.feedbackTicket.findMany>>[number]
   decidedBy: { initials: string; firstName: string; lastName: string } | null;
 };
 
-function TicketRow({ t }: { t: Ticket }) {
+function TicketRow({ t, archivable = false }: { t: Ticket; archivable?: boolean }) {
   const urgencyVariant: 'red' | 'amber' | 'outline' =
     t.urgency === 'critical' ? 'red' : t.urgency === 'urgent' ? 'amber' : 'outline';
+  const isArchived = t.archivedAt !== null;
   return (
     <div className="rounded-md border border-line bg-surface-elev px-3 py-2">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -183,6 +220,7 @@ function TicketRow({ t }: { t: Ticket }) {
           )}
         </div>
       </div>
+      <ActionEvidence status={t.status} commitRef={t.commitRef} />
       <div className="mt-2 border-t border-line pt-2">
         <TriageForm
           id={t.id}
@@ -193,8 +231,94 @@ function TicketRow({ t }: { t: Ticket }) {
           routedToDevAt={t.routedToDevAt ? t.routedToDevAt.toISOString() : null}
         />
       </div>
+      {archivable && (
+        <div className="mt-2 flex items-center justify-end gap-2 border-t border-line pt-2">
+          {isArchived && t.archivedAt && (
+            <span className="text-[10px] text-ink-4">
+              Archived {t.archivedAt.toLocaleDateString('en-AU')}
+            </span>
+          )}
+          <ArchiveButton id={t.id} archived={isArchived} />
+        </div>
+      )}
     </div>
   );
+}
+
+const REPO_URL = 'https://github.com/Tntton/foundry-ops';
+
+/**
+ * Turn a commit/PR reference into a clickable URL so "properly actioned"
+ * is verifiable in one click. A full URL passes through; a bare SHA links
+ * to the commit on the repo; anything else (free-text) has no link.
+ */
+function commitRefHref(ref: string): string | null {
+  const r = ref.trim();
+  if (/^https?:\/\//iu.test(r)) return r;
+  if (/^[0-9a-f]{7,40}$/iu.test(r)) return `${REPO_URL}/commit/${r}`;
+  return null;
+}
+
+/**
+ * The at-a-glance "has this been properly actioned?" signal that makes an
+ * archive decision confident:
+ *   - resolved + commit/PR  → green "Shipped" with a clickable link (proof)
+ *   - resolved + no ref     → amber "verify before archiving" (no proof yet)
+ *   - declined / duplicate  → neutral "no code change" (nothing to verify)
+ *   - in-flight + a ref     → plain link to the work in progress
+ */
+function ActionEvidence({
+  status,
+  commitRef,
+}: {
+  status: string;
+  commitRef: string | null;
+}) {
+  const href = commitRef ? commitRefHref(commitRef) : null;
+  const refNode = commitRef ? (
+    href ? (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        className="font-mono text-ink-2 underline hover:text-ink"
+      >
+        {commitRef}
+      </a>
+    ) : (
+      <code className="text-ink-3">{commitRef}</code>
+    )
+  ) : null;
+
+  if (status === 'resolved') {
+    return (
+      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
+        {commitRef ? (
+          <>
+            <span className="rounded-sm bg-status-green-soft px-1.5 py-0.5 font-medium uppercase tracking-wide text-status-green">
+              ✓ Shipped
+            </span>
+            {refNode}
+          </>
+        ) : (
+          <span className="rounded-sm bg-status-amber-soft px-1.5 py-0.5 font-medium uppercase tracking-wide text-status-amber">
+            Resolved · no commit/PR link — verify before archiving
+          </span>
+        )}
+      </div>
+    );
+  }
+  if (status === 'declined' || status === 'duplicate') {
+    return (
+      <div className="mt-1 text-[10px] capitalize text-ink-4">
+        {status} — no code change
+      </div>
+    );
+  }
+  // In-flight: surface a linked ref if one's already attached.
+  return commitRef ? (
+    <div className="mt-1 text-[10px] text-ink-4">Commit / PR: {refNode}</div>
+  ) : null;
 }
 
 function SummaryTile({
@@ -204,14 +328,16 @@ function SummaryTile({
 }: {
   label: string;
   value: number;
-  tone?: 'red' | 'amber';
+  tone?: 'red' | 'amber' | 'green';
 }) {
   const valueClass =
     tone === 'red'
       ? 'text-status-red'
       : tone === 'amber'
         ? 'text-status-amber'
-        : 'text-ink';
+        : tone === 'green'
+          ? 'text-status-green'
+          : 'text-ink';
   return (
     <Card>
       <CardContent className="p-4">

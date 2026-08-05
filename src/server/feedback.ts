@@ -1,6 +1,36 @@
 import { prisma } from '@/server/db';
 import type { FeedbackStatus, FeedbackUrgency, FeedbackKind } from '@prisma/client';
 
+/** Terminal statuses — the ticket's work is finished (shipped, declined,
+ *  or merged as a duplicate). These are the only statuses that can be
+ *  archived. */
+export const TERMINAL_FEEDBACK_STATUSES: readonly FeedbackStatus[] = [
+  'resolved',
+  'declined',
+  'duplicate',
+];
+
+export function isTerminalFeedbackStatus(status: FeedbackStatus): boolean {
+  return TERMINAL_FEEDBACK_STATUSES.includes(status);
+}
+
+/**
+ * Which admin-queue lane a ticket belongs to. The point of the three-way
+ * split is that COMPLETED work stays visible ("ready_to_archive") until an
+ * admin deliberately archives it — nothing finished silently disappears.
+ *   - active           → still in flight (open / triaged / approved / in progress)
+ *   - ready_to_archive → completed (terminal) but not yet archived
+ *   - archived         → archivedAt set; cleared from the active view
+ */
+export function feedbackLane(
+  status: FeedbackStatus,
+  archivedAt: Date | null,
+): 'active' | 'ready_to_archive' | 'archived' {
+  if (archivedAt !== null) return 'archived';
+  if (isTerminalFeedbackStatus(status)) return 'ready_to_archive';
+  return 'active';
+}
+
 export type FeedbackPipelineCard = {
   id: string;
   title: string;
@@ -20,6 +50,7 @@ export type FeedbackPipeline = {
     resolvedRecent: number; // last 7 days
     critical: number; // open or triaged, urgency=critical
     urgent: number; // open or triaged, urgency=urgent
+    readyToArchive: number; // completed (terminal) + not yet archived
   };
   /** Concrete tickets to render in each lane — capped at 5 per lane
    *  so the dashboard card stays compact. */
@@ -37,18 +68,29 @@ export type FeedbackPipeline = {
  */
 export async function getFeedbackPipeline(): Promise<FeedbackPipeline> {
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
-  const tickets = await prisma.feedbackTicket.findMany({
-    where: {
-      OR: [
-        { status: { in: ['open', 'triaged', 'approved', 'in_progress'] } },
-        { status: 'resolved', updatedAt: { gte: sevenDaysAgo } },
-      ],
-    },
-    orderBy: { updatedAt: 'desc' },
-    include: {
-      submitter: { select: { firstName: true, lastName: true } },
-    },
-  });
+  const [tickets, readyToArchive] = await Promise.all([
+    prisma.feedbackTicket.findMany({
+      where: {
+        OR: [
+          { status: { in: ['open', 'triaged', 'approved', 'in_progress'] } },
+          { status: 'resolved', updatedAt: { gte: sevenDaysAgo } },
+        ],
+      },
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        submitter: { select: { firstName: true, lastName: true } },
+      },
+    }),
+    // Completed but not yet archived — the "there's finished work waiting
+    // to be reviewed + cleared" signal, surfaced on the dashboard so it's
+    // always visible, not buried.
+    prisma.feedbackTicket.count({
+      where: {
+        status: { in: [...TERMINAL_FEEDBACK_STATUSES] },
+        archivedAt: null,
+      },
+    }),
+  ]);
 
   function toCard(
     t: (typeof tickets)[number],
@@ -91,6 +133,7 @@ export async function getFeedbackPipeline(): Promise<FeedbackPipeline> {
       resolvedRecent: resolvedRecent.length,
       critical,
       urgent,
+      readyToArchive,
     },
     triaged: byStatus('triaged').slice(0, 5),
     approved: byStatus('approved').slice(0, 5),
