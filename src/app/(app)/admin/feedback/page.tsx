@@ -131,8 +131,10 @@ export default async function AdminFeedbackPage() {
               </span>
             </CardTitle>
             <p className="text-[11px] text-ink-3">
-              Finished work — review what shipped, then archive to clear it
-              from the active queue.
+              Finished work. A green <span className="text-status-green">✓ Shipped</span>{' '}
+              with a commit/PR link means it&apos;s been actioned and verified —
+              archive to clear it. Amber means no code link is attached yet;
+              confirm before archiving.
             </p>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -218,11 +220,7 @@ function TicketRow({ t, archivable = false }: { t: Ticket; archivable?: boolean 
           )}
         </div>
       </div>
-      {t.commitRef && (
-        <div className="mt-1 text-[10px] text-ink-4">
-          Commit / PR: <code className="text-ink-3">{t.commitRef}</code>
-        </div>
-      )}
+      <ActionEvidence status={t.status} commitRef={t.commitRef} />
       <div className="mt-2 border-t border-line pt-2">
         <TriageForm
           id={t.id}
@@ -245,6 +243,82 @@ function TicketRow({ t, archivable = false }: { t: Ticket; archivable?: boolean 
       )}
     </div>
   );
+}
+
+const REPO_URL = 'https://github.com/Tntton/foundry-ops';
+
+/**
+ * Turn a commit/PR reference into a clickable URL so "properly actioned"
+ * is verifiable in one click. A full URL passes through; a bare SHA links
+ * to the commit on the repo; anything else (free-text) has no link.
+ */
+function commitRefHref(ref: string): string | null {
+  const r = ref.trim();
+  if (/^https?:\/\//iu.test(r)) return r;
+  if (/^[0-9a-f]{7,40}$/iu.test(r)) return `${REPO_URL}/commit/${r}`;
+  return null;
+}
+
+/**
+ * The at-a-glance "has this been properly actioned?" signal that makes an
+ * archive decision confident:
+ *   - resolved + commit/PR  → green "Shipped" with a clickable link (proof)
+ *   - resolved + no ref     → amber "verify before archiving" (no proof yet)
+ *   - declined / duplicate  → neutral "no code change" (nothing to verify)
+ *   - in-flight + a ref     → plain link to the work in progress
+ */
+function ActionEvidence({
+  status,
+  commitRef,
+}: {
+  status: string;
+  commitRef: string | null;
+}) {
+  const href = commitRef ? commitRefHref(commitRef) : null;
+  const refNode = commitRef ? (
+    href ? (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        className="font-mono text-ink-2 underline hover:text-ink"
+      >
+        {commitRef}
+      </a>
+    ) : (
+      <code className="text-ink-3">{commitRef}</code>
+    )
+  ) : null;
+
+  if (status === 'resolved') {
+    return (
+      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
+        {commitRef ? (
+          <>
+            <span className="rounded-sm bg-status-green-soft px-1.5 py-0.5 font-medium uppercase tracking-wide text-status-green">
+              ✓ Shipped
+            </span>
+            {refNode}
+          </>
+        ) : (
+          <span className="rounded-sm bg-status-amber-soft px-1.5 py-0.5 font-medium uppercase tracking-wide text-status-amber">
+            Resolved · no commit/PR link — verify before archiving
+          </span>
+        )}
+      </div>
+    );
+  }
+  if (status === 'declined' || status === 'duplicate') {
+    return (
+      <div className="mt-1 text-[10px] capitalize text-ink-4">
+        {status} — no code change
+      </div>
+    );
+  }
+  // In-flight: surface a linked ref if one's already attached.
+  return commitRef ? (
+    <div className="mt-1 text-[10px] text-ink-4">Commit / PR: {refNode}</div>
+  ) : null;
 }
 
 function SummaryTile({
