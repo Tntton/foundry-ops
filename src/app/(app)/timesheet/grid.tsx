@@ -331,7 +331,7 @@ export function TimesheetGrid({
                           type="number"
                           min="0"
                           max="24"
-                          step="0.5"
+                          step="0.25"
                           inputMode="decimal"
                           value={
                             rawCell[`${r.projectId}::${i}`] ??
