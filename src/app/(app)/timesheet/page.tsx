@@ -484,6 +484,14 @@ export default async function TimesheetPage({
             </div>
           )}
           <TimesheetGrid
+            // Remount when the range / view / person changes. The grid
+            // seeds its cell state from `initialRows` via useState, which
+            // ignores later prop updates — so on a soft week-nav (a
+            // ?week= change) the OLD week's hours stuck around and, once
+            // saved against the new week's rangeStart, replicated onto it
+            // (critical bug — Lucas; "pre-saved hours" — Shea). Keying by
+            // the range forces a fresh mount so each week seeds clean.
+            key={`${target.id}:${formatIsoDate(blockStart)}:${view}`}
             rangeStart={formatIsoDate(blockStart)}
             initialRows={enrichedRows}
             cells={cells}
