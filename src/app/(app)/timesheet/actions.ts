@@ -10,21 +10,16 @@ import { hasAnyRole } from '@/server/roles';
 import { writeAudit, computeDelta } from '@/server/audit';
 import { emitUserUpdateMany } from '@/server/user-updates';
 import { addDays, parseIsoDate, startOfWeek, todayInFirmTz } from '@/lib/week';
+import { snapToQuarterHour } from '@/lib/timesheet-hours';
 import { revalidateScheduleSurfaces } from '@/server/revalidate-schedule';
 
-// Snap hours to the nearest 0.5 — the granularity the timesheet grid uses.
-// Users typing odd values (e.g. 0.65) get auto-rounded; legacy 0.25-step
-// entries already in the DB are untouched until they're re-saved.
-const halfHour = z.coerce
-  .number()
-  .min(0)
-  .max(24)
-  .transform((n) => Math.round(n * 2) / 2);
+// Snap hours to the nearest 0.25 (15 minutes) — see lib/timesheet-hours.
+const quarterHour = z.coerce.number().min(0).max(24).transform(snapToQuarterHour);
 
 const CellSchema = z.object({
   projectId: z.string().min(1),
   description: z.string().trim().max(300).default(''),
-  hours: z.array(halfHour).min(1).max(31),
+  hours: z.array(quarterHour).min(1).max(31),
 });
 
 const SaveSchema = z.object({
