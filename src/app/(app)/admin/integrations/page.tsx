@@ -118,6 +118,17 @@ export default async function IntegrationsIndexPage() {
           }
         />
 
+        <IntegrationCard
+          href="/admin/integrations/mail-intake"
+          title="Mail intake (AP autoharvest)"
+          blurb="Every 15 min, polls finance@ (canonical) and trung@ (transitional) via Graph, OCRs invoice attachments, lands Bills in /approvals. See INTEGRATIONS.md §7."
+          status={
+            m365Configured
+              ? { label: 'Configurable', variant: 'blue' }
+              : { label: 'Needs Graph env', variant: 'amber' }
+          }
+        />
+
         <Card className="md:col-span-2">
           <CardHeader className="flex flex-row items-start justify-between gap-2">
             <div>

@@ -220,7 +220,32 @@ async function main() {
   await seedRateCard();
   console.log('[seed] team:');
   await seedTeam();
+  console.log('[seed] mailbox poll cursors:');
+  await seedMailboxPollCursors();
   console.log('[seed] done.');
+}
+
+async function seedMailboxPollCursors() {
+  // TASK-093 · AP autoharvest polls two M365 mailboxes. Both start
+  // enabled; toggle trung@ off via /admin/integrations/mail-intake once
+  // vendors have migrated to finance@ (target: 30 consecutive days of
+  // zero invoice arrivals — see INTEGRATIONS.md §7 "Migration plan").
+  const mailboxes = [
+    'finance@foundry.health',
+    'trung@foundry.health',
+  ];
+  let upserts = 0;
+  for (const upn of mailboxes) {
+    await prisma.mailboxPollCursor.upsert({
+      where: { mailboxUpn: upn },
+      // Never reset an existing cursor's watermark or enabled state —
+      // seed is idempotent and safe to re-run on a live DB.
+      update: {},
+      create: { mailboxUpn: upn, enabled: true },
+    });
+    upserts += 1;
+  }
+  console.log(`  cursors seeded: ${upserts}`);
 }
 
 main()

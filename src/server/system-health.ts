@@ -182,6 +182,56 @@ export async function getSystemHealth(): Promise<SystemHealth> {
       : 'ENTRA_* env vars not set',
   });
 
+  // ── 4b. Mail intake (AP autoharvest) ─────────────────────────
+  // Rolls up MailboxPollCursor rows for both intake mailboxes.
+  //   up          → both enabled cursors polled OK within last 1h
+  //   degraded    → one stale / one lastError set (but not both down)
+  //   down        → all enabled cursors have lastError
+  //   not_configured → no cursor rows or Graph env missing
+  const cursors = await prisma.mailboxPollCursor.findMany({
+    where: { enabled: true },
+    select: { mailboxUpn: true, lastPollAt: true, lastError: true },
+  });
+  let mailIntakeState: HealthState;
+  let mailIntakeDetail: string;
+  if (!graphOk) {
+    mailIntakeState = 'not_configured';
+    mailIntakeDetail = 'Graph env not set — see /admin/integrations/mail-intake';
+  } else if (cursors.length === 0) {
+    mailIntakeState = 'not_configured';
+    mailIntakeDetail = 'No mailbox cursor rows — run pnpm db:seed';
+  } else {
+    const staleCutoff = Date.now() - 60 * 60 * 1000;
+    const rollups = cursors.map((c) => {
+      if (c.lastError) return 'error' as const;
+      if (!c.lastPollAt) return 'never' as const;
+      if (c.lastPollAt.getTime() < staleCutoff) return 'stale' as const;
+      return 'ok' as const;
+    });
+    const oks = rollups.filter((r) => r === 'ok').length;
+    const errors = rollups.filter((r) => r === 'error').length;
+    if (errors === rollups.length) {
+      mailIntakeState = 'down';
+      const firstErr = cursors.find((c) => c.lastError)?.lastError ?? 'unknown';
+      mailIntakeDetail = `All mailboxes failing · ${firstErr.slice(0, 120)}`;
+    } else if (oks === rollups.length) {
+      mailIntakeState = 'up';
+      mailIntakeDetail = `${oks}/${rollups.length} mailboxes polled OK in last 1h`;
+    } else {
+      mailIntakeState = 'degraded';
+      mailIntakeDetail = `${oks}/${rollups.length} mailboxes OK; others stale or erroring`;
+    }
+  }
+  components.push({
+    name: 'Mail intake (AP autoharvest)',
+    state: mailIntakeState,
+    detail: mailIntakeDetail,
+    fallback:
+      mailIntakeState === 'degraded' || mailIntakeState === 'down'
+        ? 'Check /admin/integrations/mail-intake for per-mailbox errors. Vendor invoices can be uploaded manually at /bills/new while degraded.'
+        : undefined,
+  });
+
   // ── 5. Last daily backup ─────────────────────────────────────
   const lastBackup = await prisma.auditEvent.findFirst({
     where: { action: 'data_export_generated' },
