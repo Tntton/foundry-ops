@@ -25,7 +25,7 @@ export default async function BillsImportPage({
   if (!session || !hasCapability(session, 'bill.create')) notFound();
 
   if (searchParams.stage === 'preview' && searchParams.token) {
-    const preview = readBills(session.person.id, searchParams.token);
+    const preview = await readBills(session.person.id, searchParams.token);
     if (!preview) {
       return (
         <div className="space-y-4">
