@@ -583,7 +583,7 @@ export function AssistantWidget() {
           type="button"
           onClick={() => setOpen(true)}
           data-tour="assistant"
-          className="fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full border border-brand bg-brand px-3 py-2 text-xs font-medium text-white shadow-lg transition-all hover:opacity-90"
+          className="fixed bottom-4 left-4 z-40 flex items-center gap-1.5 rounded-full border border-brand bg-brand px-3 py-2 text-xs font-medium text-white shadow-lg transition-all hover:opacity-90"
           title="Ask the Foundry Ops assistant"
         >
           <span aria-hidden>✨</span>
@@ -593,7 +593,7 @@ export function AssistantWidget() {
 
       {open && (
         <div
-          className="fixed bottom-4 right-4 z-40 flex h-[600px] w-[400px] max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-line bg-card shadow-2xl"
+          className="fixed bottom-4 left-4 z-40 flex h-[600px] w-[400px] max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-line bg-card shadow-2xl"
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
