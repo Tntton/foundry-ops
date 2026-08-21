@@ -176,3 +176,153 @@ export async function sendWeeklyAvailabilityPrompts(): Promise<{
   }
   return { sent, skipped };
 }
+
+// ─── Timesheet approval-loop notices ────────────────────────────────────
+//
+// Two directions, both best-effort side-channels on top of the in-app
+// UserUpdate feed (which stays the source of truth):
+//
+//   submitter → approver : "someone's timesheet needs your decision"
+//   approver  → submitter: "your timesheet was approved / sent back"
+//
+// Both reuse `send()` above, so every outbound lands in WhatsAppMessage
+// (auditable) and the 18h identical-body dedupe stops a double-tap on
+// Approve from double-pinging. Callers fire these AFTER their DB
+// transaction commits and never await the result — a WhatsApp outage
+// must not roll back an approval.
+
+const APP_BASE_URL =
+  process.env['NEXT_PUBLIC_APP_URL'] ?? 'https://ops.foundry.health';
+
+/**
+ * Body text for the submitter's decision DM. Pure so the wording is
+ * testable without a Meta round-trip. `note` carries the approver's
+ * reject reason — the whole point of the message on a send-back, so
+ * it's inlined rather than left behind in the app.
+ */
+export function buildTimesheetDecisionWhatsApp(opts: {
+  firstName: string;
+  decision: 'approved' | 'rejected';
+  entryCount: number;
+  totalHours: number;
+  approverName: string;
+  note?: string | null;
+  appBaseUrl: string;
+}): string {
+  const entryLabel = `${opts.entryCount} ${opts.entryCount === 1 ? 'entry' : 'entries'}`;
+  const hours = opts.totalHours.toFixed(1);
+  if (opts.decision === 'approved') {
+    return (
+      `Hi ${opts.firstName} — your timesheet has been approved by ${opts.approverName} ` +
+      `(${entryLabel} · ${hours}h). Those hours are now posted to project P&L.` +
+      (opts.note ? `\n\nNote: ${opts.note}` : '') +
+      `\n\n${opts.appBaseUrl}/timesheet`
+    );
+  }
+  return (
+    `Hi ${opts.firstName} — ${opts.approverName} sent ${entryLabel} (${hours}h) on your ` +
+    `timesheet back to draft, so they need another look.` +
+    (opts.note ? `\n\nReason: ${opts.note}` : '') +
+    `\n\nFix and resubmit: ${opts.appBaseUrl}/timesheet`
+  );
+}
+
+/**
+ * Body text for an approver's "there's a timesheet waiting" DM.
+ */
+export function buildTimesheetApprovalQueueWhatsApp(opts: {
+  firstName: string;
+  submitterName: string;
+  entryCount: number;
+  totalHours: number;
+  weekLabel: string;
+  appBaseUrl: string;
+}): string {
+  const entryLabel = `${opts.entryCount} ${opts.entryCount === 1 ? 'entry' : 'entries'}`;
+  return (
+    `Hi ${opts.firstName} — ${opts.submitterName} submitted a timesheet for your approval: ` +
+    `${entryLabel} · ${opts.totalHours.toFixed(1)}h, week of ${opts.weekLabel}.` +
+    `\n\nApprove or send back: ${opts.appBaseUrl}/timesheet/approve`
+  );
+}
+
+/**
+ * DM the submitter that their timesheet was decided.
+ */
+export async function sendTimesheetDecisionNotice(opts: {
+  personId: string;
+  decision: 'approved' | 'rejected';
+  entryCount: number;
+  totalHours: number;
+  approverName: string;
+  note?: string | null;
+}): Promise<boolean> {
+  if (!isWhatsAppConfigured()) return false;
+  const person = await prisma.person.findUnique({
+    where: { id: opts.personId },
+    select: { firstName: true, whatsappNumber: true, endDate: true },
+  });
+  if (!person?.whatsappNumber || person.endDate) return false;
+  return send(
+    opts.personId,
+    person.whatsappNumber,
+    buildTimesheetDecisionWhatsApp({
+      firstName: person.firstName,
+      decision: opts.decision,
+      entryCount: opts.entryCount,
+      totalHours: opts.totalHours,
+      approverName: opts.approverName,
+      note: opts.note ?? null,
+      appBaseUrl: APP_BASE_URL,
+    }),
+  );
+}
+
+/**
+ * DM every approver that a submitted timesheet is sitting in their
+ * queue. `approverIds` is resolved by the caller (super-admins + admins
+ * see everything; managers / partners only their own projects) so this
+ * function stays free of permission logic.
+ */
+export async function sendTimesheetApprovalQueueNotice(opts: {
+  approverIds: string[];
+  submitterName: string;
+  entryCount: number;
+  totalHours: number;
+  weekLabel: string;
+}): Promise<{ sent: number; skipped: number }> {
+  if (!isWhatsAppConfigured() || opts.approverIds.length === 0) {
+    return { sent: 0, skipped: 0 };
+  }
+  const approvers = await prisma.person.findMany({
+    where: {
+      id: { in: opts.approverIds },
+      endDate: null,
+      whatsappNumber: { not: null },
+    },
+    select: { id: true, firstName: true, whatsappNumber: true },
+  });
+  let sent = 0;
+  let skipped = 0;
+  for (const a of approvers) {
+    if (!a.whatsappNumber) {
+      skipped += 1;
+      continue;
+    }
+    const ok = await send(
+      a.id,
+      a.whatsappNumber,
+      buildTimesheetApprovalQueueWhatsApp({
+        firstName: a.firstName,
+        submitterName: opts.submitterName,
+        entryCount: opts.entryCount,
+        totalHours: opts.totalHours,
+        weekLabel: opts.weekLabel,
+        appBaseUrl: APP_BASE_URL,
+      }),
+    );
+    if (ok) sent += 1;
+    else skipped += 1;
+  }
+  return { sent, skipped };
+}

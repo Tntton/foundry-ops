@@ -619,3 +619,41 @@ export function parseQuickAddInput(input: string): {
   }
   return { projectCode, dayOfWeek, hours, modifiers, raw: input.trim() };
 }
+
+// ─── Approval decisions ──────────────────────────────────────────────────
+
+export type DecidableEntry = {
+  id: string;
+  personId: string;
+  status: 'draft' | 'submitted' | 'approved' | 'billed';
+};
+
+export type DecisionPartition<T extends DecidableEntry> = {
+  /** Rows the decision can actually move — status `submitted`. */
+  decidable: T[];
+  /** Rows that exist but were already actioned somewhere else. */
+  alreadyDecided: T[];
+  /** Ids the caller asked for that no longer exist at all. */
+  missingCount: number;
+};
+
+/**
+ * Split a requested batch of entry ids into what a decision can move vs
+ * what has already moved. The approval queue used to require every
+ * requested id to still be `submitted` and abandoned the whole batch
+ * otherwise — so one stale id (recalled by the submitter, decided in
+ * another tab, or auto-approved from the person's own sheet) silently
+ * failed the entire decision and left the card sitting in the queue.
+ * Partitioning lets the action decide the movable rows and report the
+ * rest instead of stalling.
+ */
+export function partitionDecisionBatch<T extends DecidableEntry>(
+  requestedIds: string[],
+  found: T[],
+): DecisionPartition<T> {
+  return {
+    decidable: found.filter((e) => e.status === 'submitted'),
+    alreadyDecided: found.filter((e) => e.status !== 'submitted'),
+    missingCount: Math.max(0, new Set(requestedIds).size - found.length),
+  };
+}

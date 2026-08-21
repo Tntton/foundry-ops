@@ -325,9 +325,23 @@ export default async function TimesheetPage({
   })();
 
   const currentWeekStart = startOfWeek(todayInFirmTz());
-  const [hourlyUtilisation, approvalHistory] = await Promise.all([
+  // Latest approve / send-back decision on this person's hours, so the
+  // outcome (and the approver's reason on a send-back) lands on the
+  // timesheet itself rather than only in the updates feed. 14-day window
+  // keeps a stale decision from sitting at the top of the page forever.
+  const decisionSince = addDays(todayInFirmTz(), -14);
+  const [hourlyUtilisation, approvalHistory, latestDecision] = await Promise.all([
     getHourlyUtilisationForWeek(target.id, currentWeekStart),
     getApprovalHistoryForPerson(target.id, 4),
+    prisma.userUpdate.findFirst({
+      where: {
+        personId: target.id,
+        kind: { in: ['timesheet_approved', 'timesheet_rejected'] },
+        createdAt: { gte: decisionSince },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { kind: true, title: true, body: true, createdAt: true, readAt: true },
+    }),
   ]);
 
   const canApprove = hasAnyRole(session, ['super_admin', 'admin', 'manager']);
@@ -466,6 +480,20 @@ export default async function TimesheetPage({
         </div>
       ) : (
         <>
+          {latestDecision && (
+            <TimesheetDecisionBanner
+              kind={
+                latestDecision.kind === 'timesheet_rejected'
+                  ? 'timesheet_rejected'
+                  : 'timesheet_approved'
+              }
+              title={latestDecision.title}
+              body={latestDecision.body}
+              at={latestDecision.createdAt}
+              unread={latestDecision.readAt === null}
+              isSelf={!actingOnBehalf}
+            />
+          )}
           {prefillSummary && (
             <PrefillBanner
               summary={prefillSummary}
@@ -558,6 +586,62 @@ function UtilisationCard({
           ))
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Decision flag for the submitter. An approval is a quiet confirmation;
+ * a send-back is the one the person has to act on, so it carries the
+ * approver's reason inline and reads red rather than green.
+ */
+function TimesheetDecisionBanner({
+  kind,
+  title,
+  body,
+  at,
+  unread,
+  isSelf,
+}: {
+  kind: 'timesheet_approved' | 'timesheet_rejected';
+  title: string;
+  body: string | null;
+  at: Date;
+  unread: boolean;
+  isSelf: boolean;
+}) {
+  const sentBack = kind === 'timesheet_rejected';
+  const when = at.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+  return (
+    <div
+      className={`rounded-md border px-3 py-2 text-xs ${
+        sentBack
+          ? 'border-status-red bg-status-red-soft text-status-red'
+          : 'border-status-green bg-status-green-soft text-status-green'
+      }`}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <strong>
+          {isSelf
+            ? title
+            : title.replace(/^Your timesheet/, 'This timesheet')}
+        </strong>
+        <span className="opacity-70">· {when}</span>
+        {unread && (
+          <span className="rounded-full border border-current px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
+            new
+          </span>
+        )}
+        <Link href="/updates" className="ml-auto underline">
+          All updates →
+        </Link>
+      </div>
+      {body && <div className="mt-1 text-ink-2">{body}</div>}
+      {sentBack && (
+        <div className="mt-1 text-ink-3">
+          These hours are back in draft above — fix them and hit Submit again.
+        </div>
+      )}
     </div>
   );
 }

@@ -1343,6 +1343,24 @@ UPDATE "Person" SET email = 'shea.laws@foundry.health'        WHERE email = 'she
 
 ---
 
+### TASK-221 — Timesheet approval loop: clear the queue, flag the submitter, WhatsApp both ends
+**status:** done
+**depends on:** —
+**acceptance:**
+- [x] **Root cause of "I approved it but it still hangs around":** `decideTimesheetEntries` loaded the batch with `status: 'submitted'` in the `where` and then bailed with `Some entries already decided or missing.` unless *every* requested id matched. One stale id in the card (recalled by the submitter, decided in another tab, or auto-approved from the person's own sheet) failed the whole decision, so nothing moved and the card stayed put. Now partitions the batch (`partitionDecisionBatch` in `src/server/timesheet.ts`), decides what it can, and reports what it skipped.
+- [x] An all-stale batch returns **success** ("Already decided — actioned elsewhere. Queue refreshed.") and still revalidates, instead of an error that left the row on screen.
+- [x] **Stale-surface fix:** the decision only revalidated `/timesheet/approve`. Added `/updates` + `revalidateScheduleSurfaces({ personId })` per affected submitter, so the dashboard leader-action strip ("N timesheet entries to approve"), the submitter's `/timesheet`, utilisation, resource planning, and the person profile all move on approval. This was the second half of the "hangs around" report — the dashboard card was counting rows that had already been approved.
+- [x] **Flags back to the submitter:** the feed item now names the approver and the hours (`Approved by TT · 5 entries · 38.0h now posted to project P&L`), and a send-back carries the approver's reason as `Reason: …`. New decision banner at the top of `/timesheet` (green on approve, red on send-back, 14-day window, "new" pill while unread) so the outcome lands on the timesheet itself, not only in `/updates`.
+- [x] **Submission was silent — approvers now get told.** `saveTimesheet` tracks what actually lands as `submitted` (auto-approved and locked rows excluded) and, inside the same transaction, writes an `approval_requested` UserUpdate to the admin pool + each affected project's manager / primary partner (never the submitter or the actor).
+- [x] **WhatsApp, both directions** (`sendTimesheetApprovalQueueNotice`, `sendTimesheetDecisionNotice` in `whatsapp-prompts.ts`): approvers get "Rachael submitted 5 entries · 38.0h, week of 17/08/2026" on submit; submitters get "your timesheet has been approved by …" (or the send-back reason) on decision. Both reuse the module's `send()` so every outbound is logged to `WhatsAppMessage` and deduped 18h on identical body. Fired after commit, never awaited, wrapped in try/catch — a Meta outage cannot fail an approval.
+- [x] Tests: `timesheet-approval-loop.test.ts` — 10 cases over `partitionDecisionBatch` (including the stale-id regression) and both WhatsApp message builders.
+- [x] Typecheck + lint + 546 tests green.
+- [ ] Commit: `fix(TASK-221): timesheet approvals clear the queue + notify both ends`
+
+**OPEN — needs TT:** the WhatsApp notices go out as **free-form text**, like every other outbound in the app today. Meta only delivers free-form outside a 24-hour window if the recipient messaged the bot recently; otherwise the send fails with a re-engagement error (logged on `WhatsAppMessage.errorMessage`, no user-visible failure). Making these reliable needs two approved message templates (`timesheet_awaiting_approval`, `timesheet_decision`) added to the WABA template set. Tracked against the outstanding WhatsApp go-live gates.
+
+**context:** TT-reported, 2026-08-21. Three asks in one: the queue not clearing, the submitter not knowing, and WhatsApp on both ends.
+
 ## Phase 6 — In-app AI assistant (TT)
 
 > Floating chat widget in the bottom-right of every authed page, mirroring the FeedbackWidget pattern. Powered by Anthropic Claude (existing `ANTHROPIC_API_KEY`). Built in three deployable stages so we can dogfood after each. Per-phase deploy must be confirmed by TT before the next phase starts.

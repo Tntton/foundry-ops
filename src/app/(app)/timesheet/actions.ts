@@ -11,6 +11,7 @@ import { writeAudit, computeDelta } from '@/server/audit';
 import { emitUserUpdateMany } from '@/server/user-updates';
 import { addDays, parseIsoDate, startOfWeek, todayInFirmTz } from '@/lib/week';
 import { revalidateScheduleSurfaces } from '@/server/revalidate-schedule';
+import { partitionDecisionBatch } from '@/server/timesheet';
 
 // Snap hours to the nearest 0.5 — the granularity the timesheet grid uses.
 // Users typing odd values (e.g. 0.65) get auto-rounded; legacy 0.25-step
@@ -78,7 +79,9 @@ export async function saveTimesheet(
   // are all blocked uniformly.
   const targetState = await prisma.person.findUnique({
     where: { id: targetPersonId },
-    select: { inactiveAt: true, endDate: true },
+    // firstName / lastName come along for the ride so the approval
+    // notice below can name the submitter without a second read.
+    select: { inactiveAt: true, endDate: true, firstName: true, lastName: true },
   });
   if (!targetState) {
     return { status: 'error', message: 'Person not found' };
@@ -245,6 +248,16 @@ export async function saveTimesheet(
   }
   const autoApproveStamp = new Date();
   const autoApprovedEntryRefs: string[] = [];
+  // What this save actually parks in the approval queue. Only rows that
+  // land as `submitted` count — auto-approved rows skip the queue, and
+  // locked (approved / billed) rows never re-enter it. Drives the
+  // approver notification at the end of the function: no submitted
+  // rows, no ping.
+  const pendingApproval = {
+    entryCount: 0,
+    hours: 0,
+    projectIds: new Set<string>(),
+  };
   const teamProjectIds = new Set(existingTeamRows.map((r) => r.projectId));
   // Map keyed by `${projectId}|YYYY-MM-DD` so the loop below is O(1).
   const existingByKey = new Map<
@@ -332,6 +345,11 @@ export async function saveTimesheet(
         //     when auto-approve is on, else baseStatus)
         const statusToSet = isLocked ? existing.status : nextStatus;
         if (isLocked) overriddenLockedEntries.push(existing.id);
+        if (statusToSet === 'submitted') {
+          pendingApproval.entryCount += 1;
+          pendingApproval.hours += hours;
+          pendingApproval.projectIds.add(row.projectId);
+        }
         const wasNotYetApproved =
           existing.status === 'draft' || existing.status === 'submitted';
         const stampApproval = willAutoApprove && wasNotYetApproved;
@@ -354,6 +372,11 @@ export async function saveTimesheet(
         );
       } else {
         const stampApproval = willAutoApprove;
+        if (nextStatus === 'submitted') {
+          pendingApproval.entryCount += 1;
+          pendingApproval.hours += hours;
+          pendingApproval.projectIds.add(row.projectId);
+        }
         if (stampApproval) {
           autoApprovedEntryRefs.push(
             `${row.projectId}|${date.toISOString().slice(0, 10)}`,
@@ -462,6 +485,64 @@ export async function saveTimesheet(
   // interactive form.
   void writeAudit;
 
+  // ── Tell the approvers there's something to approve ──────────────────
+  // Submitting used to be silent: the rows landed in `submitted` and sat
+  // there until someone happened to open /timesheet/approve. Resolve the
+  // approver pool now (a read, before the tx) and write the feed rows
+  // inside the same batch so the notice can't get out of sync with the
+  // submission. The WhatsApp DM fires after the commit.
+  const submitterName = `${targetState.firstName} ${targetState.lastName}`;
+  const weekLabel = rangeStart.toLocaleDateString('en-AU');
+  const approverIds: string[] = [];
+  if (intent === 'submit' && pendingApproval.entryCount > 0) {
+    // Who can decide these rows: the admin pool sees every submission
+    // (mirrors listPendingTimesheetEntriesForApprover), plus the manager
+    // / primary partner of each project the hours landed on.
+    const leadIds = new Set<string>();
+    for (const projectId of pendingApproval.projectIds) {
+      const meta = projectMetaById.get(projectId);
+      if (meta?.managerId) leadIds.add(meta.managerId);
+      if (meta?.primaryPartnerId) leadIds.add(meta.primaryPartnerId);
+    }
+    const pool = await prisma.person.findMany({
+      where: {
+        endDate: null,
+        inactiveAt: null,
+        OR: [
+          { roles: { hasSome: ['super_admin', 'admin'] } },
+          { id: { in: Array.from(leadIds) } },
+        ],
+      },
+      select: { id: true },
+    });
+    for (const p of pool) {
+      // Never ping the submitter about their own submission, and never
+      // ping the actor for an on-behalf save — they just did it.
+      if (p.id === targetPersonId || p.id === session.person.id) continue;
+      approverIds.push(p.id);
+    }
+    if (approverIds.length > 0) {
+      const entryLabel = `${pendingApproval.entryCount} ${
+        pendingApproval.entryCount === 1 ? 'entry' : 'entries'
+      }`;
+      ops.push(
+        prisma.userUpdate.createMany({
+          data: approverIds.map((personId) => ({
+            personId,
+            kind: 'approval_requested' as const,
+            title: `Timesheet awaiting your approval (${pendingApproval.hours.toFixed(1)}h)`,
+            body:
+              `${submitterName} submitted ${entryLabel} · ` +
+              `${pendingApproval.hours.toFixed(1)}h for the week of ${weekLabel}.`,
+            href: '/timesheet/approve',
+            entityType: 'timesheet_entry',
+            entityId: null,
+          })),
+        }),
+      );
+    }
+  }
+
   try {
     await prisma.$transaction(ops);
   } catch (err) {
@@ -482,7 +563,32 @@ export async function saveTimesheet(
   // dynamic rendering; the firm-wide and person-level paths are the
   // ones currently held by the user's router cache.
   revalidatePath('/timesheet/approve');
+  revalidatePath('/updates');
   revalidateScheduleSurfaces({ personId: targetPersonId });
+
+  // WhatsApp side-channel to the approvers — best-effort, never awaited,
+  // never allowed to fail the save. Deduped 18h on identical body inside
+  // sendTimesheetApprovalQueueNotice, so re-submitting the same week
+  // doesn't re-ping.
+  if (approverIds.length > 0) {
+    void (async () => {
+      try {
+        const { sendTimesheetApprovalQueueNotice } = await import(
+          '@/server/integrations/whatsapp-prompts'
+        );
+        await sendTimesheetApprovalQueueNotice({
+          approverIds,
+          submitterName,
+          entryCount: pendingApproval.entryCount,
+          totalHours: pendingApproval.hours,
+          weekLabel,
+        });
+      } catch (err) {
+        console.error('[timesheet.save] approver whatsapp notice failed:', err);
+      }
+    })();
+  }
+
   const parts: string[] = [];
   if (autoApprovedEntryRefs.length > 0) {
     parts.push(
@@ -778,20 +884,61 @@ export async function decideTimesheetEntries(
     return { status: 'error', message: 'Note required on reject' };
   }
 
-  const entries = await prisma.timesheetEntry.findMany({
-    where: { id: { in: parsed.data.entryIds }, status: 'submitted' },
-    include: { project: { select: { managerId: true } } },
+  // Load the requested rows WITHOUT a status filter so we can tell
+  // "already decided" apart from "doesn't exist". The old code required
+  // an exact status:'submitted' match on every id and bailed out of the
+  // whole batch otherwise — which is what left decided entries visibly
+  // stuck in the queue: any stale id (recalled by the submitter, or
+  // approved from the person's own sheet / another tab) failed the
+  // entire decision, so nothing moved and the card stayed put.
+  const requested = await prisma.timesheetEntry.findMany({
+    where: { id: { in: parsed.data.entryIds } },
+    include: { project: { select: { code: true, managerId: true } } },
   });
-  if (entries.length !== parsed.data.entryIds.length) {
-    return { status: 'error', message: 'Some entries already decided or missing.' };
-  }
-  const canDecideAll = session.person.roles.includes('super_admin') || session.person.roles.includes('admin');
+  const {
+    decidable: entries,
+    alreadyDecided,
+    missingCount,
+  } = partitionDecisionBatch(parsed.data.entryIds, requested);
+
+  const canDecideAll =
+    session.person.roles.includes('super_admin') || session.person.roles.includes('admin');
   if (!canDecideAll) {
     const unauthorised = entries.some((e) => e.project.managerId !== session.person.id);
     if (unauthorised) return { status: 'error', message: 'Not the manager for some of these.' };
   }
 
   const { decision, note } = parsed.data;
+
+  // Nothing left to decide — the queue the user was looking at was
+  // stale. Revalidate so the rows disappear instead of hanging around,
+  // and say so plainly rather than throwing an error at them.
+  if (entries.length === 0) {
+    revalidateAfterTimesheetDecision(
+      Array.from(new Set(alreadyDecided.map((e) => e.personId))),
+    );
+    return {
+      status: 'success',
+      message:
+        alreadyDecided.length > 0
+          ? `Already decided — ${alreadyDecided.length} ${
+              alreadyDecided.length === 1 ? 'entry was' : 'entries were'
+            } actioned elsewhere. Queue refreshed.`
+          : 'Those entries no longer exist. Queue refreshed.',
+    };
+  }
+
+  // Per-person roll-up for the feed + WhatsApp notices, computed before
+  // the tx so the notifier doesn't have to re-read.
+  const byPerson = new Map<string, { count: number; hours: number }>();
+  for (const e of entries) {
+    const cur = byPerson.get(e.personId) ?? { count: 0, hours: 0 };
+    cur.count += 1;
+    cur.hours += Number(e.hours);
+    byPerson.set(e.personId, cur);
+  }
+  const approverName = `${session.person.firstName} ${session.person.lastName}`;
+
   try {
     await prisma.$transaction(async (tx) => {
       for (const entry of entries) {
@@ -827,20 +974,25 @@ export async function decideTimesheetEntries(
       // entries were approved / rejected. We collapse multi-entry
       // decisions into a single feed item per person — managers
       // typically approve a whole week at once and it'd be noisy to
-      // emit 7 rows.
-      const byPerson = new Map<string, number>();
-      for (const e of entries) {
-        if (e.personId === session.person.id) continue; // skip self
-        byPerson.set(e.personId, (byPerson.get(e.personId) ?? 0) + 1);
-      }
-      for (const [personId, count] of byPerson) {
+      // emit 7 rows. Body names the approver + the hours so the
+      // submitter can reconcile it against their own sheet without
+      // opening anything.
+      for (const [personId, roll] of byPerson) {
+        if (personId === session.person.id) continue; // skip self
+        const entryLabel = `${roll.count} ${roll.count === 1 ? 'entry' : 'entries'}`;
+        const bodyParts = [
+          decision === 'approved'
+            ? `Approved by ${approverName} · ${entryLabel} · ${roll.hours.toFixed(1)}h now posted to project P&L.`
+            : `Sent back by ${approverName} · ${entryLabel} · ${roll.hours.toFixed(1)}h returned to draft for you to fix and resubmit.`,
+        ];
+        if (note) bodyParts.push(decision === 'approved' ? `Note: ${note}` : `Reason: ${note}`);
         await emitUserUpdateMany(tx, [personId], {
           kind: decision === 'approved' ? 'timesheet_approved' : 'timesheet_rejected',
           title:
             decision === 'approved'
-              ? `Your timesheet was approved (${count} ${count === 1 ? 'entry' : 'entries'})`
-              : `Your timesheet was sent back (${count} ${count === 1 ? 'entry' : 'entries'})`,
-          body: note ?? null,
+              ? `Your timesheet was approved (${roll.hours.toFixed(1)}h)`
+              : `Your timesheet was sent back (${roll.hours.toFixed(1)}h)`,
+          body: bodyParts.join(' '),
           href: '/timesheet',
           entityType: 'timesheet_entry',
           entityId: null,
@@ -852,9 +1004,63 @@ export async function decideTimesheetEntries(
     return { status: 'error', message: 'Decision failed — try again.' };
   }
 
-  revalidatePath('/timesheet/approve');
+  // Every surface that counts pending / approved hours has to move, not
+  // just the queue page: the dashboard leader-action strip ("N timesheet
+  // entries to approve"), the submitter's own /timesheet, utilisation,
+  // resource planning and the person profile. Missing these is why an
+  // approved entry appeared to hang around after the decision landed.
+  revalidateAfterTimesheetDecision(Array.from(byPerson.keys()));
+
+  // WhatsApp side-channel to the submitters — best-effort, fired after
+  // the tx commits and deliberately not awaited. The in-app feed item
+  // above is the source of truth; a Meta outage must never surface as
+  // a failed approval.
+  void (async () => {
+    const { sendTimesheetDecisionNotice } = await import(
+      '@/server/integrations/whatsapp-prompts'
+    );
+    for (const [personId, roll] of byPerson) {
+      if (personId === session.person.id) continue;
+      try {
+        await sendTimesheetDecisionNotice({
+          personId,
+          decision,
+          entryCount: roll.count,
+          totalHours: roll.hours,
+          approverName,
+          note,
+        });
+      } catch (err) {
+        console.error('[timesheet.decide] whatsapp notice failed for', personId, err);
+      }
+    }
+  })();
+
+  const skipped = alreadyDecided.length + missingCount;
+  const verb = decision === 'approved' ? 'Approved' : 'Sent back';
   return {
     status: 'success',
-    message: `${decision === 'approved' ? 'Approved' : 'Sent back'} ${entries.length} entries.`,
+    message:
+      skipped > 0
+        ? `${verb} ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}. ` +
+          `Skipped ${skipped} already decided elsewhere.`
+        : `${verb} ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}.`,
   };
+}
+
+/**
+ * Fan out revalidation after a timesheet decision. Kept as one helper so
+ * the "nothing left to decide" early return and the happy path can't
+ * drift apart.
+ */
+function revalidateAfterTimesheetDecision(personIds: string[]): void {
+  revalidatePath('/timesheet/approve');
+  revalidatePath('/updates');
+  if (personIds.length === 0) {
+    revalidateScheduleSurfaces();
+    return;
+  }
+  for (const personId of personIds) {
+    revalidateScheduleSurfaces({ personId });
+  }
 }
