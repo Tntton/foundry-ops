@@ -250,7 +250,7 @@ export async function computeProjectBudget(
     select: { amountTotal: true, gst: true },
   });
   const tsEntries = await prisma.timesheetEntry.findMany({
-    where: { projectId, status: { in: ['approved', 'billed'] } },
+    where: { projectId, status: 'approved' },
     select: {
       hours: true,
       person: { select: { rate: true, band: true } },

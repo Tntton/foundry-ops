@@ -128,7 +128,7 @@ export async function buildTimesheetWorkbook(): Promise<Buffer> {
   const { start, end } = financialYearWindow(new Date());
   const [rows, util] = await Promise.all([
     prisma.timesheetEntry.findMany({
-      where: { date: { gte: start, lt: end }, status: { in: ['approved', 'billed'] } },
+      where: { date: { gte: start, lt: end }, status: 'approved' },
       select: {
         hours: true,
         billedInvoiceId: true,

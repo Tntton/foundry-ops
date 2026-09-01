@@ -137,7 +137,7 @@ export default async function PersonDetailPage({
     await Promise.all([
       prisma.timesheetEntry.groupBy({
         by: ['projectId'],
-        where: { personId: person.id, status: { in: ['approved', 'billed'] } },
+        where: { personId: person.id, status: 'approved' },
         _sum: { hours: true },
       }),
       prisma.projectTeam.findMany({
@@ -1098,7 +1098,7 @@ function PersonTimePanel({
         <TotalCard
           label="Billed"
           value={`${totals.billed.toFixed(1)}h`}
-          sub="linked to invoice/bill"
+          sub="on a client invoice"
         />
       </div>
 
@@ -1108,7 +1108,9 @@ function PersonTimePanel({
             <CardTitle>Approved &amp; unbilled</CardTitle>
             <CardDescription>
               Approved contractor hours not yet attached to a bill. Generate a draft
-              bill below — the entries get marked &ldquo;billed&rdquo; once you save.
+              bill below — the entries get linked to it once you save. This is
+              independent of client invoicing: these hours stay billable to the
+              client either way.
             </CardDescription>
           </CardHeader>
           <CardContent>

@@ -15,13 +15,15 @@ export type DraftBillState =
 
 const DraftBillSchema = z.object({
   contractorInvoiceNumber: z.string().trim().max(80).optional().nullable(),
+  // The field is optional in the UI, and the caller normalises a blank
+  // input to `null` (`formData.get(...) || null`). The previous shape —
+  // `.optional().or(z.literal(''))` — accepted undefined and '' but NOT
+  // null, so every submission without an attachment URL failed the parse
+  // with "Invalid bill payload". Found by the TASK-500 tests; pre-existing.
   attachmentSharepointUrl: z
-    .string()
-    .trim()
-    .url()
-    .max(500)
+    .union([z.string().trim().url().max(500), z.literal(''), z.null()])
     .optional()
-    .or(z.literal('').transform(() => null)),
+    .transform((v) => (v === '' || v === undefined ? null : v)),
   issueDate: z.string().min(1),
   dueDate: z.string().min(1),
   notes: z.string().trim().max(1000).optional().nullable(),
@@ -77,14 +79,20 @@ export async function generateDraftBillFromHours(
     };
   }
 
+  // Must mirror listContractorBillableEntries exactly, or the preview the
+  // reviewer approved and the set this action bills diverge. Gated on the AP
+  // leg (`contractorBillId`) — whether the CLIENT has been invoiced for the
+  // hour is irrelevant to whether the contractor has been paid for it
+  // (TASK-500; this used to read `billedInvoiceId: null`, which meant
+  // invoicing a client silently withheld the contractor's own hours).
   const entries = await prisma.timesheetEntry.findMany({
-    where: { personId, status: 'approved', billedInvoiceId: null },
+    where: { personId, status: 'approved', contractorBillId: null },
     select: { id: true, projectId: true, hours: true, project: { select: { code: true, name: true } } },
   });
   if (entries.length === 0) {
     return {
       status: 'error',
-      message: 'No approved & unbilled hours to bill.',
+      message: 'No approved hours left to invoice — they are all on a contractor bill already.',
     };
   }
 
@@ -148,12 +156,17 @@ export async function generateDraftBillFromHours(
           },
         });
         createdBillIds.push(bill.id);
-        // Mark entries billed so they stop appearing on subsequent draft-bill runs.
-        // We don't have a Bill→TimesheetEntry FK column, so the linkage lives in the
-        // audit event below for traceability.
+        // Link the entries to this bill so they stop appearing on subsequent
+        // draft-bill runs. This is the AP leg ONLY — it must not touch
+        // `status`, and must not touch `billedInvoiceId`. Until TASK-500 this
+        // set status='billed', which silently and permanently removed the
+        // hours from the client-invoice pool (previewInvoiceFromTimesheets
+        // filters status='approved'). A contractor hour is normally billed on
+        // both legs: to the client at Person.billRate, and by the contractor
+        // to Foundry at Person.rate.
         await tx.timesheetEntry.updateMany({
           where: { id: { in: g.entryIds } },
-          data: { status: 'billed' },
+          data: { contractorBillId: bill.id },
         });
         await writeAudit(tx, {
           actor: { type: 'person', id: session!.person.id },

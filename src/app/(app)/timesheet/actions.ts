@@ -11,7 +11,7 @@ import { writeAudit, computeDelta } from '@/server/audit';
 import { emitUserUpdateMany } from '@/server/user-updates';
 import { addDays, parseIsoDate, startOfWeek, todayInFirmTz } from '@/lib/week';
 import { revalidateScheduleSurfaces } from '@/server/revalidate-schedule';
-import { partitionDecisionBatch } from '@/server/timesheet';
+import { isBilledEitherLeg, partitionDecisionBatch } from '@/server/timesheet';
 
 // Snap hours to the nearest 0.5 — the granularity the timesheet grid uses.
 // Users typing odd values (e.g. 0.65) get auto-rounded; legacy 0.25-step
@@ -178,7 +178,18 @@ export async function saveTimesheet(
             projectId: { in: projectIdsInScope },
             date: { gte: rangeStart, lt: rangeEndDate },
           },
-          select: { id: true, projectId: true, date: true, status: true },
+          select: {
+            id: true,
+            projectId: true,
+            date: true,
+            status: true,
+            // Both billing legs — the delete guard below must refuse to
+            // remove an hour that is already on a client invoice or a
+            // contractor bill. Pre-TASK-500 this read status==='billed',
+            // which only ever covered the contractor leg.
+            billedInvoiceId: true,
+            contractorBillId: true,
+          },
         }),
     // Project leadership lookup — needed to (a) gate non-admin on-behalf
     // saves to projects the manager actually leads, and (b) decide which
@@ -264,12 +275,19 @@ export async function saveTimesheet(
     string,
     {
       id: string;
-      status: 'draft' | 'submitted' | 'approved' | 'billed';
+      status: 'draft' | 'submitted' | 'approved';
+      billedInvoiceId: string | null;
+      contractorBillId: string | null;
     }
   >();
   for (const e of existingEntries) {
     const dayKey = e.date.toISOString().slice(0, 10);
-    existingByKey.set(`${e.projectId}|${dayKey}`, { id: e.id, status: e.status });
+    existingByKey.set(`${e.projectId}|${dayKey}`, {
+      id: e.id,
+      status: e.status,
+      billedInvoiceId: e.billedInvoiceId,
+      contractorBillId: e.contractorBillId,
+    });
   }
   const autoAddedProjects: string[] = [];
   const overriddenLockedEntries: string[] = [];
@@ -318,16 +336,19 @@ export async function saveTimesheet(
           ops.push(
             prisma.timesheetEntry.delete({ where: { id: existing.id } }),
           );
-        } else if (existing && isSuperAdmin && existing.status !== 'billed') {
-          // Super-admin clearing a non-billed approved entry — convert to a
-          // 0-hour deletion so it stops counting in P&L.
+        } else if (existing && isSuperAdmin && !isBilledEitherLeg(existing)) {
+          // Super-admin clearing an approved-but-unbilled entry — convert to
+          // a 0-hour deletion so it stops counting in P&L. Guarding on both
+          // legs is wider than the old status!=='billed' check, which missed
+          // hours already on a CLIENT invoice (that leg never touched status).
           ops.push(
             prisma.timesheetEntry.delete({ where: { id: existing.id } }),
           );
           overriddenLockedEntries.push(existing.id);
         }
         // Billed entries with 0 hours are left alone — they're historical
-        // record + already invoiced. Editing those needs a manual void.
+        // record + already invoiced on one or both legs. Editing those needs
+        // a manual void of the invoice / bill first.
         continue;
       }
 
@@ -335,12 +356,13 @@ export async function saveTimesheet(
       const willAutoApprove = autoApproveProjectIds.has(row.projectId);
       const nextStatus = willAutoApprove ? 'approved' : baseStatus;
       if (existing) {
-        const isLocked =
-          existing.status === 'approved' || existing.status === 'billed';
+        // Billed hours are always `approved` (billing never changes status
+        // post-TASK-500), so the approved check covers both.
+        const isLocked = existing.status === 'approved';
         if (isLocked && !isSuperAdmin) continue;
         // Status decisions on existing rows:
-        //   - billed → preserve (super-admin override edits hours only)
-        //   - approved → preserve (don't replace the original approver/time)
+        //   - approved (incl. billed) → preserve (don't replace the original
+        //     approver / timestamp; a super-admin override edits hours only)
         //   - draft / submitted → promote to nextStatus (which is 'approved'
         //     when auto-approve is on, else baseStatus)
         const statusToSet = isLocked ? existing.status : nextStatus;
@@ -804,7 +826,7 @@ export async function recallSubmittedTimesheet(
     select: { id: true, status: true },
   });
   const submittedIds = inScope.filter((e) => e.status === 'submitted').map((e) => e.id);
-  const blocked = inScope.filter((e) => e.status === 'approved' || e.status === 'billed');
+  const blocked = inScope.filter((e) => e.status === 'approved');
 
   if (submittedIds.length === 0) {
     if (blocked.length > 0) {

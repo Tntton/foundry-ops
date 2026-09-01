@@ -230,7 +230,7 @@ export async function computeFirmPnL(opts?: FirmPnLOpts): Promise<FirmPnL> {
     }),
     prisma.timesheetEntry.findMany({
       where: {
-        status: { in: ['approved', 'billed'] },
+        status: 'approved',
         ...(hasWindow ? { date: dateWindow } : {}),
         ...requiredProjectNotTest,
       },

@@ -93,7 +93,7 @@ export async function listStaffPendingActions(
     };
     cur.hours += Number(e.hours);
     if (e.status === 'draft') cur.hasDraft = true;
-    if (e.status === 'submitted' || e.status === 'approved' || e.status === 'billed') {
+    if (e.status === 'submitted' || e.status === 'approved') {
       cur.hasSubmitted = true;
     }
     weekMap.set(key, cur);

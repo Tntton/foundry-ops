@@ -5,6 +5,7 @@ import { hasAnyRole } from '@/server/roles';
 import {
   listPendingTimesheetEntriesForApprover,
   listRecentDecidedEntriesForApprover,
+  toDisplayStatus,
 } from '@/server/timesheet';
 import { prisma } from '@/server/db';
 import { PersonAvatar } from '@/components/person-avatar';
@@ -281,10 +282,10 @@ export default async function TimesheetApprovePage({
                             {e.description ?? ''}
                           </span>
                           <Badge
-                            variant={e.status === 'billed' ? 'blue' : 'green'}
+                            variant={toDisplayStatus(e) === 'billed' ? 'blue' : 'green'}
                             className="text-[10px]"
                           >
-                            {e.status}
+                            {toDisplayStatus(e)}
                           </Badge>
                         </li>
                       ))}

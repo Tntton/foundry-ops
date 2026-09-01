@@ -67,7 +67,7 @@ export async function listContractors(): Promise<ContractorListRow[]> {
       by: ['personId', 'projectId'],
       where: {
         personId: { in: personIds },
-        status: { in: ['approved', 'billed'] },
+        status: 'approved',
       },
       _sum: { hours: true },
     }),

@@ -130,7 +130,7 @@ export default async function MyProfilePage() {
   const lifetimeBillableAgg = await prisma.timesheetEntry.aggregate({
     where: {
       personId: me.id,
-      status: { in: ['approved', 'billed'] },
+      status: 'approved',
       billedInvoiceId: { not: null },
     },
     _sum: { hours: true },
@@ -164,7 +164,7 @@ export default async function MyProfilePage() {
     if (!wk) continue;
     const hours = Number(e.hours);
     wk.hoursTotal += hours;
-    if (e.status === 'approved' || e.status === 'billed') {
+    if (e.status === 'approved') {
       wk.hoursBillable += hours;
     }
   }

@@ -2,6 +2,52 @@ import { prisma } from '@/server/db';
 import type { Session } from '@/server/roles';
 import { addDays } from '@/lib/week';
 
+/**
+ * What the UI shows for an entry. Wider than the DB enum: `billed` is a
+ * DERIVED state, not a stored one.
+ *
+ * TASK-500 removed `billed` from `TimesheetStatus` because it was doing two
+ * incompatible jobs — recording that the contractor had invoiced Foundry (AP)
+ * while simultaneously, as a side effect of `previewInvoiceFromTimesheets`
+ * filtering `status='approved'`, excluding the hour from client invoicing
+ * (AR). The two legs now carry their own FKs and neither gates the other.
+ *
+ * `billed` here means the **AR leg only** — this hour is on a client invoice.
+ * That is what every surface using the word already claims ("on invoice",
+ * "linked to invoice"), and before TASK-500 the label was simply wrong: it
+ * was driven by the contractor-bill flow, so it counted hours Foundry had
+ * been invoiced FOR, not hours it had invoiced OUT.
+ *
+ * For "has either leg consumed this hour?" — the edit-lock / delete-guard
+ * question — use `isBilledEitherLeg`, never the display status. Keeping the
+ * two apart is the whole point of the task: an hour can sit on a contractor
+ * bill and still be perfectly billable to the client.
+ */
+export type TimesheetDisplayStatus = 'draft' | 'submitted' | 'approved' | 'billed';
+
+export type BillingLegs = {
+  /** AR leg — on a client invoice. */
+  billedInvoiceId: string | null;
+  /** AP leg — on a contractor bill to Foundry. */
+  contractorBillId: string | null;
+};
+
+/**
+ * True once EITHER leg has consumed the hour — i.e. editing or deleting it
+ * now has a downstream document to reconcile. Use for locks and guards, not
+ * for anything labelled "invoiced".
+ */
+export function isBilledEitherLeg(e: BillingLegs): boolean {
+  return e.billedInvoiceId !== null || e.contractorBillId !== null;
+}
+
+/** Display status. `billed` = on a client invoice (AR leg). */
+export function toDisplayStatus(
+  e: Pick<BillingLegs, 'billedInvoiceId'> & { status: 'draft' | 'submitted' | 'approved' },
+): TimesheetDisplayStatus {
+  return e.status === 'approved' && e.billedInvoiceId !== null ? 'billed' : e.status;
+}
+
 export type TimesheetCell = {
   date: Date;
   hours: number;
@@ -14,7 +60,7 @@ export type TimesheetRow = {
   /** Project stage at fetch time — used by the grid to colour-code the sub-tag (delivery / kickoff / closing / archived). */
   projectStage: 'kickoff' | 'delivery' | 'closing' | 'archived' | 'standing' | 'benched';
   description: string;
-  status: 'draft' | 'submitted' | 'approved' | 'billed' | 'mixed';
+  status: TimesheetDisplayStatus | 'mixed';
   cells: TimesheetCell[];
 };
 
@@ -89,13 +135,13 @@ async function getRangeForPerson(
       });
       const description =
         projectEntries.find((e) => e.description)?.description ?? '';
-      const statuses = new Set(projectEntries.map((e) => e.status));
+      const statuses = new Set(projectEntries.map(toDisplayStatus));
       const status: TimesheetRow['status'] =
         statuses.size === 0
           ? 'draft'
           : statuses.size > 1
             ? 'mixed'
-            : (projectEntries[0]?.status ?? 'draft');
+            : (statuses.values().next().value ?? 'draft');
 
       return {
         projectId: p.id,
@@ -167,9 +213,11 @@ export type ProjectTimesheetEntry = {
   date: Date;
   hours: number;
   description: string | null;
-  status: 'draft' | 'submitted' | 'approved' | 'billed';
+  /** Derived — see toDisplayStatus. `billed` means either leg consumed it. */
+  status: TimesheetDisplayStatus;
   approvedAt: Date | null;
   billedInvoiceId: string | null;
+  contractorBillId: string | null;
   costCents: number; // hours × person.rate
   person: {
     id: string;
@@ -205,9 +253,10 @@ export async function listProjectTimesheetEntries(
     date: e.date,
     hours: Number(e.hours),
     description: e.description,
-    status: e.status,
+    status: toDisplayStatus(e),
     approvedAt: e.approvedAt,
     billedInvoiceId: e.billedInvoiceId,
+    contractorBillId: e.contractorBillId,
     costCents: Math.round(Number(e.hours) * (e.person.rate ?? 0)),
     person: {
       id: e.person.id,
@@ -224,15 +273,17 @@ export type PersonTimesheetEntry = {
   date: Date;
   hours: number;
   description: string | null;
-  status: 'draft' | 'submitted' | 'approved' | 'billed';
+  /** Derived — see toDisplayStatus. `billed` means either leg consumed it. */
+  status: TimesheetDisplayStatus;
   approvedAt: Date | null;
   billedInvoiceId: string | null;
+  contractorBillId: string | null;
   project: { id: string; code: string; name: string };
 };
 
 export async function listPersonTimesheetEntries(
   personId: string,
-  opts: { from?: Date; to?: Date; status?: 'draft' | 'submitted' | 'approved' | 'billed' } = {},
+  opts: { from?: Date; to?: Date; status?: 'draft' | 'submitted' | 'approved' } = {},
 ): Promise<PersonTimesheetEntry[]> {
   const where: Record<string, unknown> = { personId };
   if (opts.from || opts.to) {
@@ -254,9 +305,10 @@ export async function listPersonTimesheetEntries(
     date: e.date,
     hours: Number(e.hours),
     description: e.description,
-    status: e.status,
+    status: toDisplayStatus(e),
     approvedAt: e.approvedAt,
     billedInvoiceId: e.billedInvoiceId,
+    contractorBillId: e.contractorBillId,
     project: e.project,
   }));
 }
@@ -285,8 +337,12 @@ export async function listContractorBillableEntries(
   });
   if (!person) return { groups: [], rate: 0, billRate: null };
 
+  // AP-leg candidates: approved hours this contractor hasn't yet invoiced
+  // Foundry for. Gated on `contractorBillId`, NOT `billedInvoiceId` — whether
+  // the client has been invoiced for an hour has no bearing on whether the
+  // contractor has been paid for it, and vice versa (TASK-500).
   const entries = await prisma.timesheetEntry.findMany({
-    where: { personId, status: 'approved', billedInvoiceId: null },
+    where: { personId, status: 'approved', contractorBillId: null },
     include: { project: { select: { id: true, code: true, name: true } } },
     orderBy: [{ date: 'asc' }],
   });
@@ -387,7 +443,7 @@ export async function getHourlyUtilisationForWeek(
 
 export type ApprovalHistoryRow = {
   weekStart: Date;
-  status: 'draft' | 'submitted' | 'approved' | 'billed' | 'mixed' | 'flag_resolved';
+  status: TimesheetDisplayStatus | 'mixed' | 'flag_resolved';
   approverInitials: string | null;
   totalHours: number;
   isCurrentWeek: boolean;
@@ -418,6 +474,8 @@ export async function getApprovalHistoryForPerson(
       hours: true,
       status: true,
       approvedById: true,
+      billedInvoiceId: true,
+      contractorBillId: true,
     },
   });
   const approverIds = Array.from(
@@ -436,7 +494,7 @@ export async function getApprovalHistoryForPerson(
     {
       weekStart: Date;
       hours: number;
-      statuses: Set<'draft' | 'submitted' | 'approved' | 'billed'>;
+      statuses: Set<TimesheetDisplayStatus>;
       approverInitials: string | null;
     }
   >();
@@ -452,11 +510,11 @@ export async function getApprovalHistoryForPerson(
       ({
         weekStart: d,
         hours: 0,
-        statuses: new Set<'draft' | 'submitted' | 'approved' | 'billed'>(),
+        statuses: new Set<TimesheetDisplayStatus>(),
         approverInitials: null,
       } satisfies NonNullable<ReturnType<(typeof buckets)['get']>>);
     cur.hours += Number(e.hours);
-    cur.statuses.add(e.status);
+    cur.statuses.add(toDisplayStatus(e));
     const approverInitials = e.approvedById ? approverByIdMap.get(e.approvedById) : null;
     if (approverInitials && !cur.approverInitials) {
       cur.approverInitials = approverInitials;
