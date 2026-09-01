@@ -190,7 +190,15 @@ enum TimesheetStatus {
   draft
   submitted
   approved
-  billed
+  // `billed` was removed 2026-09-01 (TASK-500). It meant "consumed by a
+  // contractor bill", but because previewInvoiceFromTimesheets filters
+  // status='approved', setting it silently and permanently excluded the
+  // hour from CLIENT invoicing. The two legs are economically
+  // independent — the same hour is a cost at Person.rate and revenue at
+  // Person.billRate — so each leg now carries its own nullable FK:
+  //   AP leg (contractor invoices Foundry) → TimesheetEntry.contractorBillId
+  //   AR leg (Foundry invoices the client) → TimesheetEntry.billedInvoiceId
+  // Never re-add a shared status marker for either.
 }
 
 enum ExpenseStatus {
@@ -1020,13 +1028,23 @@ model TimesheetEntry {
   status           TimesheetStatus @default(draft)
   approvedById     String?
   approvedAt       DateTime?
+  /// AR leg — the client Invoice this hour was billed on. Set by
+  /// draftInvoiceFromTimesheets. Independent of `contractorBillId`.
   billedInvoiceId  String?
+  /// AP leg — the contractor Bill this hour was invoiced to Foundry on.
+  /// Set by generateDraftBillFromHours. Independent of
+  /// `billedInvoiceId`: a contractor hour is normally BOTH billed to the
+  /// client (at Person.billRate) and invoiced by the contractor (at
+  /// Person.rate), so neither FK may gate the other's candidate query.
+  /// Null for full-time staff, who are paid via pay runs, never bills.
+  contractorBillId String?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
   person           Person   @relation(fields: [personId], references: [id])
   project          Project  @relation(fields: [projectId], references: [id])
   billedInvoice    Invoice? @relation(fields: [billedInvoiceId], references: [id])
+  contractorBill   Bill?    @relation(fields: [contractorBillId], references: [id])
 
   // One entry per person × project × day. Every writer (web grid,
   // WhatsApp, CSV import, reconcile confirm) upserts on this key so a
@@ -1037,6 +1055,7 @@ model TimesheetEntry {
   @@unique([personId, projectId, date])
   @@index([personId, date])
   @@index([projectId, date])
+  @@index([contractorBillId])
 }
 
 /// Historical aggregated contractor cost. Ingested from the FY26
@@ -1237,6 +1256,8 @@ model Bill {
   payRun                   PayRun?    @relation(fields: [abaBatchId], references: [id])
   supplier                 Supplier?  @relation(fields: [supplierId], references: [id])
   attributedTo             Person?    @relation("BillAttributedTo", fields: [attributedToPersonId], references: [id])
+  // Hours this bill invoices Foundry for (contractor self-bill path).
+  timesheetEntries         TimesheetEntry[]
 }
 
 // ============================================================================
