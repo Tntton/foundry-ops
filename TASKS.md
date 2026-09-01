@@ -1729,6 +1729,129 @@ Migrate personnel fields, functionality and taxonomy to the FY27 role architectu
 **depends on:** TASK-403
 **acceptance:** Port `v_reserve_review` (quarterly pool-lead list + past-24-month flag, OD-3) and the re-entry rules (0–12 / 12–24 / >24-month treatments).
 
+## Phase 8 — Monthly lodgement → batch approval → contractor invoice
+
+> **TT 2026-08-31, designated priority workflow.** Individuals lodge hours **monthly**, the month is approved as a **batch**, and on approval the contractor's invoice to Foundry is **generated for them to confirm**. Must be easy to do individually — self-serve, not admin-driven.
+>
+> **Decisions locked by TT 2026-08-31:**
+> - **D1 — Issuance: contractor confirms a pre-filled draft.** Foundry generates the draft from approved hours; the contractor reviews and hits "Submit invoice", which is their act of issuing. Their invoice number, their document. **This deliberately avoids the AU Recipient Created Tax Invoice (RCTI) regime** — Foundry never issues on the contractor's behalf, so no written RCTI agreement per contractor is required. Any future change to Foundry-issues must re-open that compliance question first.
+> - **D2 — Close trigger: all projects approved.** The draft invoice fires only when *every* entry in that person-month is approved, so a contractor spanning three projects gets one invoice, not three. Mitigations for the slow-approver risk are in TASK-506 (chase notice + admin force-close).
+>
+> **Scope note:** monthly lodgement + batch approval apply to **everyone** who logs time. Invoice generation applies only to `employment: contractor` — full-time staff are paid via pay runs and must never reach the invoice surface.
+>
+> **Sequencing:** TASK-500 is a live revenue-leak fix that stands alone and should land first regardless of the rest of the phase. TASK-504 must not ship before TASK-500 — turning on auto-generation over today's shared status column would silently destroy the ability to bill those hours to clients.
+>
+> **BLOCKER — needs TT:** this phase is written after Phase 7 in file order, but TT called it priority. Confirm whether Phase 8 jumps ahead of the remaining Phase 7 tasks (TASK-401 onward) or waits. Per CLAUDE.md rule 1 the loop otherwise picks TASK-401 next.
+
+### TASK-500 — Decouple contractor-bill from client-invoice hour consumption
+**status:** todo
+**depends on:** —
+**acceptance:**
+- [ ] **Root cause:** `generateDraftBillFromHours` (`src/app/(app)/directory/people/[id]/draft-bill/actions.ts:156`) sets `TimesheetEntry.status = 'billed'`, while `previewInvoiceFromTimesheets` (`src/server/invoice-drafter.ts:79`) filters `status: 'approved'`. Billing a contractor therefore **permanently and silently** removes those hours from the client-invoice pool. It breaks the other way too: `draft-bill` filters `billedInvoiceId: null`, so client-invoicing first hides the hours from the contractor's own bill. The two legs are economically independent — the same hour is a cost at `Person.rate` and revenue at `Person.billRate` — and must stop competing for one marker.
+- [ ] `chore(db):` migration adding `TimesheetEntry.contractorBillId String?` + FK to `Bill` (`ON DELETE SET NULL`, mirroring the existing `billedInvoiceId` FK) + index. Separate commit from the wiring, per CLAUDE.md rule 9.
+- [ ] `generateDraftBillFromHours` stamps `contractorBillId` instead of mutating `status`. Its candidate query (`listContractorBillableEntries`, `src/server/timesheet.ts:279`) filters on `contractorBillId: null`, **not** `billedInvoiceId`.
+- [ ] `previewInvoiceFromTimesheets` is unchanged in behaviour but now provably unaffected by contractor billing — add a regression test asserting an entry with `contractorBillId` set still appears in the client draft.
+- [ ] **Backfill:** existing rows at `status='billed'` are contractor-billed hours that were wrongly excluded from client invoicing. Migration resolves each back to `approved` and sets `contractorBillId` from the `timesheetEntryIds` recorded in the `bill.created` audit events (`source: 'timesheet_draft_bill'`). Rows that can't be matched to an audit event are left at `approved` with `contractorBillId` null and **listed in the migration output** for manual review — do not guess.
+- [ ] Decide + implement `TimesheetStatus.billed`: with both legs on their own FK the enum value has no remaining writer. Either drop it in the same migration or document why it stays. Consumers keying off it must be rewired either way — `grid.tsx:642`, `submitted-overview.tsx:86`, `hours/panel.tsx:85`, `approve/page.tsx:284`, `directory/people/[id]/page.tsx:140`, `me/page.tsx:133`, `projects/[code]/tracker/page.tsx:73`.
+- [ ] `deleteDraftInvoice` audit event records how many timesheet entries the FK released (`ON DELETE SET NULL` already does the release; today the count is absent from the ledger).
+- [ ] Tests: contractor-bill-then-client-invoice and client-invoice-then-contractor-bill both bill the same hours exactly once on each leg; backfill resolver against fixture audit events.
+- [ ] Typecheck + tests + lint green. Migration is **manual against prod** (see memory: nothing auto-runs `migrate deploy`).
+- [ ] Commits: `chore(db): contractorBillId on TimesheetEntry` then `fix(TASK-500): decouple contractor bill from client invoice hour pool`
+
+**context:** Found tracing the timesheet→invoice chain for TT, 2026-08-31. Pre-existing on `main`, independent of the rest of Phase 8, and a live revenue leak on any contractor whose hours were drafted into a bill. Ships alone.
+
+### TASK-501 — TimesheetPeriod (person × calendar month) + true calendar-month grid
+**status:** todo
+**depends on:** —
+**acceptance:**
+- [ ] **Root cause:** `getMonthForPerson` (`src/server/timesheet.ts:21`) is `getRangeForPerson(personId, blockStart, 28)` anchored to `startOfFourWeekBlock` — a rolling 28-day block, not a calendar month. It drifts and never aligns to "August", so a contractor cannot select the period they need to invoice for.
+- [ ] `chore(db):` migration for `TimesheetPeriod`: `personId`, `year`, `month` (1–12), `state` (`open` / `lodged` / `approved` / `invoiced`), `lodgedAt`, `approvedAt`, `invoicedAt`, `contractorBillId?`. `@@unique([personId, year, month])`. Separate commit.
+- [ ] `getMonthForPerson(personId, year, month)` returns a true calendar month (28–31 days). `startOfFourWeekBlock` / `fourWeekDates` retained only if another surface still needs them — otherwise removed, not left dangling.
+- [ ] `/timesheet?view=month` renders the calendar month with a month picker (prev / next / jump), replacing the 4-week block. Week view stays the default for day-to-day entry and is unchanged — **lodgement becomes monthly, entry does not**.
+- [ ] Grid handles 31 columns without horizontal overflow on desktop; mobile falls back to the existing responsive treatment (TASK-220).
+- [ ] Periods are created lazily on first read for a person × month — no backfill of historical months.
+- [ ] Empty / loading / error states on the month view.
+- [ ] Tests: month boundaries incl. February and a leap year; `SaveSchema.dayCount` max 31 already accommodates a 31-day save (`actions.ts:33`) — assert a 31-day submit round-trips.
+- [ ] Typecheck + tests + lint green. Manual prod migration.
+- [ ] Commits: `chore(db): TimesheetPeriod model` then `feat(TASK-501): true calendar-month timesheet period`
+
+**context:** The missing unit. Today "submitted" is a property scattered across N entry rows with no object that can be lodged, approved, or reopened as a whole — which is why every downstream stage re-derives its own grouping and they all disagree (week in the approval queue, all-time in draft-bill, arbitrary date range in draft-invoice).
+
+### TASK-502 — Lodge-the-month action
+**status:** todo
+**depends on:** TASK-501
+**acceptance:**
+- [ ] One primary action on `/timesheet` month view: "Lodge August — 142.5h across 4 projects". Transitions `TimesheetPeriod.open → lodged` and every `draft` entry in the month to `submitted`, in one transaction.
+- [ ] Pre-flight validation surfaced **before** the mutation fires, not as a post-hoc error: unsubmitted drafts, zero-hour working days, and hours on projects the person isn't on the team for. Each is a warning the lodger can acknowledge, except zero total hours which blocks.
+- [ ] Reuses `saveTimesheet`'s existing auto-approve rules (`actions.ts:224`) unchanged — a super-admin lodging their own month still skips the queue; archived projects still always require explicit approval.
+- [ ] Approver notification per affected project (manager / primary partner), reusing the `approval_requested` UserUpdate + `sendTimesheetApprovalQueueNotice` path from TASK-221, but framed as a month rather than a week.
+- [ ] Re-lodging a `lodged` period is idempotent — picks up newly added entries without duplicating notifications (the 18h WhatsApp dedupe already covers identical bodies).
+- [ ] A `lodged` period is read-only for the submitter; recall is via the existing `recallSubmittedTimesheet` path, which must also return the period to `open`.
+- [ ] AuditEvent on lodge + recall, `entityType: 'timesheet_period'`.
+- [ ] Server-side capability check (`timesheet.submit`), Zod on inputs.
+- [ ] Tests: lodge with warnings, lodge blocked on zero hours, re-lodge idempotency, recall returns period to open.
+- [ ] Typecheck + tests + lint green.
+- [ ] Commit: `feat(TASK-502): lodge-the-month action`
+
+### TASK-503 — Person-month approval cards + approve-the-month
+**status:** todo
+**depends on:** TASK-501
+**acceptance:**
+- [ ] **Root cause:** `/timesheet/approve` groups pending strictly by person × **week** (`startOfWeek`, `approve/page.tsx`). A monthly lodgement shatters into ~5 weekly cards, so a manager approves the same person five times — directly opposed to batch approval.
+- [ ] Queue regroups by person × `TimesheetPeriod`, with per-project subtotals inside each card and the existing per-entry detail available on expand.
+- [ ] "Approve month" action per card. Sits underneath the existing `decideTimesheetEntries` — that action already partitions stale/undecidable IDs correctly (TASK-221) and must not be reimplemented.
+- [ ] A manager who leads only some of the person's projects sees and can approve **only their own** projects' entries; the card shows what's outstanding elsewhere and who owes it. The existing per-project gate in `decideTimesheetEntries` is the enforcement point.
+- [ ] `ApproveAllPendingButton` (firm-wide, irreversible) retained but demoted — the month card becomes the primary action. Its confirm dialog updates to say how many person-months it spans.
+- [ ] Period transitions to `approved` only when every entry in it is approved (D2). Partial approval leaves it `lodged`.
+- [ ] Send-back returns the affected entries to `draft` and the period to `open`, notifying the submitter with the reason (existing TASK-221 path).
+- [ ] Empty / loading / error states.
+- [ ] Tests: multi-project month with two approvers, partial approval does not close the period, full approval does, send-back reopens.
+- [ ] Typecheck + tests + lint green.
+- [ ] Commit: `feat(TASK-503): person-month approval cards`
+
+### TASK-504 — Auto-draft the contractor invoice on period close
+**status:** todo
+**depends on:** TASK-500, TASK-503
+**acceptance:**
+- [ ] **Must not ship before TASK-500.** Auto-generating over today's shared `status='billed'` marker would silently destroy the client-invoice pool at scale.
+- [ ] When a `TimesheetPeriod` transitions to `approved` and the person is `employment: contractor`, generate a draft invoice for that **period only** — scoped by `year`/`month`, never the all-time sweep `listContractorBillableEntries` does today.
+- [ ] **D1 — contractor confirms.** The draft is presented to the contractor, not auto-submitted. They supply their own invoice number (required), optionally attach their own PDF, and hit "Submit invoice". Only then does the `Bill` land in `BillStatus.pending_review` for the AP gate (A7 — no agent auto-executes).
+- [ ] Draft is priced at `Person.rate` (contractor cost rate), grouped one line per project, GST at 10%. Rate is **snapshotted onto the bill** at generation so a later rate change can't retroactively reprice a submitted invoice.
+- [ ] Full-time staff never reach this surface — the existing `employment !== 'contractor'` guard is preserved and tested.
+- [ ] Contractor notified in-app + WhatsApp: "Your August invoice is ready to confirm — $X across N projects."
+- [ ] AuditEvent on generate (`actor: agent`) and on contractor confirm (`actor: person`), both carrying the period, entry IDs, hours, rate and total.
+- [ ] Regenerating after a send-back supersedes the prior draft rather than creating a second one.
+- [ ] Tests: period close fires exactly one draft; FT staff excluded; rate snapshot survives a subsequent `Person.rate` change; confirm transitions to `pending_review`; regeneration supersedes.
+- [ ] Typecheck + tests + lint green.
+- [ ] Commit: `feat(TASK-504): auto-draft contractor invoice on period close`
+
+### TASK-505 — `/me/invoices` — contractor self-serve surface
+**status:** todo
+**depends on:** TASK-504
+**acceptance:**
+- [ ] **Root cause:** the only invoice-generation surface today is `/directory/people/[id]/draft-bill`, gated `hasAnyRole(['super_admin','admin','partner'])` on both page and action. Contractors are `staff` role + `employment: contractor` and cannot reach it — the workflow is admin-driven, which is the opposite of "easily do this individually". Note there is no separate contractor portal: magic-link lands them in the same app, so this is a permissions + surface change, not new infrastructure.
+- [ ] New `/me/invoices`: the contractor's own lodged months, each showing state (`lodged` / `approved` / `invoiced`), hours, value at their rate, and the resulting `Bill` status through to paid.
+- [ ] Confirm-and-submit action for a generated draft (TASK-504) lives here.
+- [ ] Self-only by default. Admin / partner keep the existing per-person view for support cases; the old `draft-bill` page either redirects here or is retired — decide and document which.
+- [ ] Empty / loading / error states — a contractor with nothing lodged sees guidance pointing at `/timesheet`.
+- [ ] Server-side check that the viewer is the subject (or admin tier). No client-trusted person ID.
+- [ ] Tests: self-only enforcement, admin override, state rendering across all four period states.
+- [ ] Typecheck + tests + lint green.
+- [ ] Commit: `feat(TASK-505): contractor self-serve invoice surface`
+
+### TASK-506 — Slow-approver mitigations: chase notice + admin force-close
+**status:** todo
+**depends on:** TASK-503
+**acceptance:**
+- [ ] Mitigates the known risk in D2: with full-month close, one unresponsive approver blocks a contractor's invoice and therefore their payment.
+- [ ] Scheduled chase: a `lodged` period with entries outstanding more than N days pings the specific approvers who owe it (in-app + WhatsApp), naming the person, the month, and the projects. N configurable via `FeatureFlag` / env, not hard-coded (A8 pattern).
+- [ ] Escalation to admin tier after a second interval.
+- [ ] Admin force-close: super_admin / admin can close a period over outstanding entries. Requires a reason, writes an AuditEvent naming what was force-approved and what was excluded, and notifies both the contractor and the bypassed approvers.
+- [ ] Dashboard leader-action for approvers with an overdue person-month, reusing the `leader-actions.ts` pattern.
+- [ ] Tests: chase fires once per interval, escalation ordering, force-close audit contents, force-closed period still generates a correct TASK-504 draft.
+- [ ] Typecheck + tests + lint green.
+- [ ] Commit: `feat(TASK-506): monthly approval chase + admin force-close`
+
 ---
 
 *End of TASKS.md. Start with TASK-001.*
