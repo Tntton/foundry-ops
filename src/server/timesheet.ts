@@ -1,5 +1,5 @@
 import { prisma } from '@/server/db';
-import type { TimesheetPeriodState } from '@prisma/client';
+import { type Prisma, type TimesheetPeriodState } from '@prisma/client';
 import type { Session } from '@/server/roles';
 import {
   addDays,
@@ -1032,4 +1032,275 @@ export async function preflightLodgeMonth(
     blocker,
     warnings,
   };
+}
+
+// ─── Period state reconciliation ────────────────────────────────────────────
+
+export type MonthKey = { year: number; month: number };
+
+/** The (year, month) buckets a set of dated rows falls into. */
+export function monthKeysFor(dates: Date[]): MonthKey[] {
+  const seen = new Map<string, MonthKey>();
+  for (const d of dates) {
+    const key = { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 };
+    seen.set(`${key.year}-${key.month}`, key);
+  }
+  return Array.from(seen.values());
+}
+
+/**
+ * Re-derive a person's period state from the entries actually in the month.
+ *
+ * Called after any approval decision. The period is a roll-up, so it must
+ * never be set directly from "what this decision did" — a manager who leads
+ * one of three projects approves their slice and the month is still
+ * outstanding. Only "every entry in the month is approved" closes it (D2,
+ * TT 2026-08-31), which is what gives a contractor one invoice per month
+ * instead of one per approver.
+ *
+ * Deliberately does NOT create period rows. A row existing means the person
+ * lodged that month; that invariant is what lets TASK-504 fire an invoice on
+ * close without also firing for people who only ever submitted week by week.
+ *
+ * `invoiced` is terminal here — a late decision must never silently reopen a
+ * month that has already been billed.
+ */
+export async function reconcileTimesheetPeriodStates(
+  tx: Prisma.TransactionClient,
+  personId: string,
+  months: MonthKey[],
+  now: Date,
+): Promise<void> {
+  for (const { year, month } of months) {
+    const period = await tx.timesheetPeriod.findUnique({
+      where: { personId_year_month: { personId, year, month } },
+      select: { id: true, state: true },
+    });
+    if (!period) continue;
+    if (period.state === 'invoiced') continue;
+
+    const start = monthStartFrom(year, month);
+    const end = addDays(start, daysInMonth(year, month));
+    const entries = await tx.timesheetEntry.findMany({
+      where: { personId, date: { gte: start, lt: end } },
+      select: { status: true },
+    });
+
+    let next: TimesheetPeriodState;
+    if (entries.length === 0) {
+      next = 'open';
+    } else if (entries.every((e) => e.status === 'approved')) {
+      next = 'approved';
+    } else if (entries.some((e) => e.status === 'submitted')) {
+      // Still partly with the approvers — a month one manager has cleared
+      // but another hasn't stays lodged.
+      next = 'lodged';
+    } else {
+      // Something was sent back to draft; the month is no longer a complete
+      // submission and has to be re-lodged.
+      next = 'open';
+    }
+    if (next === period.state) continue;
+
+    await tx.timesheetPeriod.update({
+      where: { id: period.id },
+      data: {
+        state: next,
+        approvedAt: next === 'approved' ? now : null,
+        ...(next === 'open' ? { lodgedAt: null } : {}),
+      },
+    });
+  }
+}
+
+// ─── Approval queue, grouped by person × month ──────────────────────────────
+
+export type PendingProjectGroup = {
+  projectId: string;
+  projectCode: string;
+  projectName: string;
+  hours: number;
+  entryIds: string[];
+  /** Can the viewer decide this project's rows? */
+  canDecide: boolean;
+  /** Who owes the decision when the viewer can't make it. */
+  owedByPersonId: string | null;
+};
+
+export type PendingMonthCard = {
+  personId: string;
+  personName: string;
+  initials: string;
+  headshotUrl: string | null;
+  year: number;
+  month: number;
+  monthStart: Date;
+  monthLabel: string;
+  /** Null when the person submitted week-by-week without lodging a month. */
+  periodState: TimesheetPeriodState | null;
+  projects: PendingProjectGroup[];
+  totalHours: number;
+  /** Hours the viewer can act on right now. */
+  decidableHours: number;
+  decidableEntryIds: string[];
+  entries: Array<{
+    id: string;
+    date: Date;
+    hours: number;
+    description: string;
+    projectCode: string;
+    projectName: string;
+    canDecide: boolean;
+  }>;
+};
+
+/**
+ * The approval queue as person-months.
+ *
+ * Was person × ISO week, which shattered one monthly lodgement into five
+ * cards and made a manager approve the same person five times — the opposite
+ * of the batch approval the monthly workflow is for (TASK-503).
+ *
+ * Scoping is per project, not per card: a manager who leads one of three
+ * projects sees the whole month for context but can only decide their slice.
+ * The rest is shown greyed with who owes it, so the submitter can chase the
+ * right person instead of guessing.
+ */
+export async function listPendingMonthCards(session: Session): Promise<PendingMonthCard[]> {
+  const roles = session.person.roles;
+  const canSeeAll = roles.includes('super_admin') || roles.includes('admin');
+  const entries = await prisma.timesheetEntry.findMany({
+    where: canSeeAll
+      ? { status: 'submitted' }
+      : {
+          status: 'submitted',
+          project: {
+            OR: [
+              { managerId: session.person.id },
+              { primaryPartnerId: session.person.id },
+            ],
+          },
+        },
+    orderBy: [{ date: 'asc' }],
+    include: {
+      person: {
+        select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
+      },
+      project: {
+        select: { id: true, code: true, name: true, managerId: true, primaryPartnerId: true },
+      },
+    },
+  });
+  if (entries.length === 0) return [];
+
+  // Non-admins get the rest of each month for context. Without this the card
+  // claims a month is 8h when it's 140h, and the submitter can't tell who
+  // still owes them a decision.
+  const contextEntries = canSeeAll
+    ? entries
+    : await prisma.timesheetEntry.findMany({
+        where: {
+          status: 'submitted',
+          personId: { in: Array.from(new Set(entries.map((e) => e.personId))) },
+        },
+        orderBy: [{ date: 'asc' }],
+        include: {
+          person: {
+            select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
+          },
+          project: {
+            select: { id: true, code: true, name: true, managerId: true, primaryPartnerId: true },
+          },
+        },
+      });
+
+  const canDecideProject = (p: { managerId: string | null; primaryPartnerId: string | null }) =>
+    canSeeAll || p.managerId === session.person.id || p.primaryPartnerId === session.person.id;
+
+  const cards = new Map<string, PendingMonthCard>();
+  for (const e of contextEntries) {
+    const year = e.date.getUTCFullYear();
+    const month = e.date.getUTCMonth() + 1;
+    const key = `${e.personId}|${year}-${month}`;
+    let card = cards.get(key);
+    if (!card) {
+      const monthStart = monthStartFrom(year, month);
+      card = {
+        personId: e.personId,
+        personName: `${e.person.firstName} ${e.person.lastName}`,
+        initials: e.person.initials,
+        headshotUrl: e.person.headshotUrl,
+        year,
+        month,
+        monthStart,
+        monthLabel: formatMonthLabel(monthStart),
+        periodState: null,
+        projects: [],
+        totalHours: 0,
+        decidableHours: 0,
+        decidableEntryIds: [],
+        entries: [],
+      };
+      cards.set(key, card);
+    }
+    const hours = Number(e.hours);
+    const mine = canDecideProject(e.project);
+
+    let group = card.projects.find((g) => g.projectId === e.projectId);
+    if (!group) {
+      group = {
+        projectId: e.projectId,
+        projectCode: e.project.code,
+        projectName: e.project.name,
+        hours: 0,
+        entryIds: [],
+        canDecide: mine,
+        owedByPersonId: mine ? null : (e.project.managerId ?? e.project.primaryPartnerId),
+      };
+      card.projects.push(group);
+    }
+    group.hours += hours;
+    group.entryIds.push(e.id);
+
+    card.totalHours += hours;
+    if (mine) {
+      card.decidableHours += hours;
+      card.decidableEntryIds.push(e.id);
+    }
+    card.entries.push({
+      id: e.id,
+      date: e.date,
+      hours,
+      description: e.description ?? '',
+      projectCode: e.project.code,
+      projectName: e.project.name,
+      canDecide: mine,
+    });
+  }
+
+  const list = Array.from(cards.values()).filter((c) => c.decidableEntryIds.length > 0);
+
+  // Attach lodgement state so the card can say whether this is a lodged
+  // month or loose weekly submissions.
+  const periods = await prisma.timesheetPeriod.findMany({
+    where: {
+      OR: list.map((c) => ({ personId: c.personId, year: c.year, month: c.month })),
+    },
+    select: { personId: true, year: true, month: true, state: true },
+  });
+  const periodByKey = new Map(
+    periods.map((p) => [`${p.personId}|${p.year}-${p.month}`, p.state]),
+  );
+  for (const c of list) {
+    c.periodState = periodByKey.get(`${c.personId}|${c.year}-${c.month}`) ?? null;
+    c.projects.sort((a, b) => a.projectCode.localeCompare(b.projectCode));
+  }
+
+  // Oldest month first — the longest-waiting contractor is the one whose
+  // invoice is most overdue.
+  return list.sort(
+    (a, b) =>
+      a.monthStart.getTime() - b.monthStart.getTime() ||
+      a.personName.localeCompare(b.personName),
+  );
 }

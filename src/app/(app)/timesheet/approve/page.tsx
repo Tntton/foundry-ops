@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import {
-  listPendingTimesheetEntriesForApprover,
+  listPendingMonthCards,
   listRecentDecidedEntriesForApprover,
   toDisplayStatus,
 } from '@/server/timesheet';
@@ -12,7 +12,7 @@ import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ApproveTimesheetForm } from './form';
+import { ApproveMonthCard } from './month-card';
 import { ApproveAllPendingButton } from './approve-all-button';
 
 export default async function TimesheetApprovePage({
@@ -23,85 +23,31 @@ export default async function TimesheetApprovePage({
   const session = await getSession();
   if (!session || !hasAnyRole(session, ['super_admin', 'admin', 'manager'])) notFound();
 
-  const [pending, recentDecided] = await Promise.all([
-    listPendingTimesheetEntriesForApprover(session),
+  const [monthCards, recentDecided] = await Promise.all([
+    listPendingMonthCards(session),
     listRecentDecidedEntriesForApprover(session, 30),
   ]);
 
-  // Group pending by person → week bucket.
-  type PendingGroup = {
-    personId: string;
-    personName: string;
-    initials: string;
-    headshotUrl: string | null;
-    weekStart: Date;
-    entries: typeof pending;
-    totalHours: number;
-    submittedByInitials: string | null; // when ≠ target person — i.e. SU on behalf
-    submittedByName: string | null;
-  };
-  const pendingGroups = new Map<string, PendingGroup>();
-  for (const e of pending) {
-    const weekStart = startOfWeek(e.date);
-    const key = `${e.personId}|${weekStart.toISOString()}`;
-    if (!pendingGroups.has(key)) {
-      pendingGroups.set(key, {
-        personId: e.personId,
-        personName: `${e.person.firstName} ${e.person.lastName}`,
-        initials: e.person.initials,
-        headshotUrl: e.person.headshotUrl,
-        weekStart,
-        entries: [],
-        totalHours: 0,
-        submittedByInitials: null,
-        submittedByName: null,
-      });
-    }
-    const g = pendingGroups.get(key)!;
-    g.entries.push(e);
-    g.totalHours += Number(e.hours);
-  }
-  const sortedPending = Array.from(pendingGroups.values()).sort(
-    (a, b) => a.weekStart.getTime() - b.weekStart.getTime(),
+  // Resolve the names of the leads who owe the decisions this viewer can't
+  // make, so a partial month says "with Michael" rather than an opaque id.
+  const owedIds = Array.from(
+    new Set(
+      monthCards.flatMap((c) =>
+        c.projects.map((p) => p.owedByPersonId).filter((id): id is string => id !== null),
+      ),
+    ),
   );
-
-  // Surface "submitted on behalf by X" on the approval card. Read the most
-  // recent `submitted` audit event for each (target person × week) bucket
-  // and fill in the actor when it's not the target — that's the super-admin
-  // override case the auditor / approver wants to see.
-  if (sortedPending.length > 0) {
-    const auditRows = await prisma.auditEvent.findMany({
-      where: {
-        entityType: 'timesheet_range',
-        action: 'submitted',
-        OR: sortedPending.map((g) => ({
-          entityId: {
-            startsWith: `${g.personId}:${g.weekStart.toISOString().slice(0, 10)}:`,
-          },
-        })),
-      },
-      orderBy: { at: 'desc' },
-      include: {
-        actor: {
-          select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
-        },
-      },
+  const owedNames = new Map<string, string>();
+  if (owedIds.length > 0) {
+    const people = await prisma.person.findMany({
+      where: { id: { in: owedIds } },
+      select: { id: true, firstName: true, lastName: true },
     });
-    for (const row of auditRows) {
-      // entityId looks like `<personId>:YYYY-MM-DD:<dayCount>` — match it
-      // back to the bucket and only write the marker when the actor != target.
-      const [targetPersonId, weekStartIso] = row.entityId.split(':');
-      if (!targetPersonId || !weekStartIso) continue;
-      const bucketKey = `${targetPersonId}|${new Date(`${weekStartIso}T00:00:00.000Z`).toISOString()}`;
-      const bucket = pendingGroups.get(bucketKey);
-      if (!bucket) continue;
-      if (bucket.submittedByInitials) continue; // newest already taken
-      if (!row.actor) continue;
-      if (row.actor.id === bucket.personId) continue; // self-submit, no marker
-      bucket.submittedByInitials = row.actor.initials;
-      bucket.submittedByName = `${row.actor.firstName} ${row.actor.lastName}`;
-    }
+    for (const p of people) owedNames.set(p.id, `${p.firstName} ${p.lastName}`);
   }
+
+  const decidableEntryIds = monthCards.flatMap((c) => c.decidableEntryIds);
+  const totalPendingHours = monthCards.reduce((s, c) => s + c.decidableHours, 0);
 
   // Group history by week of decision for a tidy timeline.
   const historyByWeek = new Map<
@@ -123,7 +69,6 @@ export default async function TimesheetApprovePage({
     (a, b) => b.weekStart.getTime() - a.weekStart.getTime(),
   );
 
-  const totalPendingHours = sortedPending.reduce((s, g) => s + g.totalHours, 0);
   const totalDecidedHours = sortedHistory.reduce((s, g) => s + g.totalHours, 0);
   const initialTab = searchParams.tab === 'history' ? 'history' : 'queue';
 
@@ -133,8 +78,10 @@ export default async function TimesheetApprovePage({
         <div>
           <h1 className="text-xl font-semibold text-ink">Timesheet approvals</h1>
           <p className="text-sm text-ink-3">
-            {pending.length} pending · {recentDecided.length} decided in last 30 days. Approved
-            entries flow into project P&amp;L, contractor draft bills, and the directory profile.
+            {monthCards.length} person-{monthCards.length === 1 ? 'month' : 'months'} pending ·{' '}
+            {recentDecided.length} decided in last 30 days. Approved entries flow into project
+            P&amp;L, contractor draft bills, and the directory profile. A month closes — and any
+            contractor invoice is raised — only once every project in it is approved.
           </p>
         </div>
         <div className="flex items-center gap-3 text-sm">
@@ -142,11 +89,12 @@ export default async function TimesheetApprovePage({
               actual pending work. Guarded by a native confirm()
               dialog (see ApproveAllPendingButton) so a rage-click
               can't bulk-approve in a blink. */}
-          {pending.length > 0 && (
+          {decidableEntryIds.length > 0 && (
             <ApproveAllPendingButton
-              entryIds={pending.map((e) => e.id)}
+              entryIds={decidableEntryIds}
               totalHours={totalPendingHours}
-              peopleCount={sortedPending.length}
+              monthCount={monthCards.length}
+              peopleCount={new Set(monthCards.map((c) => c.personId)).size}
             />
           )}
           <Link
@@ -164,7 +112,7 @@ export default async function TimesheetApprovePage({
       <Tabs defaultValue={initialTab}>
         <TabsList>
           <TabsTrigger value="queue">
-            Pending ({pending.length} entries · {totalPendingHours.toFixed(1)}h)
+            Pending ({monthCards.length} · {totalPendingHours.toFixed(1)}h)
           </TabsTrigger>
           <TabsTrigger value="history">
             Recent decisions ({recentDecided.length} · {totalDecidedHours.toFixed(1)}h)
@@ -172,60 +120,47 @@ export default async function TimesheetApprovePage({
         </TabsList>
 
         <TabsContent value="queue">
-          {sortedPending.length === 0 ? (
+          {monthCards.length === 0 ? (
             <Card>
               <div className="p-12 text-center text-sm text-ink-3">
-                Nothing to approve. Submitted timesheet entries land here when team members hit
-                Submit.
+                Nothing to approve. A person&apos;s month lands here when they lodge it from
+                their timesheet — or entry by entry if they submit week to week.
               </div>
             </Card>
           ) : (
             <div className="space-y-4">
-              {sortedPending.map((group) => {
-                const weekLabel = `${group.weekStart.toLocaleDateString('en-AU')} – ${new Date(
-                  group.weekStart.getTime() + 6 * 24 * 3600 * 1000,
-                ).toLocaleDateString('en-AU')}`;
-                return (
-                  <Card
-                    key={`${group.personId}|${group.weekStart.toISOString()}`}
-                    className="p-4"
-                  >
-                    <div className="mb-3 flex flex-wrap items-center gap-2">
-                      <PersonAvatar
-  className="h-7 w-7"
-  fallbackClassName="text-[10px]"
-  initials={group.initials}
-  headshotUrl={group.headshotUrl}
-/>
-                      <div className="font-medium text-ink">{group.personName}</div>
-                      <span className="text-sm text-ink-3">· week of {weekLabel}</span>
-                      {group.submittedByInitials && (
-                        <Badge
-                          variant="outline"
-                          className="text-[10px]"
-                          title={`Super-admin override: ${group.submittedByName} submitted on behalf of ${group.personName}.`}
-                        >
-                          submitted on behalf · {group.submittedByInitials}
-                        </Badge>
-                      )}
-                      <Badge variant="amber" className="ml-auto">
-                        {group.totalHours.toFixed(1)}h total
-                      </Badge>
-                    </div>
-
-                    <ApproveTimesheetForm
-                      entries={group.entries.map((e) => ({
-                        id: e.id,
-                        date: e.date.toLocaleDateString('en-AU'),
-                        hours: Number(e.hours),
-                        description: e.description ?? '',
-                        projectCode: e.project.code,
-                        projectName: e.project.name,
-                      }))}
-                    />
-                  </Card>
-                );
-              })}
+              {monthCards.map((card) => (
+                <ApproveMonthCard
+                  key={`${card.personId}|${card.year}-${card.month}`}
+                  personName={card.personName}
+                  initials={card.initials}
+                  headshotUrl={card.headshotUrl}
+                  monthLabel={card.monthLabel}
+                  periodState={card.periodState}
+                  totalHours={card.totalHours}
+                  decidableHours={card.decidableHours}
+                  decidableEntryIds={card.decidableEntryIds}
+                  projects={card.projects.map((p) => ({
+                    projectId: p.projectId,
+                    projectCode: p.projectCode,
+                    projectName: p.projectName,
+                    hours: p.hours,
+                    entryIds: p.entryIds,
+                    canDecide: p.canDecide,
+                    owedByName: p.owedByPersonId
+                      ? (owedNames.get(p.owedByPersonId) ?? null)
+                      : null,
+                  }))}
+                  entries={card.entries.map((e) => ({
+                    id: e.id,
+                    date: e.date.toLocaleDateString('en-AU'),
+                    hours: e.hours,
+                    description: e.description,
+                    projectCode: e.projectCode,
+                    canDecide: e.canDecide,
+                  }))}
+                />
+              ))}
             </div>
           )}
         </TabsContent>

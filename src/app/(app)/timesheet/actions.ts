@@ -20,10 +20,13 @@ import {
 import { revalidateScheduleSurfaces } from '@/server/revalidate-schedule';
 import {
   isBilledEitherLeg,
+  monthKeysFor,
   partitionDecisionBatch,
   preflightLodgeMonth,
+  reconcileTimesheetPeriodStates,
   resolveAutoApproveProjectIds,
   type LodgeWarning,
+  type MonthKey,
 } from '@/server/timesheet';
 
 // Snap hours to the nearest 0.5 — the granularity the timesheet grid uses.
@@ -993,6 +996,16 @@ export async function decideTimesheetEntries(
   }
   const approverName = `${session.person.firstName} ${session.person.lastName}`;
 
+  // Which person-months this decision touches, so the period roll-up can be
+  // re-derived from the entries afterwards rather than guessed at from the
+  // decision itself.
+  const monthsByPerson = new Map<string, MonthKey[]>();
+  for (const e of entries) {
+    const existing = monthsByPerson.get(e.personId) ?? [];
+    monthsByPerson.set(e.personId, [...existing, ...monthKeysFor([e.date])]);
+  }
+
+  const decidedAt = new Date();
   try {
     await prisma.$transaction(async (tx) => {
       for (const entry of entries) {
@@ -1003,7 +1016,7 @@ export async function decideTimesheetEntries(
               ? {
                   status: 'approved',
                   approvedById: session.person.id,
-                  approvedAt: new Date(),
+                  approvedAt: decidedAt,
                 }
               : {
                   status: 'draft',
@@ -1022,6 +1035,15 @@ export async function decideTimesheetEntries(
           },
           source: 'web',
         });
+      }
+
+      // Roll the period up from the entries now in the month. A month only
+      // closes when EVERY entry in it is approved (D2) — one manager
+      // clearing their slice of a three-project month leaves it lodged.
+      for (const [personId, months] of monthsByPerson) {
+        await reconcileTimesheetPeriodStates(tx, personId, monthKeysFor(
+          months.map((m) => monthStartFrom(m.year, m.month)),
+        ), decidedAt);
       }
 
       // Per-person feed: notify the submitters that their timesheet
