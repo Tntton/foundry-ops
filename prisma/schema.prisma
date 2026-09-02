@@ -1094,9 +1094,28 @@ model TimesheetPeriod {
   lodgedAt         DateTime?
   approvedAt       DateTime?
   invoicedAt       DateTime?
-  /// The contractor Bill generated when this period closed (TASK-504).
-  /// Null for full-time staff, who are paid via pay runs and never invoice.
+  /// The contractor Bill raised for this period, once the contractor has
+  /// confirmed it (TASK-504). Null for full-time staff, who are paid via pay
+  /// runs and never invoice, and null until the contractor submits.
   contractorBillId String?
+
+  // ── Invoice draft snapshot (TASK-504) ─────────────────────────────────
+  // Taken the moment the period closes, NOT when the contractor opens the
+  // confirm screen. Foundry does not issue this invoice — the contractor
+  // does (D1, TT 2026-08-31) — but the numbers they are asked to confirm
+  // must be the ones the approvals actually produced. Without a snapshot,
+  // editing Person.rate between close and confirm would silently reprice a
+  // month that was already signed off.
+  //
+  // Only the rate is frozen. Line grouping is recomputed from the period's
+  // entries at confirm time, which is safe because a closed period's entries
+  // are all `approved` and can no longer move.
+  /// Person.rate in AUD cents at the moment the period closed.
+  draftRateCents        Int?
+  draftHours            Decimal?  @db.Decimal(8, 2)
+  /// hours × rate, ex GST, in AUD cents.
+  draftAmountExGstCents Int?
+  draftPreparedAt       DateTime?
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
 
