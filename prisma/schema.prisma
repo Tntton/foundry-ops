@@ -201,6 +201,13 @@ enum TimesheetStatus {
   // Never re-add a shared status marker for either.
 }
 
+enum TimesheetPeriodState {
+  open
+  lodged
+  approved
+  invoiced
+}
+
 enum ExpenseStatus {
   draft
   submitted
@@ -498,6 +505,7 @@ model Person {
   managerOfProjects Project[]    @relation("ProjectManager")
   projectTeamMemberships ProjectTeam[]
   timesheetEntries TimesheetEntry[]
+  timesheetPeriods TimesheetPeriod[]
   contractorInvoices ContractorInvoice[]
   expenses         Expense[]
   approvalsRequested Approval[]  @relation("ApprovalRequestedBy")
@@ -1058,6 +1066,48 @@ model TimesheetEntry {
   @@index([contractorBillId])
 }
 
+/// A person's calendar month of time, as a single lodgeable unit.
+///
+/// Before TASK-501 "submitted" was only ever a property scattered across N
+/// TimesheetEntry rows, with no object representing the month itself. Every
+/// downstream stage therefore re-derived its own grouping and they all
+/// disagreed — the approval queue grouped by week, the contractor draft-bill
+/// swept all-time, and the client draft-invoice took an arbitrary date range.
+/// This is the missing unit: one row per person × calendar month, which can
+/// be lodged, approved, and invoiced as a whole.
+///
+/// Rows are created lazily on first read of a month (getOrCreateTimesheetPeriod)
+/// — there is no backfill of history. A month with no row is `open` by
+/// definition.
+///
+/// `state` advances open → lodged → approved → invoiced. It never skips
+/// backwards on its own: a send-back from the approval queue explicitly
+/// returns it to `open` (TASK-503).
+model TimesheetPeriod {
+  id               String               @id @default(cuid())
+  personId         String
+  /// Calendar year, e.g. 2026.
+  year             Int
+  /// 1-based month, 1 = January. Matches `monthNumber()` in lib/week.ts.
+  month            Int
+  state            TimesheetPeriodState @default(open)
+  lodgedAt         DateTime?
+  approvedAt       DateTime?
+  invoicedAt       DateTime?
+  /// The contractor Bill generated when this period closed (TASK-504).
+  /// Null for full-time staff, who are paid via pay runs and never invoice.
+  contractorBillId String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  person           Person @relation(fields: [personId], references: [id])
+  contractorBill   Bill?  @relation(fields: [contractorBillId], references: [id])
+
+  @@unique([personId, year, month])
+  @@index([state])
+  @@index([year, month])
+}
+
 /// Historical aggregated contractor cost. Ingested from the FY26
 /// master tracker — one row per contractor × project × invoice-period
 /// bucket. The source spreadsheet doesn't have per-day granularity,
@@ -1258,6 +1308,8 @@ model Bill {
   attributedTo             Person?    @relation("BillAttributedTo", fields: [attributedToPersonId], references: [id])
   // Hours this bill invoices Foundry for (contractor self-bill path).
   timesheetEntries         TimesheetEntry[]
+  // The lodgement period(s) this bill was generated from (TASK-501).
+  timesheetPeriods         TimesheetPeriod[]
 }
 
 // ============================================================================
