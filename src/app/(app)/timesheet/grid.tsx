@@ -480,7 +480,7 @@ export function TimesheetGrid({
         <div className="flex items-center gap-2">
           <span className="text-xs text-ink-3">
             {view === 'month'
-              ? 'Submit marks all editable rows as submitted for the whole block.'
+              ? 'Submit marks every editable row in the month as submitted.'
               : 'Submit marks this week for approval.'}
           </span>
           <SaveButton intent="save" label="Save draft" variant="outline" />

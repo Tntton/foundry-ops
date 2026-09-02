@@ -1,6 +1,7 @@
 import { prisma } from '@/server/db';
+import type { TimesheetPeriodState } from '@prisma/client';
 import type { Session } from '@/server/roles';
-import { addDays } from '@/lib/week';
+import { addDays, daysInMonth, monthNumber, monthStartFrom, startOfMonth } from '@/lib/week';
 
 /**
  * What the UI shows for an entry. Wider than the DB enum: `billed` is a
@@ -64,11 +65,25 @@ export type TimesheetRow = {
   cells: TimesheetCell[];
 };
 
+/**
+ * A person's grid for one REAL calendar month (28–31 days).
+ *
+ * Was a rolling 28-day block anchored on the current week, which drifted and
+ * never aligned to a named month — so a contractor could not select the
+ * period they needed to invoice for (TASK-501). Takes the month start rather
+ * than (year, month) to mirror `getWeekForPerson(personId, weekStart)`; use
+ * `monthStartFrom(year, month)` from lib/week to convert.
+ */
 export async function getMonthForPerson(
   personId: string,
-  blockStart: Date,
+  monthStart: Date,
 ): Promise<TimesheetRow[]> {
-  return getRangeForPerson(personId, blockStart, 28);
+  const start = startOfMonth(monthStart);
+  return getRangeForPerson(
+    personId,
+    start,
+    daysInMonth(start.getUTCFullYear(), monthNumber(start)),
+  );
 }
 
 export async function getWeekForPerson(
@@ -714,4 +729,120 @@ export function partitionDecisionBatch<T extends DecidableEntry>(
     alreadyDecided: found.filter((e) => e.status !== 'submitted'),
     missingCount: Math.max(0, new Set(requestedIds).size - found.length),
   };
+}
+
+// ─── Lodgement periods (person × calendar month) ────────────────────────────
+
+export type TimesheetPeriodSummary = {
+  id: string;
+  personId: string;
+  year: number;
+  month: number;
+  /** UTC midnight on the 1st — the anchor the grid and actions work from. */
+  monthStart: Date;
+  state: TimesheetPeriodState;
+  lodgedAt: Date | null;
+  approvedAt: Date | null;
+  invoicedAt: Date | null;
+  contractorBillId: string | null;
+};
+
+function toPeriodSummary(row: {
+  id: string;
+  personId: string;
+  year: number;
+  month: number;
+  state: TimesheetPeriodState;
+  lodgedAt: Date | null;
+  approvedAt: Date | null;
+  invoicedAt: Date | null;
+  contractorBillId: string | null;
+}): TimesheetPeriodSummary {
+  return { ...row, monthStart: monthStartFrom(row.year, row.month) };
+}
+
+/**
+ * The period row for a person × month, created on first read.
+ *
+ * Lazy creation rather than a backfill: a month with no row is `open` by
+ * definition, so history needs no migration and a person who never logs a
+ * given month never gets a row for it.
+ *
+ * Races (two tabs, a double-tap, a WhatsApp log landing mid-read) resolve on
+ * the `(personId, year, month)` unique index — the upsert makes this safe to
+ * call from anywhere without a transaction.
+ */
+export async function getOrCreateTimesheetPeriod(
+  personId: string,
+  monthStart: Date,
+): Promise<TimesheetPeriodSummary> {
+  const start = startOfMonth(monthStart);
+  const year = start.getUTCFullYear();
+  const month = monthNumber(start);
+  const row = await prisma.timesheetPeriod.upsert({
+    where: { personId_year_month: { personId, year, month } },
+    create: { personId, year, month },
+    update: {},
+  });
+  return toPeriodSummary(row);
+}
+
+/**
+ * Read-only lookup — does NOT create. Use where a missing row should read as
+ * `open` without writing (listings, dashboards, anything that might run for
+ * many people at once).
+ */
+export async function findTimesheetPeriod(
+  personId: string,
+  monthStart: Date,
+): Promise<TimesheetPeriodSummary | null> {
+  const start = startOfMonth(monthStart);
+  const row = await prisma.timesheetPeriod.findUnique({
+    where: {
+      personId_year_month: {
+        personId,
+        year: start.getUTCFullYear(),
+        month: monthNumber(start),
+      },
+    },
+  });
+  return row ? toPeriodSummary(row) : null;
+}
+
+/** Hours + entry counts for a person's month, bucketed by DB status. */
+export type PeriodTotals = {
+  totalHours: number;
+  draftHours: number;
+  submittedHours: number;
+  approvedHours: number;
+  entryCount: number;
+  projectCount: number;
+};
+
+export async function getPeriodTotals(
+  personId: string,
+  monthStart: Date,
+): Promise<PeriodTotals> {
+  const start = startOfMonth(monthStart);
+  const end = addDays(start, daysInMonth(start.getUTCFullYear(), monthNumber(start)));
+  const entries = await prisma.timesheetEntry.findMany({
+    where: { personId, date: { gte: start, lt: end } },
+    select: { hours: true, status: true, projectId: true },
+  });
+  const totals: PeriodTotals = {
+    totalHours: 0,
+    draftHours: 0,
+    submittedHours: 0,
+    approvedHours: 0,
+    entryCount: entries.length,
+    projectCount: new Set(entries.map((e) => e.projectId)).size,
+  };
+  for (const e of entries) {
+    const h = Number(e.hours);
+    totals.totalHours += h;
+    if (e.status === 'draft') totals.draftHours += h;
+    else if (e.status === 'submitted') totals.submittedHours += h;
+    else totals.approvedHours += h;
+  }
+  return totals;
 }

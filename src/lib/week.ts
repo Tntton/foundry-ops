@@ -67,18 +67,58 @@ export function formatDayLabel(date: Date): string {
   return date.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
-/**
- * Returns the Monday that starts the block of four Mon–Sun weeks whose last
- * week contains the given date. This gives a rolling 28-day grid anchored to
- * the reference date (typically "today"), with the current week as the rightmost
- * column group — so earlier rows are historical context, the right-hand column
- * is what you're actively logging.
- */
-export function startOfFourWeekBlock(reference: Date): Date {
-  const currentWeekStart = startOfWeek(reference);
-  return addDays(currentWeekStart, -21);
+// ─── Calendar months ────────────────────────────────────────────────────────
+//
+// The month grid used to be a rolling 28-day block anchored on the current
+// week (`startOfFourWeekBlock` / `fourWeekDates`, removed in TASK-501). It
+// drifted against the calendar and so never once lined up with "August" —
+// which made monthly lodgement impossible: a contractor cannot invoice for a
+// period the app can't select. These are real calendar months, 28–31 days.
+
+/** UTC midnight on the 1st of the month containing `date`. */
+export function startOfMonth(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
 }
 
-export function fourWeekDates(blockStart: Date): Date[] {
-  return Array.from({ length: 28 }, (_, i) => addDays(blockStart, i));
+/** Days in the given month. `month` is 1-based (1 = January). */
+export function daysInMonth(year: number, month: number): number {
+  // Day 0 of the *next* month is the last day of this one — handles leap
+  // years without a special case.
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/** Every day in the month containing `monthStart`, in order. */
+export function monthDates(monthStart: Date): Date[] {
+  const n = daysInMonth(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1);
+  return Array.from({ length: n }, (_, i) => addDays(monthStart, i));
+}
+
+/**
+ * Shift by whole months, staying on the 1st. Built from the UTC year/month
+ * parts rather than `setUTCMonth` so it can't overflow (31 Jan + 1 month
+ * landing on 2 or 3 March).
+ */
+export function addMonths(monthStart: Date, delta: number): Date {
+  return new Date(
+    Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + delta, 1),
+  );
+}
+
+/** "August 2026" — the label a person recognises as their lodgement period. */
+export function formatMonthLabel(monthStart: Date): string {
+  return monthStart.toLocaleDateString('en-AU', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+/** 1-based month number (1 = January), matching TimesheetPeriod.month. */
+export function monthNumber(monthStart: Date): number {
+  return monthStart.getUTCMonth() + 1;
+}
+
+/** Reconstruct the month start from a TimesheetPeriod's (year, month). */
+export function monthStartFrom(year: number, month: number): Date {
+  return new Date(Date.UTC(year, month - 1, 1));
 }

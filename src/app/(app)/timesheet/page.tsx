@@ -1,9 +1,11 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import type { TimesheetPeriodState } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { hasAnyRole } from '@/server/roles';
 import {
+  findTimesheetPeriod,
   getMonthForPerson,
   getWeekForPerson,
   listPersonTimesheetEntries,
@@ -14,9 +16,11 @@ import { prisma } from '@/server/db';
 import {
   addDays,
   formatIsoDate,
-  fourWeekDates,
+  addMonths,
+  formatMonthLabel,
+  monthDates,
   parseIsoDate,
-  startOfFourWeekBlock,
+  startOfMonth,
   startOfWeek,
   weekDates as weekDatesFn,
   todayInFirmTz,
@@ -149,14 +153,25 @@ export default async function TimesheetPage({
   }
 
   const anchor = parseIsoDate(searchParams.week);
-  const blockStart = view === 'month' ? startOfFourWeekBlock(anchor) : startOfWeek(anchor);
-  const cells = view === 'month' ? fourWeekDates(blockStart) : weekDatesFn(blockStart);
+  // Month view is a REAL calendar month (28–31 days), not the old rolling
+  // 28-day block — a lodgement period has to be nameable ("August") or a
+  // contractor can't invoice for it (TASK-501).
+  const blockStart = view === 'month' ? startOfMonth(anchor) : startOfWeek(anchor);
+  const cells = view === 'month' ? monthDates(blockStart) : weekDatesFn(blockStart);
   const rangeEnd = addDays(blockStart, cells.length - 1);
 
-  const prevDelta = view === 'month' ? -28 : -7;
-  const nextDelta = view === 'month' ? 28 : 7;
-  const prev = formatIsoDate(addDays(blockStart, prevDelta));
-  const next = formatIsoDate(addDays(blockStart, nextDelta));
+  // Step by whole months in month view so the picker lands on the 1st every
+  // time; a fixed ±28d would drift off the calendar within two hops.
+  const prev = formatIsoDate(
+    view === 'month' ? addMonths(blockStart, -1) : addDays(blockStart, -7),
+  );
+  const next = formatIsoDate(
+    view === 'month' ? addMonths(blockStart, 1) : addDays(blockStart, 7),
+  );
+  const periodLabel =
+    view === 'month'
+      ? formatMonthLabel(blockStart)
+      : `Week of ${blockStart.toLocaleDateString('en-AU')}`;
 
   function buildLink(params: Record<string, string | undefined>): string {
     const merged: Record<string, string | undefined> = {
@@ -346,14 +361,23 @@ export default async function TimesheetPage({
 
   const canApprove = hasAnyRole(session, ['super_admin', 'admin', 'manager']);
 
+  // Lodgement state for the month on screen. Read-only here — the row is
+  // created by the lodge action, not by looking at the grid, so browsing an
+  // admin through twelve months of someone's history doesn't litter the table
+  // with twelve `open` rows. A month with no row IS open, which is what the
+  // null branch renders.
+  const period = view === 'month' ? await findTimesheetPeriod(target.id, blockStart) : null;
+  const periodState = period?.state ?? 'open';
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm text-ink">
           <span>🕒</span>
           <span className="font-semibold">
-            {view === 'week' ? 'Log hours · this week' : 'Log hours · 4-week view'}
+            {view === 'week' ? 'Log hours · this week' : `Log hours · ${periodLabel}`}
           </span>
+          {view === 'month' && <PeriodStateChip state={periodState} />}
         </div>
         <Link
           href={
@@ -398,8 +422,10 @@ export default async function TimesheetPage({
                 : 'Timesheet'}
             </h1>
             <p className="text-sm text-ink-3">
-              {view === 'month' ? 'Rolling 4-week block · ' : 'Week of '}
-              {blockStart.toLocaleDateString('en-AU')} – {rangeEnd.toLocaleDateString('en-AU')}.
+              {periodLabel}
+              {view === 'month'
+                ? ` · ${blockStart.toLocaleDateString('en-AU')} – ${rangeEnd.toLocaleDateString('en-AU')} · ${cells.length} days.`
+                : ` – ${rangeEnd.toLocaleDateString('en-AU')}.`}{' '}
               Submitted entries stay visible. Logging time on a new project auto-adds the
               person to the project team for resourcing.
             </p>
@@ -716,3 +742,44 @@ function isoWeekNumber(d: Date): number {
 // AvailabilityForecast view + editor live at /availability now — see
 // the schedule-table.tsx + availability-editor.tsx components in that
 // route. Removed from this file when the surface was split out.
+
+/**
+ * Where a month sits in the lodgement chain. Rendered only in month view —
+ * the week grid is for day-to-day entry and has no period of its own.
+ *
+ * `open` is the resting state and covers a month with no TimesheetPeriod row
+ * at all, so this never has to distinguish "not started" from "no record".
+ */
+function PeriodStateChip({ state }: { state: TimesheetPeriodState }) {
+  const copy: Record<TimesheetPeriodState, { label: string; className: string; title: string }> = {
+    open: {
+      label: 'Open',
+      className: 'border-line text-ink-3',
+      title: 'Still being logged. Lodge the month when it is complete.',
+    },
+    lodged: {
+      label: 'Lodged',
+      className: 'border-status-amber/40 bg-status-amber/10 text-status-amber',
+      title: 'Submitted for approval. Waiting on the project leads.',
+    },
+    approved: {
+      label: 'Approved',
+      className: 'border-status-green/40 bg-status-green/10 text-status-green',
+      title: 'Every entry in the month is approved.',
+    },
+    invoiced: {
+      label: 'Invoiced',
+      className: 'border-brand/40 bg-brand/10 text-brand',
+      title: 'A contractor invoice has been raised for this month.',
+    },
+  };
+  const c = copy[state];
+  return (
+    <span
+      title={c.title}
+      className={`rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${c.className}`}
+    >
+      {c.label}
+    </span>
+  );
+}
