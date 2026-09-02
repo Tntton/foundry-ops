@@ -12,6 +12,7 @@ import { emitUserUpdateMany } from '@/server/user-updates';
 import {
   addDays,
   daysInMonth,
+  formatMonthLabel,
   monthStartFrom,
   parseIsoDate,
   startOfWeek,
@@ -1480,4 +1481,177 @@ export async function lodgeMonth(
     parts.push('Nothing new to submit — already with the approvers.');
   }
   return { status: 'success', message: parts.join(' ') };
+}
+
+// ─── Admin force-close ──────────────────────────────────────────────────────
+
+const ForceCloseSchema = z.object({
+  targetPersonId: z.string().min(1),
+  year: z.coerce.number().int().min(2000).max(2100),
+  month: z.coerce.number().int().min(1).max(12),
+  /** Mandatory. Force-closing bypasses named approvers; the record has to say why. */
+  reason: z.string().trim().min(10).max(1000),
+});
+
+/**
+ * Close a lodged month over the top of outstanding approvals.
+ *
+ * The escape hatch for D2's known cost: a month closes only when every
+ * project is approved, so one unresponsive lead can block a contractor's
+ * payment indefinitely. The chase (TASK-506) nudges and escalates; this is
+ * what an admin does when that hasn't worked.
+ *
+ * Deliberately NOT silent. It approves the outstanding entries in the
+ * admin's name, records exactly which projects were bypassed and who owed
+ * them, and tells both the contractor and every bypassed approver. An
+ * approval that nobody can see afterwards is worse than a late one.
+ */
+export async function forceCloseTimesheetPeriod(
+  _prev: TimesheetLodgeState,
+  formData: FormData,
+): Promise<TimesheetLodgeState> {
+  const session = await getSession();
+  if (!session || !hasAnyRole(session, ['super_admin', 'admin'])) {
+    return { status: 'error', message: 'Only super admins and admins can force-close a month.' };
+  }
+
+  const parsed = ForceCloseSchema.safeParse({
+    targetPersonId: formData.get('targetPersonId'),
+    year: formData.get('year'),
+    month: formData.get('month'),
+    reason: formData.get('reason'),
+  });
+  if (!parsed.success) {
+    return {
+      status: 'error',
+      message:
+        'A reason of at least 10 characters is required — this bypasses named approvers.',
+    };
+  }
+
+  const { targetPersonId, year, month, reason } = parsed.data;
+  const monthLabel = formatMonthLabel(monthStartFrom(year, month));
+
+  const period = await prisma.timesheetPeriod.findUnique({
+    where: { personId_year_month: { personId: targetPersonId, year, month } },
+    select: { id: true, state: true },
+  });
+  if (!period) return { status: 'error', message: `No lodged ${monthLabel} to close.` };
+  if (period.state !== 'lodged') {
+    return {
+      status: 'error',
+      message: `${monthLabel} is ${period.state}, not awaiting approval — nothing to force.`,
+    };
+  }
+
+  const monthStart = monthStartFrom(year, month);
+  const monthEnd = addDays(monthStart, daysInMonth(year, month));
+  const outstanding = await prisma.timesheetEntry.findMany({
+    where: {
+      personId: targetPersonId,
+      date: { gte: monthStart, lt: monthEnd },
+      status: 'submitted',
+    },
+    select: {
+      id: true,
+      hours: true,
+      project: {
+        select: { id: true, code: true, managerId: true, primaryPartnerId: true },
+      },
+    },
+  });
+  if (outstanding.length === 0) {
+    return { status: 'error', message: `Nothing outstanding in ${monthLabel}.` };
+  }
+
+  const bypassed = new Map<string, { code: string; hours: number; owed: string[] }>();
+  const bypassedApproverIds = new Set<string>();
+  for (const e of outstanding) {
+    const cur = bypassed.get(e.project.id) ?? { code: e.project.code, hours: 0, owed: [] };
+    cur.hours += Number(e.hours);
+    for (const id of [e.project.managerId, e.project.primaryPartnerId]) {
+      if (id && !cur.owed.includes(id)) cur.owed.push(id);
+      if (id && id !== session.person.id) bypassedApproverIds.add(id);
+    }
+    bypassed.set(e.project.id, cur);
+  }
+  const bypassedList = Array.from(bypassed.values());
+  const forcedHours = bypassedList.reduce((s, b) => s + b.hours, 0);
+  const closedAt = new Date();
+
+  let closedPeriods: ClosedPeriod[] = [];
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.timesheetEntry.updateMany({
+        where: { id: { in: outstanding.map((e) => e.id) } },
+        data: { status: 'approved', approvedById: session.person.id, approvedAt: closedAt },
+      });
+
+      // Reuse the normal roll-up so a force-close produces exactly the same
+      // period state — and the same frozen invoice draft — as a month that
+      // closed the ordinary way.
+      closedPeriods = await reconcileTimesheetPeriodStates(
+        tx,
+        targetPersonId,
+        [{ year, month }],
+        closedAt,
+      );
+
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'force_closed',
+        entity: {
+          type: 'timesheet_period',
+          id: `${targetPersonId}:${year}-${String(month).padStart(2, '0')}`,
+          before: { state: 'lodged' },
+          after: {
+            state: 'approved',
+            reason,
+            forcedEntryIds: outstanding.map((e) => e.id),
+            forcedHours,
+            bypassedProjects: bypassedList.map((b) => ({
+              projectCode: b.code,
+              hours: b.hours,
+              owedByPersonIds: b.owed,
+            })),
+          },
+        },
+        source: 'web',
+      });
+
+      const notify = [targetPersonId, ...bypassedApproverIds].filter(
+        (id) => id !== session.person.id,
+      );
+      if (notify.length > 0) {
+        await emitUserUpdateMany(tx, notify, {
+          kind: 'approval_requested',
+          title: `${monthLabel} was closed by an admin`,
+          body:
+            `${session.person.firstName} ${session.person.lastName} approved the outstanding ` +
+            `${forcedHours.toFixed(1)}h on ${bypassedList.map((b) => b.code).join(', ')} ` +
+            `so the month could close. Reason: ${reason}`,
+          href: '/timesheet/approve',
+          entityType: 'timesheet_period',
+          entityId: null,
+        });
+      }
+    });
+  } catch (err) {
+    console.error('[timesheet.forceClose] failed:', err);
+    return { status: 'error', message: 'Force-close failed — try again.' };
+  }
+
+  revalidatePath('/timesheet/approve');
+  revalidatePath('/me/invoices');
+  revalidatePath('/updates');
+  revalidateScheduleSurfaces({ personId: targetPersonId });
+
+  const invoiced = closedPeriods.some((c) => c.draft);
+  return {
+    status: 'success',
+    message:
+      `${monthLabel} closed — ${forcedHours.toFixed(1)}h approved over ` +
+      `${bypassedList.length} outstanding ${bypassedList.length === 1 ? 'project' : 'projects'}.` +
+      (invoiced ? ' The contractor can now submit their invoice.' : ''),
+  };
 }

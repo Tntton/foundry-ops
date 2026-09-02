@@ -27,6 +27,7 @@ export type LeaderPendingAction = {
     | 'expense_approval_queue'
     | 'invoice_approval_queue'
     | 'timesheet_approval_queue'
+    | 'timesheet_month_overdue'
     // Operational signals on projects I lead
     | 'project_stale'
     | 'project_missing_milestones'
@@ -176,6 +177,47 @@ export async function listLeaderPendingActions(
     listStaffPendingActions(personId),
   ]);
 
+  // Lodged months this viewer is holding up. Scoped the same way as the
+  // approval queue: admins see the firm, leads see their own projects.
+  const overdueMonths: Array<{ personName: string; ageDays: number }> = [];
+  if (isManager || isPartner || isAdmin) {
+    const CHASE_DAYS = 3;
+    const cutoff = new Date(Date.now() - CHASE_DAYS * 24 * 3600 * 1000);
+    const stuck = await prisma.timesheetPeriod.findMany({
+      where: {
+        state: 'lodged',
+        lodgedAt: { not: null, lte: cutoff },
+        person: isAdmin
+          ? undefined
+          : {
+              timesheetEntries: {
+                some: {
+                  status: 'submitted',
+                  project: {
+                    OR: [
+                      { managerId: session.person.id },
+                      { primaryPartnerId: session.person.id },
+                    ],
+                  },
+                },
+              },
+            },
+      },
+      select: {
+        lodgedAt: true,
+        person: { select: { id: true, firstName: true, lastName: true } },
+      },
+      take: 50,
+    });
+    for (const p of stuck) {
+      if (p.person.id === session.person.id) continue; // not your own sheet
+      overdueMonths.push({
+        personName: `${p.person.firstName} ${p.person.lastName}`,
+        ageDays: Math.floor((Date.now() - p.lodgedAt!.getTime()) / 86_400_000),
+      });
+    }
+  }
+
   // ── 1. Approval queues — bills / expenses / invoices ─────────
   if (canApproveBills && billCount > 0) {
     actions.push({
@@ -219,6 +261,27 @@ export async function listLeaderPendingActions(
       href: '/timesheet/approve',
       tone: 'amber',
       count: timesheetsToApprove,
+    });
+  }
+
+  // ── 2b. Lodged months I'm holding up ─────────────────────────
+  // Sharper than the entry count above: a month blocks the
+  // contractor's INVOICE, not just their timesheet (D2 — a month
+  // closes only when every project in it is approved). Surfaced
+  // separately so an overdue payment doesn't hide inside a generic
+  // "N entries to approve" tally.
+  if (overdueMonths.length > 0) {
+    const names = Array.from(new Set(overdueMonths.map((m) => m.personName)));
+    const oldest = Math.max(...overdueMonths.map((m) => m.ageDays));
+    actions.push({
+      kind: 'timesheet_month_overdue',
+      title: `${overdueMonths.length} lodged ${overdueMonths.length === 1 ? 'month' : 'months'} waiting on you`,
+      detail:
+        `${names.slice(0, 3).join(', ')}${names.length > 3 ? ` +${names.length - 3} more` : ''}` +
+        ` · oldest ${oldest}d. Their invoice can't be raised until the whole month is approved.`,
+      href: '/timesheet/approve',
+      tone: oldest >= 7 ? 'red' : 'amber',
+      count: overdueMonths.length,
     });
   }
 
