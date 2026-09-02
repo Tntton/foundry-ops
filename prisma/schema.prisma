@@ -1116,6 +1116,17 @@ model TimesheetPeriod {
   /// hours × rate, ex GST, in AUD cents.
   draftAmountExGstCents Int?
   draftPreparedAt       DateTime?
+
+  // ── Chase tracking (TASK-506) ─────────────────────────────────────────
+  // D2 closes a month only when every project is approved, which means one
+  // unresponsive approver blocks a contractor's invoice and therefore their
+  // payment. These stamp the nudges so a daily cron chases on an interval
+  // rather than emitting a feed row every single day.
+  /// Last time the owing approvers were nudged about this lodged month.
+  lastChasedAt          DateTime?
+  /// Set once when the chase escalates to the admin tier. Escalation fires
+  /// at most once per lodgement; re-lodging clears it.
+  escalatedAt           DateTime?
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
 
@@ -1125,6 +1136,7 @@ model TimesheetPeriod {
   @@unique([personId, year, month])
   @@index([state])
   @@index([year, month])
+  @@index([state, lodgedAt])
 }
 
 /// Historical aggregated contractor cost. Ingested from the FY26
