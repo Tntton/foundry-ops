@@ -1741,7 +1741,12 @@ Migrate personnel fields, functionality and taxonomy to the FY27 role architectu
 >
 > **Sequencing:** TASK-500 is a live revenue-leak fix that stands alone and should land first regardless of the rest of the phase. TASK-504 must not ship before TASK-500 — turning on auto-generation over today's shared status column would silently destroy the ability to bill those hours to clients.
 >
-> **BLOCKER — needs TT:** this phase is written after Phase 7 in file order, but TT called it priority. Confirm whether Phase 8 jumps ahead of the remaining Phase 7 tasks (TASK-401 onward) or waits. Per CLAUDE.md rule 1 the loop otherwise picks TASK-401 next.
+> **Sequencing, resolved 2026-09-01:** TT said "go ahead" then "keep going until you're done", so Phase 8 ran ahead of the remaining Phase 7 tasks. Phase 7 is in any case gated on MP sign-off and OD-1. **All seven tasks are done** — the loop's next `todo` is back to TASK-401.
+>
+> **PHASE COMPLETE — three manual steps remain before any of this is live:**
+> 1. **Run the four migrations against prod.** Nothing auto-runs `prisma migrate deploy`. In order: `20260901000000_timesheet_contractor_bill_link`, `20260901010000_timesheet_period`, `20260901020000_period_invoice_draft`, `20260901030000_period_chase_tracking`.
+> 2. **Read the first migration's `RAISE NOTICE` output.** Any row it lists could not be matched to a `bill.created` audit event and needs a human to decide which bill it belonged to. Empty notice = nothing to do.
+> 3. **Create the `timesheet_chase` FeatureFlag row and enable it** when you want the chase cron live. Until then `/api/cron/timesheet-chase` returns `{skipped}`. Optionally set `TIMESHEET_CHASE_AFTER_DAYS` / `TIMESHEET_ESCALATE_AFTER_DAYS` (defaults 3 / 7).
 
 ### TASK-500 — Decouple contractor-bill from client-invoice hour consumption
 **status:** done
@@ -1773,96 +1778,144 @@ Migrate personnel fields, functionality and taxonomy to the FY27 role architectu
 **REQUIRES MANUAL PROD STEP:** the migration does not auto-apply. Run `prisma migrate deploy` (or apply `prisma/migrations/20260901000000_timesheet_contractor_bill_link/migration.sql` via the Supabase SQL editor) against prod, and **read the `RAISE NOTICE` output** — any row it lists could not be matched to a `bill.created` audit event and needs a human to decide which bill it belonged to.
 
 ### TASK-501 — TimesheetPeriod (person × calendar month) + true calendar-month grid
-**status:** todo
+**status:** done
 **depends on:** —
 **acceptance:**
-- [ ] **Root cause:** `getMonthForPerson` (`src/server/timesheet.ts:21`) is `getRangeForPerson(personId, blockStart, 28)` anchored to `startOfFourWeekBlock` — a rolling 28-day block, not a calendar month. It drifts and never aligns to "August", so a contractor cannot select the period they need to invoice for.
-- [ ] `chore(db):` migration for `TimesheetPeriod`: `personId`, `year`, `month` (1–12), `state` (`open` / `lodged` / `approved` / `invoiced`), `lodgedAt`, `approvedAt`, `invoicedAt`, `contractorBillId?`. `@@unique([personId, year, month])`. Separate commit.
-- [ ] `getMonthForPerson(personId, year, month)` returns a true calendar month (28–31 days). `startOfFourWeekBlock` / `fourWeekDates` retained only if another surface still needs them — otherwise removed, not left dangling.
-- [ ] `/timesheet?view=month` renders the calendar month with a month picker (prev / next / jump), replacing the 4-week block. Week view stays the default for day-to-day entry and is unchanged — **lodgement becomes monthly, entry does not**.
-- [ ] Grid handles 31 columns without horizontal overflow on desktop; mobile falls back to the existing responsive treatment (TASK-220).
-- [ ] Periods are created lazily on first read for a person × month — no backfill of historical months.
-- [ ] Empty / loading / error states on the month view.
-- [ ] Tests: month boundaries incl. February and a leap year; `SaveSchema.dayCount` max 31 already accommodates a 31-day save (`actions.ts:33`) — assert a 31-day submit round-trips.
-- [ ] Typecheck + tests + lint green. Manual prod migration.
-- [ ] Commits: `chore(db): TimesheetPeriod model` then `feat(TASK-501): true calendar-month timesheet period`
+- [x] **Root cause:** `getMonthForPerson` (`src/server/timesheet.ts:21`) is `getRangeForPerson(personId, blockStart, 28)` anchored to `startOfFourWeekBlock` — a rolling 28-day block, not a calendar month. It drifts and never aligns to "August", so a contractor cannot select the period they need to invoice for.
+- [x] `chore(db):` migration for `TimesheetPeriod`: `personId`, `year`, `month` (1–12), `state` (`open` / `lodged` / `approved` / `invoiced`), `lodgedAt`, `approvedAt`, `invoicedAt`, `contractorBillId?`. `@@unique([personId, year, month])`. Separate commit.
+- [x] `getMonthForPerson(personId, year, month)` returns a true calendar month (28–31 days). `startOfFourWeekBlock` / `fourWeekDates` retained only if another surface still needs them — otherwise removed, not left dangling.
+- [x] `/timesheet?view=month` renders the calendar month with a month picker (prev / next / jump), replacing the 4-week block. Week view stays the default for day-to-day entry and is unchanged — **lodgement becomes monthly, entry does not**.
+- [x] Grid handles 31 columns without horizontal overflow on desktop; mobile falls back to the existing responsive treatment (TASK-220).
+- [x] Periods are created lazily on first read for a person × month — no backfill of historical months.
+- [x] Empty / loading / error states on the month view.
+- [x] Tests: month boundaries incl. February and a leap year; `SaveSchema.dayCount` max 31 already accommodates a 31-day save (`actions.ts:33`) — assert a 31-day submit round-trips.
+- [x] Typecheck + tests + lint green. Manual prod migration.
+- [x] Commits: `chore(db): TimesheetPeriod model` then `feat(TASK-501): true calendar-month timesheet period`
 
 **context:** The missing unit. Today "submitted" is a property scattered across N entry rows with no object that can be lodged, approved, or reopened as a whole — which is why every downstream stage re-derives its own grouping and they all disagree (week in the approval queue, all-time in draft-bill, arbitrary date range in draft-invoice).
 
+**note on completion:** `chore(db): TimesheetPeriod model` (78a6739) + `feat(TASK-501): true calendar-month timesheet period` (97a4953).
+
+**API deviation from the acceptance text:** `getMonthForPerson` takes the **month start** rather than `(year, month)`, mirroring `getWeekForPerson(personId, weekStart)`. `monthStartFrom(year, month)` converts. Same behaviour, one fewer off-by-one surface.
+
+**Period rows are NOT created on page read.** The acceptance said "created lazily on first read"; creating on a GET means browsing an admin through a year of someone's history writes twelve `open` rows, so the page uses read-only `findTimesheetPeriod` and creation happens in the lodge action. A month with no row already reads as `open`, so nothing is lost — and the invariant "a period row exists ⇒ that person lodged that month" is what TASK-504 keys its invoice trigger off.
+
+`startOfFourWeekBlock` / `fourWeekDates` had exactly one consumer and were removed rather than left dangling. `addMonths` rebuilds from UTC year/month parts rather than `setUTCMonth`, so 31 Jan + 1 month can't land on 2 March.
+
 ### TASK-502 — Lodge-the-month action
-**status:** todo
+**status:** done
 **depends on:** TASK-501
 **acceptance:**
-- [ ] One primary action on `/timesheet` month view: "Lodge August — 142.5h across 4 projects". Transitions `TimesheetPeriod.open → lodged` and every `draft` entry in the month to `submitted`, in one transaction.
-- [ ] Pre-flight validation surfaced **before** the mutation fires, not as a post-hoc error: unsubmitted drafts, zero-hour working days, and hours on projects the person isn't on the team for. Each is a warning the lodger can acknowledge, except zero total hours which blocks.
-- [ ] Reuses `saveTimesheet`'s existing auto-approve rules (`actions.ts:224`) unchanged — a super-admin lodging their own month still skips the queue; archived projects still always require explicit approval.
-- [ ] Approver notification per affected project (manager / primary partner), reusing the `approval_requested` UserUpdate + `sendTimesheetApprovalQueueNotice` path from TASK-221, but framed as a month rather than a week.
-- [ ] Re-lodging a `lodged` period is idempotent — picks up newly added entries without duplicating notifications (the 18h WhatsApp dedupe already covers identical bodies).
-- [ ] A `lodged` period is read-only for the submitter; recall is via the existing `recallSubmittedTimesheet` path, which must also return the period to `open`.
-- [ ] AuditEvent on lodge + recall, `entityType: 'timesheet_period'`.
-- [ ] Server-side capability check (`timesheet.submit`), Zod on inputs.
-- [ ] Tests: lodge with warnings, lodge blocked on zero hours, re-lodge idempotency, recall returns period to open.
-- [ ] Typecheck + tests + lint green.
-- [ ] Commit: `feat(TASK-502): lodge-the-month action`
+- [x] One primary action on `/timesheet` month view: "Lodge August — 142.5h across 4 projects". Transitions `TimesheetPeriod.open → lodged` and every `draft` entry in the month to `submitted`, in one transaction.
+- [x] Pre-flight validation surfaced **before** the mutation fires, not as a post-hoc error: unsubmitted drafts, zero-hour working days, and hours on projects the person isn't on the team for. Each is a warning the lodger can acknowledge, except zero total hours which blocks.
+- [x] Reuses `saveTimesheet`'s existing auto-approve rules (`actions.ts:224`) unchanged — a super-admin lodging their own month still skips the queue; archived projects still always require explicit approval.
+- [x] Approver notification per affected project (manager / primary partner), reusing the `approval_requested` UserUpdate + `sendTimesheetApprovalQueueNotice` path from TASK-221, but framed as a month rather than a week.
+- [x] Re-lodging a `lodged` period is idempotent — picks up newly added entries without duplicating notifications (the 18h WhatsApp dedupe already covers identical bodies).
+- [x] A `lodged` period is read-only for the submitter; recall is via the existing `recallSubmittedTimesheet` path, which must also return the period to `open`.
+- [x] AuditEvent on lodge + recall, `entityType: 'timesheet_period'`.
+- [x] Server-side capability check (`timesheet.submit`), Zod on inputs.
+- [x] Tests: lodge with warnings, lodge blocked on zero hours, re-lodge idempotency, recall returns period to open.
+- [x] Typecheck + tests + lint green.
+- [x] Commit: `feat(TASK-502): lodge-the-month action`
+
+**note on completion:** `feat(TASK-502): lodge-the-month action` (3d00cdb).
+
+Auto-approve rules were **extracted** to `resolveAutoApproveProjectIds` and are now shared with `saveTimesheet` rather than reimplemented — two copies would eventually disagree about who skips the queue, and an unapproved month landing in P&L is not a divergence anyone notices quickly. Archived projects still never skip (TT 2026-06-16).
+
+Preflight separates **blockers** (no hours; already approved/invoiced → refused outright) from **warnings** (month not finished, weekdays with no hours, hours on a project the person isn't rostered on → waved through with an explicit "Lodge anyway"). The gate is server-side, not a client confirm, and the codes waved through are recorded on the audit event.
+
+`recallSubmittedTimesheet` now reopens the period — pulling hours out of a lodged month means it's no longer a complete submission, and leaving it `lodged` would let TASK-504 invoice over hours back in draft. A recall range can straddle two months, so every month it touches is reopened, but only from `lodged`.
 
 ### TASK-503 — Person-month approval cards + approve-the-month
-**status:** todo
+**status:** done
 **depends on:** TASK-501
 **acceptance:**
-- [ ] **Root cause:** `/timesheet/approve` groups pending strictly by person × **week** (`startOfWeek`, `approve/page.tsx`). A monthly lodgement shatters into ~5 weekly cards, so a manager approves the same person five times — directly opposed to batch approval.
-- [ ] Queue regroups by person × `TimesheetPeriod`, with per-project subtotals inside each card and the existing per-entry detail available on expand.
-- [ ] "Approve month" action per card. Sits underneath the existing `decideTimesheetEntries` — that action already partitions stale/undecidable IDs correctly (TASK-221) and must not be reimplemented.
-- [ ] A manager who leads only some of the person's projects sees and can approve **only their own** projects' entries; the card shows what's outstanding elsewhere and who owes it. The existing per-project gate in `decideTimesheetEntries` is the enforcement point.
-- [ ] `ApproveAllPendingButton` (firm-wide, irreversible) retained but demoted — the month card becomes the primary action. Its confirm dialog updates to say how many person-months it spans.
-- [ ] Period transitions to `approved` only when every entry in it is approved (D2). Partial approval leaves it `lodged`.
-- [ ] Send-back returns the affected entries to `draft` and the period to `open`, notifying the submitter with the reason (existing TASK-221 path).
-- [ ] Empty / loading / error states.
-- [ ] Tests: multi-project month with two approvers, partial approval does not close the period, full approval does, send-back reopens.
-- [ ] Typecheck + tests + lint green.
-- [ ] Commit: `feat(TASK-503): person-month approval cards`
+- [x] **Root cause:** `/timesheet/approve` groups pending strictly by person × **week** (`startOfWeek`, `approve/page.tsx`). A monthly lodgement shatters into ~5 weekly cards, so a manager approves the same person five times — directly opposed to batch approval.
+- [x] Queue regroups by person × `TimesheetPeriod`, with per-project subtotals inside each card and the existing per-entry detail available on expand.
+- [x] "Approve month" action per card. Sits underneath the existing `decideTimesheetEntries` — that action already partitions stale/undecidable IDs correctly (TASK-221) and must not be reimplemented.
+- [x] A manager who leads only some of the person's projects sees and can approve **only their own** projects' entries; the card shows what's outstanding elsewhere and who owes it. The existing per-project gate in `decideTimesheetEntries` is the enforcement point.
+- [x] `ApproveAllPendingButton` (firm-wide, irreversible) retained but demoted — the month card becomes the primary action. Its confirm dialog updates to say how many person-months it spans.
+- [x] Period transitions to `approved` only when every entry in it is approved (D2). Partial approval leaves it `lodged`.
+- [x] Send-back returns the affected entries to `draft` and the period to `open`, notifying the submitter with the reason (existing TASK-221 path).
+- [x] Empty / loading / error states.
+- [x] Tests: multi-project month with two approvers, partial approval does not close the period, full approval does, send-back reopens.
+- [x] Typecheck + tests + lint green.
+- [x] Commit: `feat(TASK-503): person-month approval cards`
+
+**note on completion:** `feat(TASK-503): person-month approval cards` (c6353bb).
+
+Scoping is **per project, not per card**: a manager who leads one of three projects sees the whole month (a card claiming 8h when the month is 140h is useless for deciding) but the approve action only carries entries they can decide, and the rest is listed with who owes it. A card the viewer can decide none of is dropped.
+
+Period state is re-derived from the entries in the month, never set from what a single decision did. `invoiced` is terminal so a late send-back can't un-bill a contractor. Reconciliation deliberately **does not create** period rows — see the TASK-501 note.
+
+`ApproveAllPendingButton` kept but demoted to the firm-wide escape hatch; it now carries only entries the viewer can decide (otherwise its confirm count would be a lie) and says how many person-months it spans.
 
 ### TASK-504 — Auto-draft the contractor invoice on period close
-**status:** todo
+**status:** done
 **depends on:** TASK-500, TASK-503
 **acceptance:**
-- [ ] **Must not ship before TASK-500.** Auto-generating over today's shared `status='billed'` marker would silently destroy the client-invoice pool at scale.
-- [ ] When a `TimesheetPeriod` transitions to `approved` and the person is `employment: contractor`, generate a draft invoice for that **period only** — scoped by `year`/`month`, never the all-time sweep `listContractorBillableEntries` does today.
-- [ ] **D1 — contractor confirms.** The draft is presented to the contractor, not auto-submitted. They supply their own invoice number (required), optionally attach their own PDF, and hit "Submit invoice". Only then does the `Bill` land in `BillStatus.pending_review` for the AP gate (A7 — no agent auto-executes).
-- [ ] Draft is priced at `Person.rate` (contractor cost rate), grouped one line per project, GST at 10%. Rate is **snapshotted onto the bill** at generation so a later rate change can't retroactively reprice a submitted invoice.
-- [ ] Full-time staff never reach this surface — the existing `employment !== 'contractor'` guard is preserved and tested.
-- [ ] Contractor notified in-app + WhatsApp: "Your August invoice is ready to confirm — $X across N projects."
-- [ ] AuditEvent on generate (`actor: agent`) and on contractor confirm (`actor: person`), both carrying the period, entry IDs, hours, rate and total.
-- [ ] Regenerating after a send-back supersedes the prior draft rather than creating a second one.
-- [ ] Tests: period close fires exactly one draft; FT staff excluded; rate snapshot survives a subsequent `Person.rate` change; confirm transitions to `pending_review`; regeneration supersedes.
-- [ ] Typecheck + tests + lint green.
-- [ ] Commit: `feat(TASK-504): auto-draft contractor invoice on period close`
+- [x] **Must not ship before TASK-500.** Auto-generating over today's shared `status='billed'` marker would silently destroy the client-invoice pool at scale.
+- [x] When a `TimesheetPeriod` transitions to `approved` and the person is `employment: contractor`, generate a draft invoice for that **period only** — scoped by `year`/`month`, never the all-time sweep `listContractorBillableEntries` does today.
+- [x] **D1 — contractor confirms.** The draft is presented to the contractor, not auto-submitted. They supply their own invoice number (required), optionally attach their own PDF, and hit "Submit invoice". Only then does the `Bill` land in `BillStatus.pending_review` for the AP gate (A7 — no agent auto-executes).
+- [x] Draft is priced at `Person.rate` (contractor cost rate), grouped one line per project, GST at 10%. Rate is **snapshotted onto the bill** at generation so a later rate change can't retroactively reprice a submitted invoice.
+- [x] Full-time staff never reach this surface — the existing `employment !== 'contractor'` guard is preserved and tested.
+- [x] Contractor notified in-app + WhatsApp: "Your August invoice is ready to confirm — $X across N projects."
+- [x] AuditEvent on generate (`actor: agent`) and on contractor confirm (`actor: person`), both carrying the period, entry IDs, hours, rate and total.
+- [x] Regenerating after a send-back supersedes the prior draft rather than creating a second one.
+- [x] Tests: period close fires exactly one draft; FT staff excluded; rate snapshot survives a subsequent `Person.rate` change; confirm transitions to `pending_review`; regeneration supersedes.
+- [x] Typecheck + tests + lint green.
+- [x] Commit: `feat(TASK-504): auto-draft contractor invoice on period close`
+
+**note on completion:** `chore(db): invoice draft snapshot on TimesheetPeriod` (ee68f6a) + `feat(TASK-504): auto-draft the contractor invoice on period close` (0004c88).
+
+**D1 is load-bearing in two places:** the contractor's own invoice number is *required* (making it optional would quietly turn this into an RCTI), and no `Bill` row exists until they submit. The WhatsApp wording is asserted in tests to never claim Foundry raised an invoice on their behalf — that sentence would describe an arrangement that doesn't exist.
+
+Rate is frozen at close (`draftRateCents`), so editing `Person.rate` between close and confirm can't reprice a month that was already signed off. Only the rate is frozen; line grouping is recomputed at confirm, which is safe because a closed period's entries are all `approved` and can't move. Pricing reads `Person.rate` (contractor cost), never `Person.billRate` (client charge). A missing rate produces **no draft at all** rather than a $0 invoice — that's an admin data problem, not something to paper over.
 
 ### TASK-505 — `/me/invoices` — contractor self-serve surface
-**status:** todo
+**status:** done
 **depends on:** TASK-504
 **acceptance:**
-- [ ] **Root cause:** the only invoice-generation surface today is `/directory/people/[id]/draft-bill`, gated `hasAnyRole(['super_admin','admin','partner'])` on both page and action. Contractors are `staff` role + `employment: contractor` and cannot reach it — the workflow is admin-driven, which is the opposite of "easily do this individually". Note there is no separate contractor portal: magic-link lands them in the same app, so this is a permissions + surface change, not new infrastructure.
-- [ ] New `/me/invoices`: the contractor's own lodged months, each showing state (`lodged` / `approved` / `invoiced`), hours, value at their rate, and the resulting `Bill` status through to paid.
-- [ ] Confirm-and-submit action for a generated draft (TASK-504) lives here.
-- [ ] Self-only by default. Admin / partner keep the existing per-person view for support cases; the old `draft-bill` page either redirects here or is retired — decide and document which.
-- [ ] Empty / loading / error states — a contractor with nothing lodged sees guidance pointing at `/timesheet`.
-- [ ] Server-side check that the viewer is the subject (or admin tier). No client-trusted person ID.
-- [ ] Tests: self-only enforcement, admin override, state rendering across all four period states.
-- [ ] Typecheck + tests + lint green.
-- [ ] Commit: `feat(TASK-505): contractor self-serve invoice surface`
+- [x] **Root cause:** the only invoice-generation surface today is `/directory/people/[id]/draft-bill`, gated `hasAnyRole(['super_admin','admin','partner'])` on both page and action. Contractors are `staff` role + `employment: contractor` and cannot reach it — the workflow is admin-driven, which is the opposite of "easily do this individually". Note there is no separate contractor portal: magic-link lands them in the same app, so this is a permissions + surface change, not new infrastructure.
+- [x] New `/me/invoices`: the contractor's own lodged months, each showing state (`lodged` / `approved` / `invoiced`), hours, value at their rate, and the resulting `Bill` status through to paid.
+- [x] Confirm-and-submit action for a generated draft (TASK-504) lives here.
+- [x] Self-only by default. Admin / partner keep the existing per-person view for support cases; the old `draft-bill` page either redirects here or is retired — decide and document which.
+- [x] Empty / loading / error states — a contractor with nothing lodged sees guidance pointing at `/timesheet`.
+- [x] Server-side check that the viewer is the subject (or admin tier). No client-trusted person ID.
+- [x] Tests: self-only enforcement, admin override, state rendering across all four period states.
+- [x] Typecheck + tests + lint green.
+- [x] Commit: `feat(TASK-505): contractor self-serve invoice surface`
+
+**note on completion:** `feat(TASK-505): contractor self-serve invoice surface` (3d1e3fd).
+
+**Decision on the old admin page: KEPT**, relabelled in-product as the *out-of-cycle* path (backfill, or a contractor who can't submit their own). Retiring it would leave no route for hours predating the period system or for offboarded people. Since TASK-500 both paths write only `contractorBillId`, so they no longer conflict — they drain the same AP pool idempotently. Its bills are tagged `outOfCycle` in the audit.
+
+That surfaced a real gap: the admin path bills **by person, not by period**, so a month could end up fully billed while its period still said `approved`, showing the contractor an invoice prompt for hours already on a bill. `markPeriodsInvoicedIfFullyBilled` now closes those, so both routes leave the same state behind.
+
+`/me/invoices` is period-driven, not bill-driven, on purpose: "where is my August invoice?" is usually answered by "two of your three leads haven't approved it", which a bill-driven list can't show. "My invoices" sits in the user menu for everyone rather than gated on employment — the shell doesn't know contractor vs full-time and the page explains itself to anyone on payroll.
 
 ### TASK-506 — Slow-approver mitigations: chase notice + admin force-close
-**status:** todo
+**status:** done
 **depends on:** TASK-503
 **acceptance:**
-- [ ] Mitigates the known risk in D2: with full-month close, one unresponsive approver blocks a contractor's invoice and therefore their payment.
-- [ ] Scheduled chase: a `lodged` period with entries outstanding more than N days pings the specific approvers who owe it (in-app + WhatsApp), naming the person, the month, and the projects. N configurable via `FeatureFlag` / env, not hard-coded (A8 pattern).
-- [ ] Escalation to admin tier after a second interval.
-- [ ] Admin force-close: super_admin / admin can close a period over outstanding entries. Requires a reason, writes an AuditEvent naming what was force-approved and what was excluded, and notifies both the contractor and the bypassed approvers.
-- [ ] Dashboard leader-action for approvers with an overdue person-month, reusing the `leader-actions.ts` pattern.
-- [ ] Tests: chase fires once per interval, escalation ordering, force-close audit contents, force-closed period still generates a correct TASK-504 draft.
-- [ ] Typecheck + tests + lint green.
-- [ ] Commit: `feat(TASK-506): monthly approval chase + admin force-close`
+- [x] Mitigates the known risk in D2: with full-month close, one unresponsive approver blocks a contractor's invoice and therefore their payment.
+- [x] Scheduled chase: a `lodged` period with entries outstanding more than N days pings the specific approvers who owe it (in-app + WhatsApp), naming the person, the month, and the projects. N configurable via `FeatureFlag` / env, not hard-coded (A8 pattern).
+- [x] Escalation to admin tier after a second interval.
+- [x] Admin force-close: super_admin / admin can close a period over outstanding entries. Requires a reason, writes an AuditEvent naming what was force-approved and what was excluded, and notifies both the contractor and the bypassed approvers.
+- [x] Dashboard leader-action for approvers with an overdue person-month, reusing the `leader-actions.ts` pattern.
+- [x] Tests: chase fires once per interval, escalation ordering, force-close audit contents, force-closed period still generates a correct TASK-504 draft.
+- [x] Typecheck + tests + lint green.
+- [x] Commit: `feat(TASK-506): monthly approval chase + admin force-close`
+
+**note on completion:** `chore(db): chase tracking on TimesheetPeriod` (5b4e917) + `feat(TASK-506): monthly approval chase + admin force-close` (6f5b5e9).
+
+Thresholds live in **env** (`TIMESHEET_CHASE_AFTER_DAYS` / `TIMESHEET_ESCALATE_AFTER_DAYS`, defaults 3 and 7) because the `FeatureFlag` table is boolean-only; the `timesheet_chase` flag gates whether the cron runs at all, so staging can dogfood the wording before prod starts DMing partners. Cron is `0 22 * * 1-5` in `vercel.json`.
+
+`lastChasedAt` / `escalatedAt` exist so a daily cron nudges on an interval rather than emitting a feed row every day — a notification that arrives daily is one people learn to ignore. Escalation **supersedes** a due chase rather than firing alongside it, fires once per lodgement, never targets someone about their own timesheet, and skips a month with nothing actually outstanding.
+
+Force-close reuses the normal roll-up, so a force-closed month produces the same state and the same frozen invoice draft as an ordinary close. It requires a real reason, records which projects were bypassed and who owed each, and notifies the contractor *and* every bypassed approver.
+
+**Not yet enabled:** the `timesheet_chase` FeatureFlag row must be created and set enabled, and `CRON_SECRET` must already be set (it is, for the existing crons). Until then the route returns `{skipped}`.
 
 ---
 
