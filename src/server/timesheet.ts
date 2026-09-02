@@ -1,7 +1,14 @@
 import { prisma } from '@/server/db';
 import type { TimesheetPeriodState } from '@prisma/client';
 import type { Session } from '@/server/roles';
-import { addDays, daysInMonth, monthNumber, monthStartFrom, startOfMonth } from '@/lib/week';
+import {
+  addDays,
+  daysInMonth,
+  formatMonthLabel,
+  monthNumber,
+  monthStartFrom,
+  startOfMonth,
+} from '@/lib/week';
 
 /**
  * What the UI shows for an entry. Wider than the DB enum: `billed` is a
@@ -845,4 +852,184 @@ export async function getPeriodTotals(
     else totals.approvedHours += h;
   }
   return totals;
+}
+
+// ─── Auto-approve rules (shared by saveTimesheet and lodgeMonth) ────────────
+
+export type AutoApproveProject = {
+  id: string;
+  stage: string;
+  managerId: string | null;
+  primaryPartnerId: string | null;
+};
+
+/**
+ * Which projects' rows skip the approval queue on this write.
+ *
+ *   - super_admin: every project (own hours and on-behalf alike)
+ *   - on-behalf write by admin / the project's manager / its primary partner:
+ *     that project only — the leader's edit IS the approval
+ *   - everyone else: none; standard draft → submitted → approved
+ *
+ * Override: archived (closed) projects ALWAYS require explicit approval
+ * (TT 2026-06-16). Late hours on a wrapped engagement should never skip the
+ * queue, even for a super-admin self-save — the project is closed and the
+ * manager needs a chance to challenge the entry.
+ *
+ * Extracted from saveTimesheet in TASK-502 so the monthly lodge action can't
+ * drift from the daily save path. Two copies of this would eventually
+ * disagree about who skips the queue, which is the sort of divergence nobody
+ * notices until an unapproved month lands in P&L.
+ */
+export function resolveAutoApproveProjectIds(opts: {
+  isSuperAdmin: boolean;
+  isAdminGroup: boolean;
+  actingOnBehalf: boolean;
+  actorPersonId: string;
+  projects: AutoApproveProject[];
+}): Set<string> {
+  const { isSuperAdmin, isAdminGroup, actingOnBehalf, actorPersonId, projects } = opts;
+  const ids = new Set<string>();
+  const eligible = projects.filter((p) => p.stage !== 'archived');
+  if (isSuperAdmin) {
+    for (const p of eligible) ids.add(p.id);
+    return ids;
+  }
+  if (!actingOnBehalf) return ids;
+  for (const p of eligible) {
+    if (isAdminGroup || p.managerId === actorPersonId || p.primaryPartnerId === actorPersonId) {
+      ids.add(p.id);
+    }
+  }
+  return ids;
+}
+
+// ─── Lodge-the-month preflight ──────────────────────────────────────────────
+
+export type LodgeWarningCode =
+  | 'month_not_finished'
+  | 'zero_hour_weekdays'
+  | 'off_team_projects'
+  | 'already_lodged';
+
+export type LodgeWarning = {
+  code: LodgeWarningCode;
+  message: string;
+};
+
+export type LodgePreflight = {
+  monthStart: Date;
+  monthLabel: string;
+  /** Entries that lodging would move draft → submitted. */
+  promotableEntryIds: string[];
+  totalHours: number;
+  projectCount: number;
+  /** Hard stop — lodging is refused while set. */
+  blocker: string | null;
+  warnings: LodgeWarning[];
+};
+
+/**
+ * Everything the lodge action needs to decide, computed before any write.
+ *
+ * The split matters: a `blocker` refuses the lodge outright, while `warnings`
+ * are things a person may legitimately intend (a part-month contractor, a
+ * month lodged early before annual leave) and can wave through. Refusing
+ * those outright would be wrong; staying silent about them would let a
+ * half-finished month get invoiced.
+ */
+export async function preflightLodgeMonth(
+  personId: string,
+  monthStart: Date,
+  today: Date,
+): Promise<LodgePreflight> {
+  const start = startOfMonth(monthStart);
+  const dayCount = daysInMonth(start.getUTCFullYear(), monthNumber(start));
+  const end = addDays(start, dayCount);
+
+  const [entries, teamRows, period] = await Promise.all([
+    prisma.timesheetEntry.findMany({
+      where: { personId, date: { gte: start, lt: end } },
+      select: { id: true, date: true, hours: true, status: true, projectId: true,
+                project: { select: { code: true } } },
+    }),
+    prisma.projectTeam.findMany({ where: { personId }, select: { projectId: true } }),
+    findTimesheetPeriod(personId, start),
+  ]);
+
+  const promotableEntryIds = entries.filter((e) => e.status === 'draft').map((e) => e.id);
+  const totalHours = entries.reduce((sum, e) => sum + Number(e.hours), 0);
+  const projectIds = new Set(entries.map((e) => e.projectId));
+
+  const warnings: LodgeWarning[] = [];
+
+  // Already past approval — lodging again would be meaningless and would
+  // reopen a settled month.
+  let blocker: string | null = null;
+  if (period?.state === 'approved' || period?.state === 'invoiced') {
+    blocker = `${formatMonthLabel(start)} is already ${period.state}. Ask an approver to send it back if it needs changing.`;
+  } else if (entries.length === 0 || totalHours === 0) {
+    blocker = `No hours logged in ${formatMonthLabel(start)} — there is nothing to lodge.`;
+  }
+
+  if (period?.state === 'lodged') {
+    warnings.push({
+      code: 'already_lodged',
+      message: `${formatMonthLabel(start)} is already lodged. Lodging again picks up anything added since.`,
+    });
+  }
+
+  // Lodging a month that hasn't ended is legitimate (leave, an early
+  // invoice run) but is usually a misclick on the month picker.
+  if (end > today) {
+    warnings.push({
+      code: 'month_not_finished',
+      message: `${formatMonthLabel(start)} hasn't finished yet — you can still add hours to it after lodging, but they'll need lodging again.`,
+    });
+  }
+
+  // Weekdays with nothing logged. Mon–Fri only; a contractor working
+  // weekends is not the common case and flagging Saturdays would be noise.
+  const workedDays = new Set(entries.filter((e) => Number(e.hours) > 0)
+    .map((e) => e.date.toISOString().slice(0, 10)));
+  const emptyWeekdays: string[] = [];
+  for (let i = 0; i < dayCount; i += 1) {
+    const d = addDays(start, i);
+    const dow = d.getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    if (d >= today) continue; // don't nag about days that haven't happened
+    if (!workedDays.has(d.toISOString().slice(0, 10))) emptyWeekdays.push(d.toISOString().slice(0, 10));
+  }
+  if (emptyWeekdays.length > 0) {
+    warnings.push({
+      code: 'zero_hour_weekdays',
+      message: `${emptyWeekdays.length} weekday${emptyWeekdays.length === 1 ? '' : 's'} with no hours logged (${emptyWeekdays.slice(0, 3).join(', ')}${emptyWeekdays.length > 3 ? ', …' : ''}).`,
+    });
+  }
+
+  // Hours against a project the person isn't rostered on. Usually fine —
+  // saveTimesheet auto-adds the team row — but worth surfacing before the
+  // month becomes an invoice.
+  const teamProjectIds = new Set(teamRows.map((r) => r.projectId));
+  const offTeam = Array.from(
+    new Set(
+      entries.filter((e) => !teamProjectIds.has(e.projectId)).map((e) => e.project.code),
+    ),
+  );
+  if (offTeam.length > 0) {
+    warnings.push({
+      code: 'off_team_projects',
+      message: `Hours logged on ${offTeam.join(', ')} — you're not on the project team${offTeam.length === 1 ? '' : 's'}.`,
+    });
+  }
+
+  return {
+    monthStart: start,
+    monthLabel: formatMonthLabel(start),
+    promotableEntryIds,
+    totalHours,
+    projectCount: projectIds.size,
+    blocker,
+    warnings,
+  };
 }

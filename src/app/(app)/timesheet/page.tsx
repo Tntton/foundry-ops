@@ -7,6 +7,7 @@ import { hasAnyRole } from '@/server/roles';
 import {
   findTimesheetPeriod,
   getMonthForPerson,
+  getPeriodTotals,
   getWeekForPerson,
   listPersonTimesheetEntries,
   getHourlyUtilisationForWeek,
@@ -19,6 +20,7 @@ import {
   addMonths,
   formatMonthLabel,
   monthDates,
+  monthNumber,
   parseIsoDate,
   startOfMonth,
   startOfWeek,
@@ -31,6 +33,7 @@ import { Button } from '@/components/ui/button';
 import { TimesheetGrid } from './grid';
 import { TimesheetPersonPicker } from './person-picker';
 import { TimesheetSubmittedOverview } from './submitted-overview';
+import { LodgeMonthButton } from './lodge-month-button';
 import { verifyPrefillToken } from '@/server/agents/assistant/prefill/token';
 import { TimesheetPrefillSchema } from '@/server/agents/assistant/prefill/schemas';
 import { applyTimesheetPrefill } from '@/server/agents/assistant/prefill/apply-timesheet';
@@ -368,6 +371,10 @@ export default async function TimesheetPage({
   // null branch renders.
   const period = view === 'month' ? await findTimesheetPeriod(target.id, blockStart) : null;
   const periodState = period?.state ?? 'open';
+  // Totals for the lodge card. Cheap aggregate over the month already on
+  // screen — the grid rows can't be reused because they're padded out to
+  // every project the person is rostered on, worked or not.
+  const periodTotals = view === 'month' ? await getPeriodTotals(target.id, blockStart) : null;
 
   return (
     <div className="space-y-6">
@@ -532,6 +539,25 @@ export default async function TimesheetPage({
               {prefillNotice}
             </div>
           )}
+          {view === 'month' && periodTotals !== null && (
+            <div className="mb-4">
+              <LodgeMonthButton
+                targetPersonId={target.id}
+                year={blockStart.getUTCFullYear()}
+                month={monthNumber(blockStart)}
+                monthLabel={periodLabel}
+                totalHours={periodTotals.totalHours}
+                projectCount={periodTotals.projectCount}
+                state={periodState}
+                disabledReason={
+                  periodTotals.totalHours === 0
+                    ? `No hours logged in ${periodLabel} yet — add some before lodging.`
+                    : null
+                }
+              />
+            </div>
+          )}
+
           <TimesheetGrid
             rangeStart={formatIsoDate(blockStart)}
             initialRows={enrichedRows}

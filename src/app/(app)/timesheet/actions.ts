@@ -9,9 +9,22 @@ import { requireCapability } from '@/server/capabilities';
 import { hasAnyRole } from '@/server/roles';
 import { writeAudit, computeDelta } from '@/server/audit';
 import { emitUserUpdateMany } from '@/server/user-updates';
-import { addDays, parseIsoDate, startOfWeek, todayInFirmTz } from '@/lib/week';
+import {
+  addDays,
+  daysInMonth,
+  monthStartFrom,
+  parseIsoDate,
+  startOfWeek,
+  todayInFirmTz,
+} from '@/lib/week';
 import { revalidateScheduleSurfaces } from '@/server/revalidate-schedule';
-import { isBilledEitherLeg, partitionDecisionBatch } from '@/server/timesheet';
+import {
+  isBilledEitherLeg,
+  partitionDecisionBatch,
+  preflightLodgeMonth,
+  resolveAutoApproveProjectIds,
+  type LodgeWarning,
+} from '@/server/timesheet';
 
 // Snap hours to the nearest 0.5 — the granularity the timesheet grid uses.
 // Users typing odd values (e.g. 0.65) get auto-rounded; legacy 0.25-step
@@ -242,21 +255,13 @@ export async function saveTimesheet(
   // (TT 2026-06-16) — late hours on a wrapped engagement should never
   // skip the queue, even for super-admin self-saves. The project is
   // closed; the manager needs a chance to challenge the entry.
-  const autoApproveProjectIds = new Set<string>();
-  const nonArchivedProjects = projectManagers.filter((p) => p.stage !== 'archived');
-  if (isSuperAdmin) {
-    for (const p of nonArchivedProjects) autoApproveProjectIds.add(p.id);
-  } else if (actingOnBehalf) {
-    for (const p of nonArchivedProjects) {
-      if (
-        isAdminGroup ||
-        p.managerId === session.person.id ||
-        p.primaryPartnerId === session.person.id
-      ) {
-        autoApproveProjectIds.add(p.id);
-      }
-    }
-  }
+  const autoApproveProjectIds = resolveAutoApproveProjectIds({
+    isSuperAdmin,
+    isAdminGroup,
+    actingOnBehalf,
+    actorPersonId: session.person.id,
+    projects: projectManagers,
+  });
   const autoApproveStamp = new Date();
   const autoApprovedEntryRefs: string[] = [];
   // What this save actually parks in the approval queue. Only rows that
@@ -838,11 +843,35 @@ export async function recallSubmittedTimesheet(
     return { status: 'error', message: 'Nothing to recall — no submitted entries here.' };
   }
 
+  // Recalling hours out of a lodged month un-lodges that month: the period
+  // no longer represents a complete submission, and leaving it `lodged`
+  // would let TASK-504 raise an invoice over hours that are back in draft.
+  // A recall can straddle two months (the range is caller-supplied), so
+  // reopen every month it touches, not just the range's first.
+  const touchedMonths = new Map<string, { year: number; month: number }>();
+  for (let i = 0; i < dayCount; i += 1) {
+    const d = addDays(rangeStart, i);
+    const year = d.getUTCFullYear();
+    const month = d.getUTCMonth() + 1;
+    touchedMonths.set(`${year}-${month}`, { year, month });
+  }
+
   try {
     await prisma.$transaction(async (tx) => {
       await tx.timesheetEntry.updateMany({
         where: { id: { in: submittedIds } },
         data: { status: 'draft', approvedById: null, approvedAt: null },
+      });
+      // Only reopen a month that is actually `lodged` — an `approved` or
+      // `invoiced` period can't contain submitted entries in the first
+      // place, and must never be silently reopened by a recall.
+      await tx.timesheetPeriod.updateMany({
+        where: {
+          personId: targetPersonId,
+          state: 'lodged',
+          OR: Array.from(touchedMonths.values()),
+        },
+        data: { state: 'open', lodgedAt: null },
       });
       await writeAudit(tx, {
         actor: { type: 'person', id: session.person.id },
@@ -856,6 +885,9 @@ export async function recallSubmittedTimesheet(
             entryIds: submittedIds,
             byPersonId: targetPersonId,
             actingOnBehalf: targetPersonId !== session.person.id,
+            reopenedPeriods: Array.from(touchedMonths.values()).map(
+              (m) => `${m.year}-${String(m.month).padStart(2, '0')}`,
+            ),
           },
         },
         source: 'web',
@@ -1085,4 +1117,285 @@ function revalidateAfterTimesheetDecision(personIds: string[]): void {
   for (const personId of personIds) {
     revalidateScheduleSurfaces({ personId });
   }
+}
+
+// ─── Lodge the month ────────────────────────────────────────────────────────
+
+const LodgeSchema = z.object({
+  targetPersonId: z.string().min(1),
+  year: z.coerce.number().int().min(2000).max(2100),
+  month: z.coerce.number().int().min(1).max(12),
+  /** Set once the lodger has seen and accepted the preflight warnings. */
+  acknowledge: z.boolean(),
+});
+
+export type TimesheetLodgeState =
+  | { status: 'idle' }
+  | { status: 'error'; message: string }
+  /** Preflight found things worth a second look — resubmit with acknowledge. */
+  | { status: 'warn'; message: string; warnings: LodgeWarning[] }
+  | { status: 'success'; message: string };
+
+/**
+ * Lodge a person's whole calendar month for approval.
+ *
+ * One action, one period, one transaction: every `draft` entry in the month
+ * becomes `submitted` (or `approved`, where the shared auto-approve rules
+ * say this writer skips the queue), the TimesheetPeriod moves to `lodged`,
+ * and the approvers are told once about the month rather than once per week.
+ *
+ * Idempotent by design: re-lodging an already-lodged month picks up whatever
+ * was added since and does not re-notify identical content (the 18h dedupe in
+ * sendTimesheetApprovalQueueNotice covers the WhatsApp side).
+ */
+export async function lodgeMonth(
+  _prev: TimesheetLodgeState,
+  formData: FormData,
+): Promise<TimesheetLodgeState> {
+  const session = await getSession();
+  try {
+    requireCapability(session, 'timesheet.submit');
+  } catch {
+    return { status: 'error', message: 'Not signed in' };
+  }
+
+  const parsed = LodgeSchema.safeParse({
+    targetPersonId: formData.get('targetPersonId'),
+    year: formData.get('year'),
+    month: formData.get('month'),
+    acknowledge: formData.get('acknowledge') === 'true',
+  });
+  if (!parsed.success) return { status: 'error', message: 'Invalid input' };
+
+  const { targetPersonId, year, month, acknowledge } = parsed.data;
+  const isSuperAdmin = hasAnyRole(session, ['super_admin']);
+  const isAdminGroup = hasAnyRole(session, ['super_admin', 'admin']);
+  const isManagerOrLead = hasAnyRole(session, ['manager', 'partner']);
+  const actingOnBehalf = targetPersonId !== session!.person.id;
+  if (actingOnBehalf && !isAdminGroup && !isManagerOrLead) {
+    return {
+      status: 'error',
+      message: 'Only super admins, admins, or project leads can lodge for someone else.',
+    };
+  }
+
+  const target = await prisma.person.findUnique({
+    where: { id: targetPersonId },
+    select: { firstName: true, lastName: true, endDate: true, inactiveAt: true },
+  });
+  if (!target) return { status: 'error', message: 'Person not found' };
+  if (target.endDate !== null) {
+    return { status: 'error', message: 'Person is no longer active.' };
+  }
+  if (target.inactiveAt !== null) {
+    return { status: 'error', message: 'Profile is marked inactive — reactivate it first.' };
+  }
+
+  const monthStart = monthStartFrom(year, month);
+  const preflight = await preflightLodgeMonth(
+    targetPersonId,
+    monthStart,
+    todayInFirmTz(),
+  );
+  if (preflight.blocker) {
+    return { status: 'error', message: preflight.blocker };
+  }
+  if (preflight.warnings.length > 0 && !acknowledge) {
+    return {
+      status: 'warn',
+      message: `Lodge ${preflight.monthLabel} anyway?`,
+      warnings: preflight.warnings,
+    };
+  }
+
+  const dayCount = daysInMonth(year, month);
+  const monthEnd = addDays(monthStart, dayCount);
+
+  // Which of the month's projects skip the queue for THIS writer. Same
+  // helper the daily save uses, so the two can't drift on who is allowed to
+  // self-approve.
+  const monthProjects = await prisma.project.findMany({
+    where: {
+      timesheetEntries: {
+        some: { personId: targetPersonId, date: { gte: monthStart, lt: monthEnd } },
+      },
+    },
+    select: { id: true, code: true, stage: true, managerId: true, primaryPartnerId: true },
+  });
+  const autoApproveProjectIds = resolveAutoApproveProjectIds({
+    isSuperAdmin,
+    isAdminGroup,
+    actingOnBehalf,
+    actorPersonId: session!.person.id,
+    projects: monthProjects,
+  });
+
+  // Only `draft` rows move. Already-submitted rows are in the queue, and
+  // already-approved rows must keep their original approver + timestamp.
+  const draftEntries = await prisma.timesheetEntry.findMany({
+    where: {
+      personId: targetPersonId,
+      date: { gte: monthStart, lt: monthEnd },
+      status: 'draft',
+    },
+    select: { id: true, hours: true, projectId: true },
+  });
+
+  const toApprove: string[] = [];
+  const toSubmit: string[] = [];
+  const queuedProjectIds = new Set<string>();
+  let queuedHours = 0;
+  for (const e of draftEntries) {
+    if (autoApproveProjectIds.has(e.projectId)) {
+      toApprove.push(e.id);
+    } else {
+      toSubmit.push(e.id);
+      queuedProjectIds.add(e.projectId);
+      queuedHours += Number(e.hours);
+    }
+  }
+
+  // Anything already sitting in `submitted` still needs approvers pinged on
+  // a re-lodge — it's part of the month being lodged even if this call
+  // didn't move it.
+  const alreadySubmitted = await prisma.timesheetEntry.findMany({
+    where: {
+      personId: targetPersonId,
+      date: { gte: monthStart, lt: monthEnd },
+      status: 'submitted',
+    },
+    select: { hours: true, projectId: true },
+  });
+  for (const e of alreadySubmitted) {
+    queuedProjectIds.add(e.projectId);
+    queuedHours += Number(e.hours);
+  }
+
+  // Approver pool: the admin tier sees every submission (mirrors
+  // listPendingTimesheetEntriesForApprover), plus each affected project's
+  // manager and primary partner.
+  const submitterName = `${target.firstName} ${target.lastName}`;
+  let approverIds: string[] = [];
+  if (queuedProjectIds.size > 0) {
+    const leadIds = new Set<string>();
+    for (const p of monthProjects) {
+      if (!queuedProjectIds.has(p.id)) continue;
+      if (p.managerId) leadIds.add(p.managerId);
+      if (p.primaryPartnerId) leadIds.add(p.primaryPartnerId);
+    }
+    const pool = await prisma.person.findMany({
+      where: {
+        endDate: null,
+        inactiveAt: null,
+        OR: [
+          { roles: { hasSome: ['super_admin', 'admin'] } },
+          { id: { in: Array.from(leadIds) } },
+        ],
+      },
+      select: { id: true },
+    });
+    approverIds = pool
+      .map((p) => p.id)
+      .filter((id) => id !== targetPersonId && id !== session!.person.id);
+  }
+
+  const stamp = new Date();
+  try {
+    await prisma.$transaction(async (tx) => {
+      if (toApprove.length > 0) {
+        await tx.timesheetEntry.updateMany({
+          where: { id: { in: toApprove } },
+          data: { status: 'approved', approvedById: session!.person.id, approvedAt: stamp },
+        });
+      }
+      if (toSubmit.length > 0) {
+        await tx.timesheetEntry.updateMany({
+          where: { id: { in: toSubmit } },
+          data: { status: 'submitted' },
+        });
+      }
+
+      // The period row is created here rather than on page read, so merely
+      // browsing a month never writes.
+      await tx.timesheetPeriod.upsert({
+        where: { personId_year_month: { personId: targetPersonId, year, month } },
+        create: { personId: targetPersonId, year, month, state: 'lodged', lodgedAt: stamp },
+        update: { state: 'lodged', lodgedAt: stamp },
+      });
+
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session!.person.id },
+        action: 'lodged',
+        entity: {
+          type: 'timesheet_period',
+          id: `${targetPersonId}:${year}-${String(month).padStart(2, '0')}`,
+          after: {
+            targetPersonId,
+            year,
+            month,
+            actingOnBehalf,
+            totalHours: preflight.totalHours,
+            submittedEntryIds: toSubmit,
+            autoApprovedEntryIds: toApprove,
+            acknowledgedWarnings: preflight.warnings.map((w) => w.code),
+          },
+        },
+        source: 'web',
+      });
+
+      if (approverIds.length > 0) {
+        await emitUserUpdateMany(tx, approverIds, {
+          kind: 'approval_requested',
+          title: `${preflight.monthLabel} timesheet to approve (${queuedHours.toFixed(1)}h)`,
+          body:
+            `${submitterName} lodged ${preflight.monthLabel} — ${queuedHours.toFixed(1)}h ` +
+            `across ${queuedProjectIds.size} ${queuedProjectIds.size === 1 ? 'project' : 'projects'}.`,
+          href: '/timesheet/approve',
+          entityType: 'timesheet_entry',
+          entityId: null,
+        });
+      }
+    });
+  } catch (err) {
+    console.error('[timesheet.lodge] failed:', err);
+    return { status: 'error', message: 'Lodge failed — try again.' };
+  }
+
+  revalidatePath('/timesheet');
+  revalidatePath('/timesheet/approve');
+  revalidatePath('/updates');
+  revalidateScheduleSurfaces({ personId: targetPersonId });
+
+  if (approverIds.length > 0) {
+    void (async () => {
+      try {
+        const { sendTimesheetApprovalQueueNotice } = await import(
+          '@/server/integrations/whatsapp-prompts'
+        );
+        await sendTimesheetApprovalQueueNotice({
+          approverIds,
+          submitterName,
+          entryCount: toSubmit.length + alreadySubmitted.length,
+          totalHours: queuedHours,
+          weekLabel: preflight.monthLabel,
+        });
+      } catch (err) {
+        console.error('[timesheet.lodge] whatsapp notice failed:', err);
+      }
+    })();
+  }
+
+  const parts = [`${preflight.monthLabel} lodged — ${preflight.totalHours.toFixed(1)}h.`];
+  if (toApprove.length > 0) {
+    parts.push(
+      `${toApprove.length} ${toApprove.length === 1 ? 'entry' : 'entries'} auto-approved.`,
+    );
+  }
+  if (toSubmit.length > 0) {
+    parts.push(`${toSubmit.length} sent for approval.`);
+  }
+  if (toSubmit.length === 0 && toApprove.length === 0) {
+    parts.push('Nothing new to submit — already with the approvers.');
+  }
+  return { status: 'success', message: parts.join(' ') };
 }
