@@ -1392,3 +1392,158 @@ export async function listPendingMonthCards(session: Session): Promise<PendingMo
       a.personName.localeCompare(b.personName),
   );
 }
+
+// ─── Contractor self-serve: my lodgement periods ────────────────────────────
+
+export type MyInvoicePeriod = {
+  year: number;
+  month: number;
+  monthStart: Date;
+  monthLabel: string;
+  state: TimesheetPeriodState;
+  lodgedAt: Date | null;
+  approvedAt: Date | null;
+  invoicedAt: Date | null;
+  /** Hours in the month, by DB status, so the card can explain what's left. */
+  totals: PeriodTotals;
+  /** Frozen at close; null until the month closes. */
+  draft: { rateCents: number; hours: number; amountExGstCents: number } | null;
+  /** Bills raised for this month, once the contractor has submitted. */
+  bills: Array<{
+    id: string;
+    projectCode: string | null;
+    supplierInvoiceNumber: string | null;
+    amountTotal: number;
+    status: string;
+  }>;
+};
+
+/**
+ * A person's own lodgement history, newest first — the spine of /me/invoices.
+ *
+ * Deliberately period-driven rather than bill-driven: a contractor needs to
+ * see the months still waiting on approvers just as much as the ones already
+ * invoiced, and a bill-driven list can only ever show the tail of that.
+ */
+export async function listMyInvoicePeriods(
+  personId: string,
+  limit = 18,
+): Promise<MyInvoicePeriod[]> {
+  const periods = await prisma.timesheetPeriod.findMany({
+    where: { personId },
+    orderBy: [{ year: 'desc' }, { month: 'desc' }],
+    take: limit,
+  });
+  if (periods.length === 0) return [];
+
+  // Bills for these months, resolved through the entries they cover — the
+  // period's own contractorBillId only points at the first of a multi-project
+  // month.
+  const earliest = monthStartFrom(
+    periods[periods.length - 1]!.year,
+    periods[periods.length - 1]!.month,
+  );
+  const latest = periods[0]!;
+  const latestEnd = addDays(
+    monthStartFrom(latest.year, latest.month),
+    daysInMonth(latest.year, latest.month),
+  );
+  const billedEntries = await prisma.timesheetEntry.findMany({
+    where: {
+      personId,
+      date: { gte: earliest, lt: latestEnd },
+      contractorBillId: { not: null },
+    },
+    select: {
+      date: true,
+      contractorBillId: true,
+      contractorBill: {
+        select: {
+          id: true,
+          supplierInvoiceNumber: true,
+          amountTotal: true,
+          status: true,
+          project: { select: { code: true } },
+        },
+      },
+    },
+  });
+  const billsByMonth = new Map<string, MyInvoicePeriod['bills']>();
+  for (const e of billedEntries) {
+    if (!e.contractorBill) continue;
+    const key = `${e.date.getUTCFullYear()}-${e.date.getUTCMonth() + 1}`;
+    const list = billsByMonth.get(key) ?? [];
+    if (!list.some((b) => b.id === e.contractorBill!.id)) {
+      list.push({
+        id: e.contractorBill.id,
+        projectCode: e.contractorBill.project?.code ?? null,
+        supplierInvoiceNumber: e.contractorBill.supplierInvoiceNumber,
+        amountTotal: e.contractorBill.amountTotal,
+        status: e.contractorBill.status,
+      });
+    }
+    billsByMonth.set(key, list);
+  }
+
+  return Promise.all(
+    periods.map(async (p) => {
+      const monthStart = monthStartFrom(p.year, p.month);
+      return {
+        year: p.year,
+        month: p.month,
+        monthStart,
+        monthLabel: formatMonthLabel(monthStart),
+        state: p.state,
+        lodgedAt: p.lodgedAt,
+        approvedAt: p.approvedAt,
+        invoicedAt: p.invoicedAt,
+        totals: await getPeriodTotals(personId, monthStart),
+        draft:
+          p.draftRateCents !== null && p.draftAmountExGstCents !== null
+            ? {
+                rateCents: p.draftRateCents,
+                hours: Number(p.draftHours ?? 0),
+                amountExGstCents: p.draftAmountExGstCents,
+              }
+            : null,
+        bills: billsByMonth.get(`${p.year}-${p.month}`) ?? [],
+      };
+    }),
+  );
+}
+
+/**
+ * Close any `approved` period whose hours have all been billed.
+ *
+ * The admin out-of-cycle path (/directory/people/[id]/draft-bill) bills by
+ * person, not by period, so without this a month could end up fully billed
+ * yet stuck at `approved` forever — showing the contractor an invoice
+ * prompt for hours that are already on a bill. Called after that path runs
+ * so both routes leave the same state behind.
+ */
+export async function markPeriodsInvoicedIfFullyBilled(
+  tx: Prisma.TransactionClient,
+  personId: string,
+  months: MonthKey[],
+  now: Date,
+): Promise<void> {
+  for (const { year, month } of months) {
+    const period = await tx.timesheetPeriod.findUnique({
+      where: { personId_year_month: { personId, year, month } },
+      select: { id: true, state: true },
+    });
+    if (!period || period.state !== 'approved') continue;
+
+    const start = monthStartFrom(year, month);
+    const end = addDays(start, daysInMonth(year, month));
+    const unbilled = await tx.timesheetEntry.count({
+      where: { personId, date: { gte: start, lt: end }, contractorBillId: null },
+    });
+    if (unbilled > 0) continue;
+
+    await tx.timesheetPeriod.update({
+      where: { id: period.id },
+      data: { state: 'invoiced', invoicedAt: now },
+    });
+  }
+}

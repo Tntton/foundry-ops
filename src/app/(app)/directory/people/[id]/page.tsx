@@ -1107,10 +1107,13 @@ function PersonTimePanel({
           <CardHeader>
             <CardTitle>Approved &amp; unbilled</CardTitle>
             <CardDescription>
-              Approved contractor hours not yet attached to a bill. Generate a draft
-              bill below — the entries get linked to it once you save. This is
-              independent of client invoicing: these hours stay billable to the
-              client either way.
+              Approved contractor hours not yet attached to a bill. This is the{' '}
+              <strong>out-of-cycle</strong> path — for backfill, or a contractor who
+              can&apos;t submit their own. The normal route is monthly and
+              contractor-driven: they lodge the month, the leads approve it, and they
+              submit their own invoice from <code>/me/invoices</code>. Entries get
+              linked to the bill once you save. Independent of client invoicing —
+              these hours stay billable to the client either way.
             </CardDescription>
           </CardHeader>
           <CardContent>

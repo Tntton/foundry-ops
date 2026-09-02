@@ -189,6 +189,18 @@ export function UserMenu({
           >
             My profile
           </Link>
+          {/* Shown to everyone rather than gated on employment: the shell
+              doesn't know contractor vs full-time, and threading it through
+              for a menu item isn't worth it. /me/invoices explains itself to
+              anyone on payroll. */}
+          <Link
+            href="/me/invoices"
+            role="menuitem"
+            onClick={() => setOpen(false)}
+            className="block px-3 py-2 text-sm text-ink-2 hover:bg-surface-hover hover:text-ink"
+          >
+            My invoices
+          </Link>
 
           {viewAsChoices.length > 0 && (
             <div className="border-t border-line bg-surface-subtle/40">

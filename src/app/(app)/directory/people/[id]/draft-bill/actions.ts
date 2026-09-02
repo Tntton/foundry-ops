@@ -7,6 +7,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { writeAudit } from '@/server/audit';
+import { markPeriodsInvoicedIfFullyBilled, monthKeysFor } from '@/server/timesheet';
 
 export type DraftBillState =
   | { status: 'idle' }
@@ -87,7 +88,13 @@ export async function generateDraftBillFromHours(
   // invoicing a client silently withheld the contractor's own hours).
   const entries = await prisma.timesheetEntry.findMany({
     where: { personId, status: 'approved', contractorBillId: null },
-    select: { id: true, projectId: true, hours: true, project: { select: { code: true, name: true } } },
+    select: {
+      id: true,
+      date: true,
+      projectId: true,
+      hours: true,
+      project: { select: { code: true, name: true } },
+    },
   });
   if (entries.length === 0) {
     return {
@@ -176,6 +183,7 @@ export async function generateDraftBillFromHours(
             id: bill.id,
             after: {
               source: 'timesheet_draft_bill',
+              outOfCycle: true,
               projectId: g.projectId,
               projectCode: g.projectCode,
               hours: g.hours,
@@ -190,6 +198,18 @@ export async function generateDraftBillFromHours(
           source: 'web',
         });
       }
+
+      // This path bills by person, not by period, so a month can end up
+      // fully billed while its TimesheetPeriod still says `approved` —
+      // which would leave the contractor staring at an invoice prompt for
+      // hours already on a bill. Close any month this run completed, so
+      // both routes leave the same state behind (TASK-505).
+      await markPeriodsInvoicedIfFullyBilled(
+        tx,
+        personId,
+        monthKeysFor(entries.map((e) => e.date)),
+        issueDate,
+      );
     });
   } catch (err) {
     console.error('[bill.draftFromHours] failed:', err);
