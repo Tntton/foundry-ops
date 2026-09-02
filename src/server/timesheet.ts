@@ -1065,12 +1065,22 @@ export function monthKeysFor(dates: Date[]): MonthKey[] {
  * `invoiced` is terminal here — a late decision must never silently reopen a
  * month that has already been billed.
  */
+export type ClosedPeriod = {
+  personId: string;
+  year: number;
+  month: number;
+  monthLabel: string;
+  /** Null when the person is full-time — no invoice is ever raised. */
+  draft: { rateCents: number; hours: number; amountExGstCents: number } | null;
+};
+
 export async function reconcileTimesheetPeriodStates(
   tx: Prisma.TransactionClient,
   personId: string,
   months: MonthKey[],
   now: Date,
-): Promise<void> {
+): Promise<ClosedPeriod[]> {
+  const closed: ClosedPeriod[] = [];
   for (const { year, month } of months) {
     const period = await tx.timesheetPeriod.findUnique({
       where: { personId_year_month: { personId, year, month } },
@@ -1102,15 +1112,93 @@ export async function reconcileTimesheetPeriodStates(
     }
     if (next === period.state) continue;
 
+    // Closing the month is where the contractor's invoice numbers get
+    // frozen. Doing it here rather than at confirm time means the figures
+    // they're shown are the ones the approvals produced, whatever happens to
+    // Person.rate afterwards.
+    let draft: ClosedPeriod['draft'] = null;
+    if (next === 'approved') {
+      draft = await prepareContractorInvoiceDraft(tx, personId, year, month);
+    }
+
     await tx.timesheetPeriod.update({
       where: { id: period.id },
       data: {
         state: next,
         approvedAt: next === 'approved' ? now : null,
         ...(next === 'open' ? { lodgedAt: null } : {}),
+        // A reopened month's snapshot is stale by definition — clear it so a
+        // later close recomputes rather than resurrecting old figures.
+        ...(next === 'approved' && draft
+          ? {
+              draftRateCents: draft.rateCents,
+              draftHours: draft.hours,
+              draftAmountExGstCents: draft.amountExGstCents,
+              draftPreparedAt: now,
+            }
+          : {
+              draftRateCents: null,
+              draftHours: null,
+              draftAmountExGstCents: null,
+              draftPreparedAt: null,
+            }),
       },
     });
+
+    if (next === 'approved') {
+      closed.push({
+        personId,
+        year,
+        month,
+        monthLabel: formatMonthLabel(monthStartFrom(year, month)),
+        draft,
+      });
+    }
   }
+  return closed;
+}
+
+/**
+ * Compute what the contractor will be asked to confirm for a closed month.
+ *
+ * Priced at `Person.rate` — the contractor's COST rate, what they invoice
+ * Foundry — never `Person.billRate`, which is what Foundry charges the
+ * client. Confusing the two would have a contractor invoice us at the client
+ * rate.
+ *
+ * Returns null, and no invoice is ever offered, when the person is full-time
+ * (paid via pay runs), has no rate on file, or the month somehow has no
+ * hours. A missing rate is a data problem for an admin, not something to
+ * paper over with a zero-dollar invoice.
+ */
+async function prepareContractorInvoiceDraft(
+  tx: Prisma.TransactionClient,
+  personId: string,
+  year: number,
+  month: number,
+): Promise<ClosedPeriod['draft']> {
+  const person = await tx.person.findUnique({
+    where: { id: personId },
+    select: { employment: true, rate: true },
+  });
+  if (!person || person.employment !== 'contractor') return null;
+  const rateCents = person.rate ?? 0;
+  if (rateCents <= 0) return null;
+
+  const start = monthStartFrom(year, month);
+  const end = addDays(start, daysInMonth(year, month));
+  const entries = await tx.timesheetEntry.findMany({
+    where: { personId, date: { gte: start, lt: end }, status: 'approved' },
+    select: { hours: true },
+  });
+  const hours = entries.reduce((sum, e) => sum + Number(e.hours), 0);
+  if (hours <= 0) return null;
+
+  return {
+    rateCents,
+    hours,
+    amountExGstCents: Math.round(hours * rateCents),
+  };
 }
 
 // ─── Approval queue, grouped by person × month ──────────────────────────────

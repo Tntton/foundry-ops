@@ -25,6 +25,7 @@ import {
   preflightLodgeMonth,
   reconcileTimesheetPeriodStates,
   resolveAutoApproveProjectIds,
+  type ClosedPeriod,
   type LodgeWarning,
   type MonthKey,
 } from '@/server/timesheet';
@@ -1006,6 +1007,7 @@ export async function decideTimesheetEntries(
   }
 
   const decidedAt = new Date();
+  const closedPeriods: ClosedPeriod[] = [];
   try {
     await prisma.$transaction(async (tx) => {
       for (const entry of entries) {
@@ -1041,9 +1043,43 @@ export async function decideTimesheetEntries(
       // closes when EVERY entry in it is approved (D2) — one manager
       // clearing their slice of a three-project month leaves it lodged.
       for (const [personId, months] of monthsByPerson) {
-        await reconcileTimesheetPeriodStates(tx, personId, monthKeysFor(
+        const justClosed = await reconcileTimesheetPeriodStates(tx, personId, monthKeysFor(
           months.map((m) => monthStartFrom(m.year, m.month)),
         ), decidedAt);
+        closedPeriods.push(...justClosed);
+      }
+
+      // A closed month is the contractor's cue to invoice. Foundry doesn't
+      // issue it for them (D1) — this tells them a pre-filled draft is
+      // waiting at /me/invoices for them to check and submit.
+      for (const closed of closedPeriods) {
+        if (!closed.draft) continue; // full-time, or no rate / hours on file
+        await emitUserUpdateMany(tx, [closed.personId], {
+          kind: 'timesheet_approved',
+          title: `${closed.monthLabel} approved — your invoice is ready to confirm`,
+          body:
+            `All ${closed.draft.hours.toFixed(1)}h approved. We've pre-filled an invoice for ` +
+            `$${(closed.draft.amountExGstCents / 100).toFixed(2)} ex GST at ` +
+            `$${(closed.draft.rateCents / 100).toFixed(2)}/h. Add your invoice number and submit it.`,
+          href: '/me/invoices',
+          entityType: 'timesheet_period',
+          entityId: null,
+        });
+        await writeAudit(tx, {
+          actor: { type: 'person', id: session.person.id },
+          action: 'invoice_draft_prepared',
+          entity: {
+            type: 'timesheet_period',
+            id: `${closed.personId}:${closed.year}-${String(closed.month).padStart(2, '0')}`,
+            after: {
+              rateCents: closed.draft.rateCents,
+              hours: closed.draft.hours,
+              amountExGstCents: closed.draft.amountExGstCents,
+              awaitingContractorConfirmation: true,
+            },
+          },
+          source: 'web',
+        });
       }
 
       // Per-person feed: notify the submitters that their timesheet
@@ -1091,6 +1127,30 @@ export async function decideTimesheetEntries(
   // the tx commits and deliberately not awaited. The in-app feed item
   // above is the source of truth; a Meta outage must never surface as
   // a failed approval.
+  // Contractors whose month just closed get a second, different nudge: not
+  // "your hours were approved" but "your invoice is waiting". Best-effort,
+  // never awaited — a Meta outage must not fail an approval.
+  if (closedPeriods.some((c) => c.draft)) {
+    void (async () => {
+      const { sendContractorInvoiceReadyNotice } = await import(
+        '@/server/integrations/whatsapp-prompts'
+      );
+      for (const closed of closedPeriods) {
+        if (!closed.draft) continue;
+        try {
+          await sendContractorInvoiceReadyNotice({
+            personId: closed.personId,
+            monthLabel: closed.monthLabel,
+            hours: closed.draft.hours,
+            amountExGstCents: closed.draft.amountExGstCents,
+          });
+        } catch (err) {
+          console.error('[timesheet.decide] invoice-ready notice failed:', err);
+        }
+      }
+    })();
+  }
+
   void (async () => {
     const { sendTimesheetDecisionNotice } = await import(
       '@/server/integrations/whatsapp-prompts'

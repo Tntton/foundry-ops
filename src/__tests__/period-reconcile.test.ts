@@ -15,6 +15,10 @@ import { monthKeysFor } from '@/server/timesheet';
 const tx = vi.hoisted(() => ({
   timesheetPeriod: { findUnique: vi.fn(), update: vi.fn() },
   timesheetEntry: { findMany: vi.fn() },
+  // Closing a month prices the contractor's invoice draft (TASK-504), so
+  // reconcile reads the person. Default to full-time: no draft, and the
+  // snapshot columns get cleared.
+  person: { findUnique: vi.fn() },
 }));
 vi.mock('@/server/db', () => ({ prisma: {} }));
 
@@ -30,7 +34,18 @@ function entries(...statuses: string[]) {
   return statuses.map((status) => ({ status }));
 }
 
-beforeEach(() => vi.clearAllMocks());
+/** Snapshot columns are cleared on every transition that isn't a close. */
+const NO_DRAFT = {
+  draftRateCents: null,
+  draftHours: null,
+  draftAmountExGstCents: null,
+  draftPreparedAt: null,
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  tx.person.findUnique.mockResolvedValue({ employment: 'ft', rate: null });
+});
 
 describe('monthKeysFor', () => {
   it('dedupes dates down to the months they fall in', () => {
@@ -65,7 +80,7 @@ describe('reconcileTimesheetPeriodStates', () => {
 
     expect(tx.timesheetPeriod.update).toHaveBeenCalledWith({
       where: { id: 'per1' },
-      data: { state: 'approved', approvedAt: NOW },
+      data: { state: 'approved', approvedAt: NOW, ...NO_DRAFT },
     });
   });
 
@@ -89,7 +104,7 @@ describe('reconcileTimesheetPeriodStates', () => {
 
     expect(tx.timesheetPeriod.update).toHaveBeenCalledWith({
       where: { id: 'per1' },
-      data: { state: 'open', approvedAt: null, lodgedAt: null },
+      data: { state: 'open', approvedAt: null, lodgedAt: null, ...NO_DRAFT },
     });
   });
 
@@ -133,6 +148,9 @@ describe('reconcileTimesheetPeriodStates', () => {
     const where = tx.timesheetEntry.findMany.mock.calls[0]![0].where;
     expect(where.date.gte.toISOString().slice(0, 10)).toBe('2026-08-01');
     expect(where.date.lt.toISOString().slice(0, 10)).toBe('2026-09-01');
+    // No status filter on the roll-up: it has to see draft and submitted
+    // rows too, or a month with unapproved hours would look complete.
+    expect(where.status).toBeUndefined();
   });
 
   it('handles each month independently when a decision straddles two', async () => {
@@ -140,8 +158,8 @@ describe('reconcileTimesheetPeriodStates', () => {
       .mockResolvedValueOnce(period('lodged'))
       .mockResolvedValueOnce(period('lodged'));
     tx.timesheetEntry.findMany
-      .mockResolvedValueOnce(entries('approved'))            // August: done
-      .mockResolvedValueOnce(entries('approved', 'submitted')); // September: not
+      .mockResolvedValueOnce(entries('approved'))            // August roll-up: done
+      .mockResolvedValueOnce(entries('approved', 'submitted')); // September roll-up: not
 
     await reconcileTimesheetPeriodStates(
       tx as never,
@@ -155,5 +173,100 @@ describe('reconcileTimesheetPeriodStates', () => {
 
     expect(tx.timesheetPeriod.update).toHaveBeenCalledTimes(1);
     expect(tx.timesheetPeriod.update.mock.calls[0]![0].data.state).toBe('approved');
+  });
+});
+
+describe('invoice draft snapshot on close', () => {
+  it('freezes the contractor rate and amount when the month closes', async () => {
+    tx.timesheetPeriod.findUnique.mockResolvedValue(period('lodged'));
+    tx.person.findUnique.mockResolvedValue({ employment: 'contractor', rate: 22_000 });
+    tx.timesheetEntry.findMany
+      .mockResolvedValueOnce(entries('approved', 'approved'))  // roll-up
+      .mockResolvedValueOnce([{ hours: 6 }, { hours: 4 }]);    // pricing read
+
+    await reconcileTimesheetPeriodStates(tx as never, 'p1', AUG, NOW);
+
+    expect(tx.timesheetPeriod.update).toHaveBeenCalledWith({
+      where: { id: 'per1' },
+      data: {
+        state: 'approved',
+        approvedAt: NOW,
+        draftRateCents: 22_000,
+        draftHours: 10,
+        draftAmountExGstCents: 220_000,
+        draftPreparedAt: NOW,
+      },
+    });
+  });
+
+  it('prices only APPROVED hours, never anything still in draft', async () => {
+    tx.timesheetPeriod.findUnique.mockResolvedValue(period('lodged'));
+    tx.person.findUnique.mockResolvedValue({ employment: 'contractor', rate: 22_000 });
+    tx.timesheetEntry.findMany
+      .mockResolvedValueOnce(entries('approved'))
+      .mockResolvedValueOnce([{ hours: 8 }]);
+
+    await reconcileTimesheetPeriodStates(tx as never, 'p1', AUG, NOW);
+
+    expect(tx.timesheetEntry.findMany.mock.calls[1]![0].where.status).toBe('approved');
+  });
+
+  it('never prepares a draft for full-time staff', async () => {
+    tx.timesheetPeriod.findUnique.mockResolvedValue(period('lodged'));
+    tx.person.findUnique.mockResolvedValue({ employment: 'ft', rate: 22_000 });
+    tx.timesheetEntry.findMany.mockResolvedValue(entries('approved'));
+
+    const closed = await reconcileTimesheetPeriodStates(tx as never, 'p1', AUG, NOW);
+
+    expect(closed[0]!.draft).toBeNull();
+    expect(tx.timesheetPeriod.update.mock.calls[0]![0].data).toMatchObject(NO_DRAFT);
+  });
+
+  it('prepares no draft when the contractor has no rate on file', async () => {
+    // A missing rate is an admin data problem, not something to paper over
+    // with a zero-dollar invoice.
+    tx.timesheetPeriod.findUnique.mockResolvedValue(period('lodged'));
+    tx.person.findUnique.mockResolvedValue({ employment: 'contractor', rate: null });
+    tx.timesheetEntry.findMany.mockResolvedValue(entries('approved'));
+
+    const closed = await reconcileTimesheetPeriodStates(tx as never, 'p1', AUG, NOW);
+
+    expect(closed[0]!.draft).toBeNull();
+  });
+
+  it('clears a stale snapshot when a month is reopened', async () => {
+    tx.timesheetPeriod.findUnique.mockResolvedValue(period('approved'));
+    tx.timesheetEntry.findMany.mockResolvedValue(entries('draft'));
+
+    await reconcileTimesheetPeriodStates(tx as never, 'p1', AUG, NOW);
+
+    expect(tx.timesheetPeriod.update.mock.calls[0]![0].data).toMatchObject(NO_DRAFT);
+  });
+
+  it('reports what closed so the caller can notify', async () => {
+    tx.timesheetPeriod.findUnique.mockResolvedValue(period('lodged'));
+    tx.person.findUnique.mockResolvedValue({ employment: 'contractor', rate: 22_000 });
+    tx.timesheetEntry.findMany
+      .mockResolvedValueOnce(entries('approved'))
+      .mockResolvedValueOnce([{ hours: 10 }]);
+
+    const closed = await reconcileTimesheetPeriodStates(tx as never, 'p1', AUG, NOW);
+
+    expect(closed).toEqual([
+      {
+        personId: 'p1',
+        year: 2026,
+        month: 8,
+        monthLabel: 'August 2026',
+        draft: { rateCents: 22_000, hours: 10, amountExGstCents: 220_000 },
+      },
+    ]);
+  });
+
+  it('reports nothing when no month closed', async () => {
+    tx.timesheetPeriod.findUnique.mockResolvedValue(period('lodged'));
+    tx.timesheetEntry.findMany.mockResolvedValue(entries('submitted'));
+
+    expect(await reconcileTimesheetPeriodStates(tx as never, 'p1', AUG, NOW)).toEqual([]);
   });
 });

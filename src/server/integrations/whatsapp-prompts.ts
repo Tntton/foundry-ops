@@ -228,6 +228,56 @@ export function buildTimesheetDecisionWhatsApp(opts: {
 }
 
 /**
+ * Body text for a contractor's "your month closed, invoice us" DM.
+ *
+ * Deliberately does NOT say Foundry has raised an invoice — it hasn't.
+ * The contractor issues their own (D1, TT 2026-08-31); this points them at a
+ * pre-filled draft they check, number, and submit. Getting that wording
+ * right matters: telling a contractor we've invoiced on their behalf would
+ * describe an RCTI arrangement that doesn't exist.
+ */
+export function buildContractorInvoiceReadyWhatsApp(opts: {
+  firstName: string;
+  monthLabel: string;
+  hours: number;
+  amountExGstCents: number;
+  appBaseUrl: string;
+}): string {
+  return (
+    `Hi ${opts.firstName} — your ${opts.monthLabel} timesheet is fully approved ` +
+    `(${opts.hours.toFixed(1)}h). We've pre-filled an invoice for ` +
+    `$${(opts.amountExGstCents / 100).toFixed(2)} ex GST — add your invoice number ` +
+    `and submit it when you're ready.` +
+    `\n\n${opts.appBaseUrl}/me/invoices`
+  );
+}
+
+export async function sendContractorInvoiceReadyNotice(opts: {
+  personId: string;
+  monthLabel: string;
+  hours: number;
+  amountExGstCents: number;
+}): Promise<boolean> {
+  if (!isWhatsAppConfigured()) return false;
+  const person = await prisma.person.findUnique({
+    where: { id: opts.personId },
+    select: { firstName: true, whatsappNumber: true, endDate: true },
+  });
+  if (!person?.whatsappNumber || person.endDate) return false;
+  return send(
+    opts.personId,
+    person.whatsappNumber,
+    buildContractorInvoiceReadyWhatsApp({
+      firstName: person.firstName,
+      monthLabel: opts.monthLabel,
+      hours: opts.hours,
+      amountExGstCents: opts.amountExGstCents,
+      appBaseUrl: APP_BASE_URL,
+    }),
+  );
+}
+
+/**
  * Body text for an approver's "there's a timesheet waiting" DM.
  */
 export function buildTimesheetApprovalQueueWhatsApp(opts: {
