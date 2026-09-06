@@ -1748,6 +1748,18 @@ Migrate personnel fields, functionality and taxonomy to the FY27 role architectu
 > 2. **Read the first migration's `RAISE NOTICE` output.** Any row it lists could not be matched to a `bill.created` audit event and needs a human to decide which bill it belonged to. Empty notice = nothing to do.
 > 3. **Create the `timesheet_chase` FeatureFlag row and enable it** when you want the chase cron live. Until then `/api/cron/timesheet-chase` returns `{skipped}`. Optionally set `TIMESHEET_CHASE_AFTER_DAYS` / `TIMESHEET_ESCALATE_AFTER_DAYS` (defaults 3 / 7).
 
+**DEPLOYED TO PROD 2026-09-06 — with an incident. Read this before deploying any later phase.**
+
+All four Phase 8 migrations were applied to prod via the Supabase SQL Editor (`scripts/phase8-supabase.sql`: the migration files concatenated in one transaction, with matching `_prisma_migrations` ledger rows). The CLI route was unavailable — `.env.local` points at Supabase ref `epadyqrgutfzvwwxyxjm`, which no longer exists, and Vercel marks `DATABASE_URL`/`DIRECT_URL` as **Secret**, which is write-only, so `vercel env pull` returns `[SENSITIVE]` placeholders. The TASK-500 backfill reported **zero** affected rows, so no hours needed manual reassignment.
+
+**What went wrong:** these migrations were applied from an **unmerged branch** while production still ran `main` (HEAD 2026-07-11). TASK-500's migration *drops* `'billed'` from the `TimesheetStatus` enum, and the deployed July code referenced that literal in 23 files (`status: { in: ['approved','billed'] }`). Every page reading timesheet hours started failing with `invalid input value for enum TimesheetStatus: "billed"` — `/me`, `/directory/people/[id]`, project hours + tracker, `/timesheet/approve`, and the P&L / utilisation / budget / scorecard / Excel-export paths.
+
+**Restored** within minutes by `ALTER TYPE "TimesheetStatus" ADD VALUE IF NOT EXISTS 'billed';` — lossless, since no row has ever held the value post-backfill. Prod's enum is now deliberately ahead of its own migration history; `20260907000000_drop_timesheet_status_billed` closes that gap and **must ship in a deploy AFTER the Phase 8 code is live** (see TASK-508).
+
+**The rule this establishes:** additive migrations may be applied ahead of code; **destructive ones may not**. `scripts/vercel-build.mjs` already auto-applies migrations on production builds — so in the normal flow (merge → deploy) schema and code move together and this cannot happen. It only happened because the migrations were hand-applied out of band. Prefer merging over hand-applying; see TASK-507.
+
+**Also corrected:** three late-July migrations (`add_import_dry_run`, `add_invoice_sharepoint_pointer`, `add_scenario`) were found missing from prod's ledger and backfilled via `scripts/backfill-july-migrations.sql`. This was initially — and wrongly — read as "three features broken in production for six weeks". They were not: that code has never been merged to `main` either, so nothing referenced the missing tables. The backfill was harmless (additive tables + nullable columns) but was not fixing a live fault.
+
 ### TASK-500 — Decouple contractor-bill from client-invoice hour consumption
 **status:** done
 **depends on:** —
@@ -1916,6 +1928,32 @@ Thresholds live in **env** (`TIMESHEET_CHASE_AFTER_DAYS` / `TIMESHEET_ESCALATE_A
 Force-close reuses the normal roll-up, so a force-closed month produces the same state and the same frozen invoice draft as an ordinary close. It requires a real reason, records which projects were bypassed and who owed each, and notifies the contractor *and* every bypassed approver.
 
 **Not yet enabled:** the `timesheet_chase` FeatureFlag row must be created and set enabled, and `CRON_SECRET` must already be set (it is, for the existing crons). Until then the route returns `{skipped}`.
+
+### TASK-507 — Guard against destructive migrations running ahead of deployed code
+**status:** todo
+**depends on:** —
+**acceptance:**
+- [ ] **Incident 2026-09-06 (see the Phase 8 header):** Phase 8 migrations were hand-applied to prod from an unmerged branch. The enum-value drop in TASK-500's migration broke every deployed page that read timesheet hours, because `main` was seven weeks behind and still used the value. Restored in minutes; no data lost.
+- [ ] **The real gap is NOT "migrations don't run."** `scripts/vercel-build.mjs` already runs `prisma migrate deploy` on production builds, so the merge → deploy path keeps schema and code in step. The gap is that **nothing flags a migration as destructive**, and nothing stops one being applied out of band ahead of the code that needs it.
+- [ ] Classify each migration additive vs destructive — a script that greps for `DROP TABLE`, `DROP COLUMN`, `DROP TYPE`, `ALTER TYPE ... RENAME`, `NOT NULL` added to an existing column, and type narrowing. Emit a manifest.
+- [ ] `scripts/vercel-build.mjs` refuses to apply a **destructive** migration when `VERCEL_ENV=production` unless the commit being deployed is on the production branch. Additive migrations are unaffected.
+- [ ] A `pnpm migrate:bundle` command that produces a Supabase-SQL-Editor bundle like `scripts/phase8-supabase.sql`, and **refuses to generate one containing a destructive migration** — pointing the operator at merge-then-deploy instead. Hand-applying is the path that bit us; make the safe path the easy one.
+- [ ] `DEPLOY.md` §1b documents the additive-vs-destructive rule explicitly, and states that prod deploys from `main` while feature branches may be many weeks ahead.
+- [ ] Tests: destructive statements detected in fixture SQL; additive migrations pass; bundle generation refuses on a destructive input.
+- [ ] Commit: `feat(TASK-507): block destructive migrations from running ahead of deployed code`
+
+**context:** Supersedes the original framing of this task ("fail the build on migration drift"), which was written from the mistaken belief that migrations weren't auto-applying. They are. Rewritten 2026-09-06 once `vercel-build.mjs` and `main`'s actual HEAD were checked.
+
+### TASK-508 — Re-drop `TimesheetStatus.billed` (deploy AFTER Phase 8 is live)
+**status:** todo
+**depends on:** TASK-500, and Phase 8 being merged + deployed to prod
+**acceptance:**
+- [ ] Migration `20260907000000_drop_timesheet_status_billed` already written and committed. It is **guarded**: a no-op on any database where TASK-500's migration already removed the value (i.e. everything except prod), and it refuses to run while any `TimesheetEntry` still holds `status='billed'`.
+- [ ] **Sequencing is the whole task. Do NOT ship this in the same deploy as the Phase 8 code.** `vercel-build.mjs` runs `migrate deploy` *before* `next build`, so a migration in the same deploy executes while the old code is still serving — reproducing the 2026-09-06 breakage, briefly. Merge and deploy Phase 8 first, confirm prod is serving the new code, then ship this in a separate deploy.
+- [ ] After it runs, confirm prod matches the migration history: `select enumlabel from pg_enum e join pg_type t on t.oid = e.enumtypid where t.typname = 'TimesheetStatus'` returns exactly draft / submitted / approved.
+- [ ] Commit: `chore(db): re-drop TimesheetStatus.billed now Phase 8 code is live`
+
+**context:** Prod's enum currently carries `'billed'` because it was restored by hand during the 2026-09-06 incident. Every other environment already lacks it. This is bookkeeping to bring prod back in line — there is no urgency and no data impact; an unused enum value is harmless.
 
 ---
 
