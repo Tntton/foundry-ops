@@ -135,28 +135,75 @@ export async function confirmContractorInvoice(
     },
     select: { id: true, projectId: true, hours: true, project: { select: { code: true } } },
   });
-  if (entries.length === 0) {
-    return {
-      status: 'error',
-      message: 'Every hour in this month is already on a contractor bill.',
-    };
-  }
 
   const rateCents = period.draftRateCents;
   const groups = new Map<
     string,
-    { projectId: string; projectCode: string; hours: number; entryIds: string[] }
+    {
+      projectId: string;
+      projectCode: string;
+      hours: number;
+      entryIds: string[];
+      /** Pass-through costs, GST-INCLUSIVE (D3). */
+      expenseTotalCents: number;
+      /** GST contained within expenseTotalCents, which Foundry reclaims. */
+      expenseGstCents: number;
+      expenseIds: string[];
+    }
   >();
+  const emptyGroup = (projectId: string, projectCode: string) => ({
+    projectId,
+    projectCode,
+    hours: 0,
+    entryIds: [] as string[],
+    expenseTotalCents: 0,
+    expenseGstCents: 0,
+    expenseIds: [] as string[],
+  });
   for (const e of entries) {
-    const cur = groups.get(e.projectId) ?? {
-      projectId: e.projectId,
-      projectCode: e.project.code,
-      hours: 0,
-      entryIds: [] as string[],
-    };
+    const cur = groups.get(e.projectId) ?? emptyGroup(e.projectId, e.project.code);
     cur.hours += Number(e.hours);
     cur.entryIds.push(e.id);
     groups.set(e.projectId, cur);
+  }
+
+  // Pass-through expenses for the same month (TASK-509). Mirrors the filter
+  // in prepareContractorInvoiceDraft exactly — if the two drift, the
+  // contractor confirms one set of figures and gets billed for another.
+  // Untagged (OPEX) expenses are excluded: confirm raises one Bill per
+  // project, so they have nowhere to land, and they stay on the
+  // reimbursement path.
+  const expenses = await prisma.expense.findMany({
+    where: {
+      personId,
+      date: { gte: start, lt: end },
+      status: 'approved',
+      contractorBillId: null,
+      projectId: { not: null },
+    },
+    select: {
+      id: true,
+      amount: true,
+      gst: true,
+      projectId: true,
+      project: { select: { code: true } },
+    },
+  });
+  for (const x of expenses) {
+    const projectId = x.projectId!;
+    const cur = groups.get(projectId) ?? emptyGroup(projectId, x.project?.code ?? '—');
+    cur.expenseTotalCents += x.amount;
+    cur.expenseGstCents += x.gst;
+    cur.expenseIds.push(x.id);
+    groups.set(projectId, cur);
+  }
+
+  if (groups.size === 0) {
+    return {
+      status: 'error',
+      message:
+        'Nothing left to invoice for this month — the hours and any expenses are already on a contractor bill.',
+    };
   }
 
   const issueDate = new Date();
@@ -167,9 +214,15 @@ export async function confirmContractorInvoice(
   try {
     await prisma.$transaction(async (tx) => {
       for (const g of groups.values()) {
-        const exGstCents = Math.round(g.hours * rateCents);
-        const gstCents = Math.round(exGstCents * GST_RATE);
-        totalExGst += exGstCents;
+        // Fees: GST is ADDED to hours × rate (the contractor's own supply).
+        const feesExGstCents = Math.round(g.hours * rateCents);
+        const feesGstCents = Math.round(feesExGstCents * GST_RATE);
+        // Expenses: passed through at what the contractor paid, GST already
+        // inside the figure and NOT charged again on top (D3,
+        // TT 2026-09-10). Foundry reclaims that GST as an input credit.
+        const gstCents = feesGstCents + g.expenseGstCents;
+        const amountTotalCents = feesExGstCents + feesGstCents + g.expenseTotalCents;
+        totalExGst += feesExGstCents;
         const bill = await tx.bill.create({
           data: {
             supplierPersonId: personId,
@@ -179,7 +232,7 @@ export async function confirmContractorInvoice(
             attachmentSharepointUrl: parsed.data.attachmentSharepointUrl,
             issueDate,
             dueDate,
-            amountTotal: exGstCents + gstCents,
+            amountTotal: amountTotalCents,
             gst: gstCents,
             category: 'Contractor — services',
             projectId: g.projectId,
@@ -192,6 +245,16 @@ export async function confirmContractorInvoice(
           where: { id: { in: g.entryIds } },
           data: { contractorBillId: bill.id },
         });
+        // Same for the pass-through costs. Setting contractorBillId takes
+        // them out of the reimbursement float, so they can't also be paid
+        // through a pay run. `rebillable` / `rebilledOnInvoiceId` are left
+        // alone: recharging the client is a separate, legitimate leg.
+        if (g.expenseIds.length > 0) {
+          await tx.expense.updateMany({
+            where: { id: { in: g.expenseIds } },
+            data: { contractorBillId: bill.id },
+          });
+        }
         await writeAudit(tx, {
           actor: { type: 'person', id: session!.person.id },
           action: 'created',
@@ -205,11 +268,17 @@ export async function confirmContractorInvoice(
               projectId: g.projectId,
               projectCode: g.projectCode,
               hours: g.hours,
+              expenseIds: g.expenseIds,
+              expenseTotalCentsIncGst: g.expenseTotalCents,
+              expenseGstCentsReclaimable: g.expenseGstCents,
+              expenseTreatment: 'pass_through_contractor_adds_no_gst',
               // The frozen rate, not today's — recorded so the audit trail
               // explains the amount even after a rate change.
               rateCentsAtClose: rateCents,
-              exGstCents,
+              feesExGstCents,
+              feesGstCents,
               gstCents,
+              amountTotalCents,
               contractorInvoiceNumber,
               timesheetEntryIds: g.entryIds,
               issuedByContractor: true,

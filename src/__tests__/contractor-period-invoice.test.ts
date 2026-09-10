@@ -21,6 +21,9 @@ const db = vi.hoisted(() => ({
   timesheetPeriod: { findUnique: vi.fn(), update: vi.fn() },
   timesheetEntry: { findMany: vi.fn(), updateMany: vi.fn() },
   bill: { create: vi.fn() },
+  // TASK-509: the invoice now has an expense leg. Default to none so
+  // these cases keep testing the hours path in isolation.
+  expense: { findMany: vi.fn(), updateMany: vi.fn() },
   $transaction: vi.fn(),
 }));
 vi.mock('@/server/db', () => ({ prisma: db }));
@@ -87,6 +90,7 @@ function form(overrides: Record<string, string> = {}): FormData {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  db.expense.findMany.mockResolvedValue([]);
   sessionMod.getSession.mockResolvedValue(sessionFor('p1', ['staff']));
   db.person.findUnique.mockResolvedValue({
     id: 'p1',

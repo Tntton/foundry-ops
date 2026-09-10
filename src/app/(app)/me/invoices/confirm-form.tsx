@@ -21,6 +21,10 @@ export function ConfirmInvoiceForm({
   hours,
   rateCents,
   amountExGstCents,
+  expenseTotalCents,
+  expenseGstCents,
+  expenseCount,
+  excludedExpenseCount,
 }: {
   personId: string;
   year: number;
@@ -29,13 +33,26 @@ export function ConfirmInvoiceForm({
   hours: number;
   rateCents: number;
   amountExGstCents: number;
+  /** Pass-through costs, GST-INCLUSIVE (D3). */
+  expenseTotalCents: number;
+  /** GST already inside expenseTotalCents; Foundry reclaims it. */
+  expenseGstCents: number;
+  expenseCount: number;
+  /** Untagged (OPEX) expenses that stay on the reimbursement path. */
+  excludedExpenseCount: number;
 }) {
   const [state, action] = useFormState<ConfirmInvoiceState, FormData>(
     confirmContractorInvoice,
     { status: 'idle' },
   );
 
-  const gst = Math.round(amountExGstCents * 0.1);
+  // GST is ADDED to fees (the contractor's own supply) but NOT to expenses,
+  // which are passed through at what they paid with the GST already inside
+  // (D3, TT 2026-09-10). Charging GST on top of those lines would bill it
+  // twice.
+  const feesGst = Math.round(amountExGstCents * 0.1);
+  const gst = feesGst + expenseGstCents;
+  const total = amountExGstCents + feesGst + expenseTotalCents;
   const money = (cents: number) =>
     new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(
       cents / 100,
@@ -62,14 +79,36 @@ export function ConfirmInvoiceForm({
           </span>
           <span className="tabular-nums text-ink">{money(amountExGstCents)}</span>
         </div>
+        {expenseCount > 0 && (
+          <div className="flex justify-between py-0.5">
+            <span className="text-ink-3">
+              Expenses at cost · {expenseCount} {expenseCount === 1 ? 'item' : 'items'}
+              <span className="ml-1 text-ink-4">(inc {money(expenseGstCents)} GST)</span>
+            </span>
+            <span className="tabular-nums text-ink">{money(expenseTotalCents)}</span>
+          </div>
+        )}
         <div className="flex justify-between py-0.5">
-          <span className="text-ink-3">GST (10%)</span>
+          <span className="text-ink-3">
+            GST{expenseCount > 0 ? ' (10% on fees + GST within expenses)' : ' (10%)'}
+          </span>
           <span className="tabular-nums text-ink">{money(gst)}</span>
         </div>
         <div className="mt-1 flex justify-between border-t border-line pt-1 font-semibold">
           <span className="text-ink">Total inc GST</span>
-          <span className="tabular-nums text-ink">{money(amountExGstCents + gst)}</span>
+          <span className="tabular-nums text-ink">{money(total)}</span>
         </div>
+        {excludedExpenseCount > 0 && (
+          <div className="mt-2 rounded-md border border-line bg-surface-subtle px-2 py-1.5 text-[11px] text-ink-3">
+            {excludedExpenseCount} approved{' '}
+            {excludedExpenseCount === 1 ? 'expense is' : 'expenses are'} not on this
+            invoice because {excludedExpenseCount === 1 ? 'it has' : 'they have'} no
+            project tagged. {excludedExpenseCount === 1 ? 'It stays' : 'They stay'} on the
+            normal reimbursement path — tag {excludedExpenseCount === 1 ? 'it' : 'them'} to
+            a project before the month closes to include{' '}
+            {excludedExpenseCount === 1 ? 'it' : 'them'} next time.
+          </div>
+        )}
         <p className="mt-2 text-[11px] text-ink-3">
           Rate locked when {monthLabel} was approved. Split across projects on submit so
           each lands on the right engagement.

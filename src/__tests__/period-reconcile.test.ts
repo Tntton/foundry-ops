@@ -19,6 +19,9 @@ const tx = vi.hoisted(() => ({
   // reconcile reads the person. Default to full-time: no draft, and the
   // snapshot columns get cleared.
   person: { findUnique: vi.fn() },
+  // TASK-509: the invoice now has an expense leg. Default to none so
+  // these cases keep testing the hours path in isolation.
+  expense: { findMany: vi.fn(), updateMany: vi.fn() },
 }));
 vi.mock('@/server/db', () => ({ prisma: {} }));
 
@@ -39,11 +42,15 @@ const NO_DRAFT = {
   draftRateCents: null,
   draftHours: null,
   draftAmountExGstCents: null,
+  draftExpenseTotalCents: null,
+  draftExpenseGstCents: null,
+  draftExpenseCount: null,
   draftPreparedAt: null,
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  tx.expense.findMany.mockResolvedValue([]);
   tx.person.findUnique.mockResolvedValue({ employment: 'ft', rate: null });
 });
 
@@ -194,6 +201,11 @@ describe('invoice draft snapshot on close', () => {
         draftRateCents: 22_000,
         draftHours: 10,
         draftAmountExGstCents: 220_000,
+        // No expenses in this month, so the pass-through leg is zero
+        // rather than absent (TASK-509).
+        draftExpenseTotalCents: 0,
+        draftExpenseGstCents: 0,
+        draftExpenseCount: 0,
         draftPreparedAt: NOW,
       },
     });
@@ -258,7 +270,14 @@ describe('invoice draft snapshot on close', () => {
         year: 2026,
         month: 8,
         monthLabel: 'August 2026',
-        draft: { rateCents: 22_000, hours: 10, amountExGstCents: 220_000 },
+        draft: {
+          rateCents: 22_000,
+          hours: 10,
+          amountExGstCents: 220_000,
+          expenseTotalCents: 0,
+          expenseGstCents: 0,
+          expenseCount: 0,
+        },
       },
     ]);
   });

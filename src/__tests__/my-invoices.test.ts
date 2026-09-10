@@ -16,6 +16,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const db = vi.hoisted(() => ({
   timesheetPeriod: { findMany: vi.fn() },
   timesheetEntry: { findMany: vi.fn() },
+  // TASK-509: the invoice now has an expense leg. Default to none so
+  // these cases keep testing the hours path in isolation.
+  expense: { findMany: vi.fn(), updateMany: vi.fn() },
 }));
 vi.mock('@/server/db', () => ({ prisma: db }));
 
@@ -37,6 +40,9 @@ function period(year: number, month: number, overrides: Record<string, unknown> 
     draftRateCents: 22_000,
     draftHours: 10,
     draftAmountExGstCents: 220_000,
+    draftExpenseTotalCents: 0,
+    draftExpenseGstCents: 0,
+    draftExpenseCount: 0,
     draftPreparedAt: new Date(),
     ...overrides,
   };
@@ -44,6 +50,7 @@ function period(year: number, month: number, overrides: Record<string, unknown> 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  db.expense.findMany.mockResolvedValue([]);
   db.timesheetEntry.findMany.mockResolvedValue([]);
 });
 
@@ -80,6 +87,9 @@ describe('listMyInvoicePeriods', () => {
       rateCents: 22_000,
       hours: 10,
       amountExGstCents: 220_000,
+      expenseTotalCents: 0,
+      expenseGstCents: 0,
+      expenseCount: 0,
     });
   });
 

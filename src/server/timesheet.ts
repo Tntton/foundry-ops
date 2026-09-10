@@ -1071,7 +1071,20 @@ export type ClosedPeriod = {
   month: number;
   monthLabel: string;
   /** Null when the person is full-time — no invoice is ever raised. */
-  draft: { rateCents: number; hours: number; amountExGstCents: number } | null;
+  draft: {
+  rateCents: number;
+  hours: number;
+  amountExGstCents: number;
+  /**
+   * Pass-through expenses on the same invoice (TASK-509). GST-INCLUSIVE:
+   * D3 has the contractor invoice the full amount they paid and add no GST
+   * of their own on these lines, with Foundry claiming the input credit.
+   */
+  expenseTotalCents: number;
+  /** GST contained WITHIN expenseTotalCents, not added to it. */
+  expenseGstCents: number;
+  expenseCount: number;
+} | null;
 };
 
 export async function reconcileTimesheetPeriodStates(
@@ -1134,12 +1147,18 @@ export async function reconcileTimesheetPeriodStates(
               draftRateCents: draft.rateCents,
               draftHours: draft.hours,
               draftAmountExGstCents: draft.amountExGstCents,
+              draftExpenseTotalCents: draft.expenseTotalCents,
+              draftExpenseGstCents: draft.expenseGstCents,
+              draftExpenseCount: draft.expenseCount,
               draftPreparedAt: now,
             }
           : {
               draftRateCents: null,
               draftHours: null,
               draftAmountExGstCents: null,
+              draftExpenseTotalCents: null,
+              draftExpenseGstCents: null,
+              draftExpenseCount: null,
               draftPreparedAt: null,
             }),
       },
@@ -1194,10 +1213,32 @@ async function prepareContractorInvoiceDraft(
   const hours = entries.reduce((sum, e) => sum + Number(e.hours), 0);
   if (hours <= 0) return null;
 
+  // Pass-through costs for the same month (TASK-509). Only `approved`
+  // expenses tagged to a project and not already on a contractor bill:
+  //   - `submitted` hasn't cleared review, so it isn't owed yet
+  //   - `reimbursed` / `batched_for_payment` are already being paid the
+  //     other way; putting them here as well pays twice
+  //   - untagged (OPEX) expenses have no project Bill to join, because
+  //     confirm raises one Bill per project
+  const expenses = await tx.expense.findMany({
+    where: {
+      personId,
+      date: { gte: start, lt: end },
+      status: 'approved',
+      contractorBillId: null,
+      projectId: { not: null },
+    },
+    select: { amount: true, gst: true },
+  });
+
   return {
     rateCents,
     hours,
     amountExGstCents: Math.round(hours * rateCents),
+    // GST-inclusive by design (D3) — the contractor recharges what they paid.
+    expenseTotalCents: expenses.reduce((sum, e) => sum + e.amount, 0),
+    expenseGstCents: expenses.reduce((sum, e) => sum + e.gst, 0),
+    expenseCount: expenses.length,
   };
 }
 
@@ -1406,8 +1447,28 @@ export type MyInvoicePeriod = {
   invoicedAt: Date | null;
   /** Hours in the month, by DB status, so the card can explain what's left. */
   totals: PeriodTotals;
+  /**
+   * Approved expenses in the month with no project tag, which therefore
+   * cannot join a project Bill and stay on the reimbursement path
+   * (TASK-509). Surfaced so the contractor isn't left wondering where a
+   * cost went.
+   */
+  excludedExpenseCount: number;
   /** Frozen at close; null until the month closes. */
-  draft: { rateCents: number; hours: number; amountExGstCents: number } | null;
+  draft: {
+  rateCents: number;
+  hours: number;
+  amountExGstCents: number;
+  /**
+   * Pass-through expenses on the same invoice (TASK-509). GST-INCLUSIVE:
+   * D3 has the contractor invoice the full amount they paid and add no GST
+   * of their own on these lines, with Foundry claiming the input credit.
+   */
+  expenseTotalCents: number;
+  /** GST contained WITHIN expenseTotalCents, not added to it. */
+  expenseGstCents: number;
+  expenseCount: number;
+} | null;
   /** Bills raised for this month, once the contractor has submitted. */
   bills: Array<{
     id: string;
@@ -1448,6 +1509,24 @@ export async function listMyInvoicePeriods(
     monthStartFrom(latest.year, latest.month),
     daysInMonth(latest.year, latest.month),
   );
+  // Approved but untagged (OPEX) expenses — excluded from the invoice
+  // because confirm raises one Bill per project and these have none.
+  const untaggedExpenses = await prisma.expense.findMany({
+    where: {
+      personId,
+      date: { gte: earliest, lt: latestEnd },
+      status: 'approved',
+      contractorBillId: null,
+      projectId: null,
+    },
+    select: { date: true },
+  });
+  const untaggedByMonth = new Map<string, number>();
+  for (const x of untaggedExpenses) {
+    const key = `${x.date.getUTCFullYear()}-${x.date.getUTCMonth() + 1}`;
+    untaggedByMonth.set(key, (untaggedByMonth.get(key) ?? 0) + 1);
+  }
+
   const billedEntries = await prisma.timesheetEntry.findMany({
     where: {
       personId,
@@ -1504,8 +1583,15 @@ export async function listMyInvoicePeriods(
                 rateCents: p.draftRateCents,
                 hours: Number(p.draftHours ?? 0),
                 amountExGstCents: p.draftAmountExGstCents,
+                // Default to 0 rather than null for periods closed before
+                // TASK-509 shipped — they carry no expense snapshot, and a
+                // zero expense section is the truthful rendering.
+                expenseTotalCents: p.draftExpenseTotalCents ?? 0,
+                expenseGstCents: p.draftExpenseGstCents ?? 0,
+                expenseCount: p.draftExpenseCount ?? 0,
               }
             : null,
+        excludedExpenseCount: untaggedByMonth.get(`${p.year}-${p.month}`) ?? 0,
         bills: billsByMonth.get(`${p.year}-${p.month}`) ?? [],
       };
     }),

@@ -152,6 +152,10 @@ export default async function MyInvoicesPage({
                   hours={p.draft.hours}
                   rateCents={p.draft.rateCents}
                   amountExGstCents={p.draft.amountExGstCents}
+                  expenseTotalCents={p.draft.expenseTotalCents}
+                  expenseGstCents={p.draft.expenseGstCents}
+                  expenseCount={p.draft.expenseCount}
+                  excludedExpenseCount={p.excludedExpenseCount}
                 />
               )}
 
