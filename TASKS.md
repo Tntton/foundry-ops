@@ -1955,6 +1955,25 @@ Force-close reuses the normal roll-up, so a force-closed month produces the same
 
 **context:** Prod's enum currently carries `'billed'` because it was restored by hand during the 2026-09-06 incident. Every other environment already lacks it. This is bookkeeping to bring prod back in line — there is no urgency and no data impact; an unused enum value is harmless.
 
+### TASK-509 — Contractor expenses on the period invoice
+**status:** todo
+**depends on:** TASK-500, TASK-504, TASK-505
+**acceptance:**
+- [ ] **Gap:** the TASK-504 auto-draft prices hours only. `/me/invoices` has no reference to `Expense` anywhere. A contractor who spent A$400 on flights in August confirms an invoice covering their time and nothing else, then gets reimbursed separately on the pay-run cycle. Two payments, two timelines, and the invoice number they supplied covers part of what they are owed.
+- [ ] **D3 (TT 2026-09-10): one invoice, expenses as their own section.** Matches standard practice: a contractor issues a single monthly tax invoice with a fees section and an expenses section, itemised at cost with receipts. A separate expenses invoice is the minority pattern and is used where expenses run on a different approval or payment cycle. Contractors only; full-time staff stay on the reimbursement path (they do not invoice).
+- [ ] `chore(db):` migration adding `Expense.contractorBillId String?` + FK to `Bill` (`ON DELETE SET NULL`) + index. Direct mirror of `TimesheetEntry.contractorBillId` from TASK-500, for the same reason: the AP leg needs its own marker rather than overloading `status`.
+- [ ] Period close (TASK-504) includes the contractor's `approved` expenses with `contractorBillId IS NULL`, tagged to a project in that month, grouped onto that project's Bill alongside the hours. Expense lines are labelled and totalled separately from fee lines so the confirm screen and the Bill both read as 2 sections.
+- [ ] **Double-payment guard.** Once `contractorBillId` is set the expense leaves the reimbursement float: excluded from `/reimbursables`, and skipped by the pay-run builder in `src/server/payruns.ts`. Without this the same cost is paid twice, once as a reimbursement and once on the invoice.
+- [ ] **`rebillable` is untouched.** An expense can be on the contractor's invoice (cost in) and rebilled to the client (revenue out) at the same time. Both legs are correct and independent, exactly as hours are under TASK-500. `rebilledOnInvoiceId` and `contractorBillId` must never gate each other.
+- [ ] Expenses with `projectId = null` (OPEX) are excluded and stay on the reimbursement path. TASK-504 creates 1 Bill per project, so an untagged expense has no Bill to join. Surface the exclusion on `/me/invoices` so the contractor is not left wondering where the cost went.
+- [ ] Rate/amount frozen at close, matching how TASK-504 freezes the hourly rate, so a later edit to the expense cannot silently reprice a confirmed invoice.
+- [ ] Tests: expense joins the right project Bill; excluded from the reimbursement float once linked; rebillable expense still reaches the client draft; OPEX expense excluded and reported; FT staff unaffected; reimbursed expense never picked up.
+- [ ] Commits: `chore(db): contractorBillId on Expense` then `feat(TASK-509): contractor expenses on the period invoice`
+
+**BLOCKER — needs TT: GST treatment.** AU practice splits 2 cases and they are taxed differently. A **recharge** (contractor buys the flight as principal, claims the input credit) is invoiced to Foundry net, with GST added on the total. A **disbursement** (contractor pays as agent for Foundry) is passed through at cost with no GST added and no input credit claimed. Most contractor travel and materials are recharges. `Expense.amount` is stored GST-inclusive with `gst` held separately, so either is computable, but the wrong choice either double-counts GST or drops it. Confirm with the accountant which applies, or whether both are needed as a per-expense flag. Do not start the task before this is answered: it determines the line amounts.
+
+**context:** Raised by TT 2026-09-10 asking whether approved project expenses reach contractor invoices. They do reach the CLIENT invoice already, through the `rebillable` flag and `listRebillableCostsForProject`. They do not reach the contractor's own invoice.
+
 ---
 
 *End of TASKS.md. Start with TASK-001.*
