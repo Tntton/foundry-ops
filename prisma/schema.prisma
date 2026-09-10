@@ -1115,6 +1115,21 @@ model TimesheetPeriod {
   draftHours            Decimal?  @db.Decimal(8, 2)
   /// hours × rate, ex GST, in AUD cents.
   draftAmountExGstCents Int?
+  // Expenses passed through on the same invoice (TASK-509). Frozen with the
+  // rate for the same reason: editing an expense between close and confirm
+  // must not reprice a month that was already signed off.
+  //
+  // D3 (TT 2026-09-10) is PASS-THROUGH treatment: the contractor invoices
+  // the full GST-inclusive amount they paid and adds no GST of their own on
+  // these lines; Foundry claims the input credit. So the total below is
+  // GST-INCLUSIVE, and the GST figure is the component within it, not an
+  // amount added on top. Contrast the fee lines, where GST is added to
+  // hours × rate.
+  /// Sum of Expense.amount (GST-inclusive) in AUD cents.
+  draftExpenseTotalCents Int?
+  /// GST component contained within draftExpenseTotalCents, in AUD cents.
+  draftExpenseGstCents   Int?
+  draftExpenseCount      Int?
   draftPreparedAt       DateTime?
 
   // ── Chase tracking (TASK-506) ─────────────────────────────────────────
@@ -1217,12 +1232,31 @@ model Expense {
   // tallies. No FK so we don't have to migrate the InvoiceLine model
   // schema in the same step.
   rebilledOnInvoiceId   String?
+  /// AP leg — the contractor Bill this expense was invoiced to Foundry on
+  /// (TASK-509). Set when a contractor confirms their monthly invoice and
+  /// the cost is passed through on it.
+  ///
+  /// Independent of `rebilledOnInvoiceId` (the AR leg), exactly as
+  /// TimesheetEntry's two legs are under TASK-500: a contractor's flight can
+  /// be recharged to Foundry AND rebilled to the client, and neither may
+  /// gate the other.
+  ///
+  /// Once set, the expense LEAVES the reimbursement float — it is being paid
+  /// through the invoice instead, so `/reimbursables` and the pay run must
+  /// both skip it or the same cost goes out twice.
+  ///
+  /// Always null for full-time staff, who are reimbursed via pay runs and
+  /// never invoice.
+  contractorBillId      String?
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
 
   person                Person   @relation(fields: [personId], references: [id])
   project               Project? @relation(fields: [projectId], references: [id])
   parsedByAgentRun      AgentRun? @relation(fields: [parsedByAgentRunId], references: [id])
+  contractorBill        Bill?    @relation(fields: [contractorBillId], references: [id])
+
+  @@index([contractorBillId])
 }
 
 // ============================================================================
@@ -1341,6 +1375,8 @@ model Bill {
   timesheetEntries         TimesheetEntry[]
   // The lodgement period(s) this bill was generated from (TASK-501).
   timesheetPeriods         TimesheetPeriod[]
+  // Pass-through costs invoiced to Foundry on this bill (TASK-509).
+  contractorExpenses       Expense[]
 }
 
 // ============================================================================
