@@ -39,6 +39,7 @@ export function AvailabilityCalendar({
   todayIso,
   weekNotes,
   onWeekNote,
+  initialByDay,
   onPaint,
   onMove,
 }: {
@@ -54,6 +55,8 @@ export function AvailabilityCalendar({
    *  view edits, so the calendar isn't a lossy view of the same data. */
   weekNotes: Record<string, string>;
   onWeekNote: (weekStartIso: string, raw: string) => void;
+  /** Stored value and provenance per day, for the Outlook badge. */
+  initialByDay: Record<string, { hours: number | null; source: 'human' | 'outlook' }>;
   /** Apply the resolved brush to every day in the run. */
   onPaint: (dateIsos: string[], brush: Brush) => void;
   /** Move a day's hours + project onto another day, clearing the source. */
@@ -228,7 +231,11 @@ export function AvailabilityCalendar({
         </button>
         <p className="ml-auto text-[11px] text-ink-3">
           Drag across days to paint <span className="font-medium text-ink-2">{brushLabel}</span>.
-          Drag a block onto another day to move it.
+          Drag a block onto another day to move it. Days marked{' '}
+          <span className="rounded-sm bg-surface-subtle px-0.5 text-[8px] font-medium uppercase tracking-wide text-ink-3">
+            cal
+          </span>{' '}
+          came from Outlook — paint over one to make it yours.
         </p>
       </div>
 
@@ -286,6 +293,13 @@ export function AvailabilityCalendar({
                     const isMoveTarget = drag.kind === 'move' && drag.cursor === index;
                     const isMoveSource = drag.kind === 'move' && drag.fromIndex === index;
                     const dayNum = Number(c.dateIso.slice(8, 10));
+                    // Synced only while the cell still holds what the
+                    // sync wrote. Painting over it makes it the
+                    // person's own, badge gone, before they even save.
+                    const stored = initialByDay[c.dateIso];
+                    const fromOutlook =
+                      stored?.source === 'outlook' &&
+                      raw === (stored.hours === null ? '' : String(stored.hours));
                     return (
                       <td
                         key={c.dateIso}
@@ -319,12 +333,22 @@ export function AvailabilityCalendar({
                           aria-label={`${c.dateIso}${h > 0 ? `, ${h} hours${code ? ` on ${code}` : ', unallocated'}` : ', no hours'}`}
                           className="flex h-full w-full flex-col gap-0.5 rounded outline-none focus-visible:ring-1 focus-visible:ring-brand"
                         >
-                          <span
-                            className={`text-[10px] tabular-nums ${
-                              isToday ? 'font-semibold text-brand' : 'text-ink-3'
-                            }`}
-                          >
-                            {dayNum}
+                          <span className="flex items-baseline justify-between gap-1">
+                            <span
+                              className={`text-[10px] tabular-nums ${
+                                isToday ? 'font-semibold text-brand' : 'text-ink-3'
+                              }`}
+                            >
+                              {dayNum}
+                            </span>
+                            {fromOutlook && (
+                              <span
+                                className="rounded-sm bg-surface-subtle px-0.5 text-[8px] font-medium uppercase tracking-wide text-ink-3"
+                                title="From Outlook — an all-day or out-of-office event. Paint over it to make it yours."
+                              >
+                                cal
+                              </span>
+                            )}
                           </span>
                           {h > 0 ? (
                             <div

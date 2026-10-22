@@ -336,6 +336,97 @@ CORPORATE/ADMIN ACCESS/00 Administration/03 Financial/
 
 ---
 
+## 9. Outlook calendar → availability forecast (TASK-522)
+
+**Status:** built, flag off · `/api/cron/outlook-availability-sync` (nightly, 19:00 UTC / 06:00 AEDT) · `src/server/integrations/outlook-calendar.ts`
+
+Fills the days a person has left blank in `/availability` from their own Outlook calendar, so the bandwidth heatmap and the band-supply figures reflect leave nobody re-typed into the app.
+
+### Product rules (TT, 2026-10-23)
+
+| # | Question | Answer | Where it lives |
+|---|---|---|---|
+| Q1 | Which events reduce availability? | All-day events plus out-of-office only. A `busy` meeting never does — a 30-minute standup eating forecast hours makes the numbers nonsense within a week. | `blocksAvailability()` |
+| Q2 | Overwrite a manual forecast? | Never. Fill blanks only. | `planSync()` + `AvailabilityForecast.source` |
+| Q3 | One direction or two? | Read-only. Nothing is ever written back to a calendar — the only Graph verb used is `GET`. | `fetchCalendarView()` |
+
+One reading sits inside Q1 and is worth knowing about: an all-day event marked `showAs: free` is **ignored**. Those are nearly always banners — birthdays, sprint names, a subscribed public-holiday feed — and zeroing someone's day on one would be wrong more often than right. Change `blocksAvailability()` if that call is wrong.
+
+### How a day is scored
+
+Baseline is the person's standing regular-days schedule, or an even FTE spread across Mon–Fri when they have not declared one. An all-day block takes the whole day to 0; a timed out-of-office subtracts its wall-clock hours from the baseline. A day the person does not work (baseline 0) is skipped entirely rather than written as a zero — a 0 row would make the day look forecast when it isn't.
+
+Provenance lives on `AvailabilityForecast.source` (`human` | `outlook`):
+
+- no row + a calendar block → create, tagged `outlook`
+- `outlook` row, calendar changed → refresh
+- `outlook` row, event gone (leave cancelled) → delete, so no phantom day off is stranded in the forecast
+- `human` row → never touched, whatever the calendar says
+
+Saving in the editor always writes `source: 'human'`, so painting over a synced day pins it from every future sync. Synced days render with a `cal` badge in both the calendar and the grid view, and the badge disappears the moment the value is edited.
+
+The reason a day dropped (the event subjects) goes into the sync's `AuditEvent` delta, **not** into `AvailabilityForecast.notes` — the editor treats the Monday row's `notes` as the whole week's note, so writing there would surface a calendar subject as a week note and get wiped on the next save.
+
+### Required permissions — and why this needs its own app registration
+
+`Calendars.Read` (Application).
+
+**An Exchange `ApplicationAccessPolicy` is scoped per app registration and governs Mail, Calendars and Contacts together.** The `Foundry Ops` registration already carries a `RestrictAccess` policy pinning `Mail.Read` to `foundry-ops-mail-intake@` (section 7). Adding `Calendars.Read` to that same registration forces a choice between two bad outcomes: the calendar sync can read only those two mailboxes, or the mail group is widened to every staff mailbox and `Mail.Read` goes with it, which breaks A6.
+
+So the calendar sync gets a **second app registration**, `Foundry Ops Calendar Sync`, holding `Calendars.Read` and nothing else, with its own policy scoped to a staff group. Verify this at setup — do not assume it.
+
+### One-time setup (TT / Super Admin)
+
+**Step 1 — new app registration.** Entra ID → App registrations → New registration, name `Foundry Ops Calendar Sync`, single tenant. Add **API permissions → Microsoft Graph → Application permissions → `Calendars.Read`**, then **Grant admin consent for foundry.health**. Create a client secret and put the values in env:
+
+```
+CALENDAR_ENTRA_CLIENT_ID=…
+CALENDAR_ENTRA_CLIENT_SECRET=…
+```
+
+`ENTRA_TENANT_ID` is shared with the main app. If these two are absent the code falls back to the shared `Foundry Ops` credentials — convenient in a tenant with no mail policy, but not the intended production setup.
+
+**Step 2 — scope it to staff mailboxes.**
+
+```powershell
+New-DistributionGroup -Name "Foundry Ops Calendar Sync" `
+  -Alias "foundry-ops-calendar-sync" `
+  -Type "Security" `
+  -PrimarySmtpAddress "foundry-ops-calendar-sync@foundry.health" `
+  -Members @("trung@foundry.health", "michael@foundry.health")
+```
+
+```powershell
+New-ApplicationAccessPolicy `
+  -AppId "{CALENDAR_ENTRA_CLIENT_ID}" `
+  -PolicyScopeGroupId "foundry-ops-calendar-sync@foundry.health" `
+  -AccessRight "RestrictAccess" `
+  -Description "Foundry Ops calendar sync — Calendars.Read limited to staff who opted in"
+```
+
+Verify before enabling the flag — the policy can take up to **30 minutes** to propagate:
+
+```powershell
+Test-ApplicationAccessPolicy -Identity trung@foundry.health -AppId "{CALENDAR_ENTRA_CLIENT_ID}"   # AccessAllowed
+Test-ApplicationAccessPolicy -Identity {someone-not-in-group}@foundry.health -AppId "{CALENDAR_ENTRA_CLIENT_ID}"  # AccessDenied
+```
+
+Also confirm the **mail** policy still behaves — the two registrations are independent, but this is exactly the interaction worth re-checking:
+
+```powershell
+Test-ApplicationAccessPolicy -Identity finance@foundry.health -AppId "{ENTRA_CLIENT_ID}"  # AccessAllowed
+```
+
+**Step 3 — enable.** Set the `outlook_availability_sync` row in `FeatureFlag` to `enabled = true`. Until then the cron returns `{ skipped }` and writes nothing.
+
+### Failure behaviour
+
+A person whose calendar can't be read (no mailbox, outside the access policy, Graph down) is recorded in the run's `failures[]` and skipped; their grid keeps whatever they last saved. A total failure writes nothing at all. The rule this protects: **an unread calendar must never render as "you are free"**, which is the single way this integration could do real damage.
+
+### Membership is opt-in by group
+
+Who gets synced is the distribution group, not the app. Adding someone to `foundry-ops-calendar-sync@` turns the sync on for them; removing them turns it off and their existing `outlook` rows stop being refreshed. That is deliberate — reading a colleague's calendar is a consent question, and the group is where that consent is recorded.
+
 ## Integration health dashboard
 
 On `/admin/integrations`:
@@ -362,5 +453,6 @@ Every integration ships behind a flag so staging dogfoods before prod:
 - `ENABLE_WHATSAPP_INBOUND`
 - `ENABLE_DOCUSIGN_SEND`
 - `ENABLE_TEAMS_NOTIFICATIONS`
+- `outlook_availability_sync` (FeatureFlag row; gates the nightly calendar → availability cron)
 
 Stored in `FeatureFlag` table + env override.

@@ -2306,27 +2306,39 @@ The fallback matches `computeBandwidthHeatmap` exactly (explicit row wins, else 
 Verified: 12 unit tests against a mocked Prisma, covering the allocated / declared / assumed split, the day→week roll-up, explicit rows overriding the standing schedule (including an explicit zero for a day off), silent-person counting, the band and employment filter sent to the DB, and bands rendering empty rather than disappearing. The card itself was rendered against fixture data in an isolated bundle to check layout; it has **not** been seen inside `/resource-planning` because the app can't boot in this checkout.
 
 ### TASK-522 — Sync availability from each person's Outlook calendar
-**status:** blocked — needs TT + tenant consent
+**status:** done (flag off; needs tenant consent before it can run)
 **depends on:** TASK-520
 
 **Ask:** *"this ideally would be synced to each individual foundry outlooks"*.
 
-**Two blockers, both real.**
+**Answers (TT, 2026-10-23):** Q1 all-day events plus out-of-office only. Q2 fill blanks only, never overwrite a manual forecast. Q3 read-only from Outlook.
 
-*Consent.* There is no Graph calendar integration today. `src/server/graph.ts` holds an app-credentials client, so the code is cheap — `GET /users/{upn}/calendarView` — but the app permission `Calendars.Read` needs Global Admin consent, and per the Mail.Read precedent it must be narrowed with an Exchange `New-ApplicationAccessPolicy` rather than left tenant-wide. Until that is granted the integration can only be tested against mocks.
+- [x] Graph calendar client behind the `outlook_availability_sync` FeatureFlag, off by default, plus `graphConfigured()`. Nightly cron at `/api/cron/outlook-availability-sync`.
+- [x] Q1: `blocksAvailability()` takes out-of-office at any length, and all-day events that aren't marked `free`. Plain `busy` never counts.
+- [x] Q2: `planSync()` skips any day with a `source: 'human'` row. Saving in the editor always writes `source: 'human'`, so painting over a synced day pins it from every future sync.
+- [x] Q3: the only Graph verb is `GET`. Nothing is written back to a calendar.
+- [x] Synced days distinguishable — `cal` badge in both the calendar and the grid view, dashed border on the grid input, and the badge clears the moment the value is edited, before the save.
+- [x] Graph failure degrades to the manual grid: per-person failures are collected and the run continues; a total failure writes nothing.
+- [x] Exchange application access policy documented in `INTEGRATIONS.md` section 9.
+- [x] Tests: 25 in `src/__tests__/outlook-calendar.test.ts`.
+- [x] Commits: `chore(db): AvailabilitySource on AvailabilityForecast` then `feat(TASK-522): Outlook calendar sync for availability`
 
-*Product.* Three calls, none of which the specs answer:
+**The finding that changed the design.** An Exchange `ApplicationAccessPolicy` is scoped per *app registration* and governs Mail, Calendars and Contacts together. The `Foundry Ops` registration already carries a `RestrictAccess` policy pinning `Mail.Read` to the two AP-intake mailboxes (INTEGRATIONS.md section 7). Putting `Calendars.Read` on that registration forces a choice between the calendar sync only being able to read those two mailboxes, or the mail group being widened to every staff mailbox and `Mail.Read` going with it — which breaks A6. So the sync authenticates as a **second registration**, `Foundry Ops Calendar Sync`, via `CALENDAR_ENTRA_CLIENT_ID` / `CALENDAR_ENTRA_CLIENT_SECRET`, with its own access policy. Absent those env vars it falls back to the shared credentials, which is fine in a tenant with no mail policy but is not the production setup.
 
-- [ ] **Q1 — which events reduce availability?** Every `busy` event, only `oof`, or only all-day events. Treating every busy block as unavailable means a 30-minute standup eats forecast hours and the numbers go to nonsense within a week. The usual answer is all-day plus `oof`, but it is TT's call.
-- [ ] **Q2 — does Outlook overwrite a manual forecast, or only fill blanks?** Overwriting means a person's typed figure silently changes after they saved it, which breaks the submission signal `/resource-planning` reads. Fill-blanks-only is safer and makes the sync additive.
-- [ ] **Q3 — one direction or two?** Reading from Outlook is read-only and low-risk. Writing Foundry allocations into people's calendars puts the app in everyone's personal calendar and is a much larger consent conversation.
+**Design calls worth knowing about:**
 
-**acceptance (once answered):**
-- [ ] Graph calendar client behind a `FeatureFlag`, off by default, with the Exchange application access policy documented in `INTEGRATIONS.md`.
-- [ ] Sync never silently overwrites a human-entered forecast (subject to Q2).
-- [ ] Synced days visually distinguishable from typed days, and overridable by the person.
-- [ ] Graph failure degrades to the manual grid — never an empty calendar presented as "you are free".
-- [ ] Commit: `feat(TASK-522): Outlook calendar sync for availability`
+- *An all-day event marked `free` is ignored.* Those are almost always banners — birthdays, sprint names, a subscribed holiday feed — and zeroing a day on one would be wrong more often than right. This sits inside TT's Q1 answer rather than being given by it; `blocksAvailability()` is the line to change if it's wrong.
+- *A non-working day is skipped, not zeroed.* Writing a 0 for a weekend OOF would make the day look forecast when it isn't, which corrupts the submission signal `/resource-planning` reads.
+- *A synced day whose event disappears is deleted.* Without that, a cancelled holiday strands a phantom day off in the forecast forever.
+- *The reason a day dropped lives in the AuditEvent delta, not in `notes`.* The editor treats the Monday row's `notes` as the whole week's note, so a calendar subject written there would surface as a week note and get wiped on the next save.
+- *Membership is the distribution group, not the app.* Reading a colleague's calendar is a consent question, and the group is where that consent is recorded.
+
+**not verified here:** anything that touches Graph. `fetchCalendarView` and `runOutlookAvailabilitySync` have never run against a real tenant — `Calendars.Read` is not granted, the second registration does not exist, and the app can't boot in this checkout. Everything tested is the pure layer: event classification, per-day folding, and the write/refresh/delete/skip plan. **The migration has not been applied either** — nothing auto-runs `migrate deploy`, so `AvailabilityForecast.source` is missing in prod until the SQL is run by hand, and `/availability` will throw P2021-style errors on the new column before then.
+
+**still open for TT:**
+- [ ] Create the `Foundry Ops Calendar Sync` app registration, grant `Calendars.Read`, consent, and set the two env vars.
+- [ ] Create `foundry-ops-calendar-sync@foundry.health` and decide who goes in it — that group *is* the opt-in list.
+- [ ] Apply the migration SQL, then flip `outlook_availability_sync` on in staging before prod.
 
 ---
 

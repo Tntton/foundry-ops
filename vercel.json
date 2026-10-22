@@ -35,6 +35,10 @@
     {
       "path": "/api/cron/timesheet-chase",
       "schedule": "0 22 * * 1-5"
+    },
+    {
+      "path": "/api/cron/outlook-availability-sync",
+      "schedule": "0 19 * * *"
     }
   ]
 }

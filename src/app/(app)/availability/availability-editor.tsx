@@ -16,6 +16,9 @@ export type AvailabilityDayInput = {
   /** Project the hours are earmarked to. Null = unallocated (open for
    *  the resource-planning team to slot into a project later). */
   projectId: string | null;
+  /** Where the stored row came from. `outlook` = the calendar sync
+   *  wrote it and the person hasn't touched that day (TASK-522). */
+  source?: 'human' | 'outlook';
 };
 
 export type AllocatableProject = {
@@ -113,6 +116,18 @@ export function AvailabilityEditor({
 
   const dailyCapacityPlaceholder =
     weeklyCapacityHours > 0 ? Math.round(weeklyCapacityHours / 5) : 0;
+
+  // Provenance lookup for the Outlook badge. A day counts as synced
+  // only while it still holds the value the sync wrote — the moment
+  // someone paints over it, it is theirs, and the next save makes that
+  // true in the database too.
+  const initialByDay = useMemo(() => {
+    const m: Record<string, { hours: number | null; source: 'human' | 'outlook' }> = {};
+    for (const c of initialCells) {
+      m[c.dateIso] = { hours: c.hours, source: c.source ?? 'human' };
+    }
+    return m;
+  }, [initialCells]);
 
   // ── Dirty tracking ────────────────────────────────────────────────
   // Snapshot the initial serialized state once; any divergence = dirty.
@@ -518,6 +533,7 @@ export function AvailabilityEditor({
           todayIso={todayIso}
           weekNotes={weekNotes}
           onWeekNote={setWeekNote}
+          initialByDay={initialByDay}
           onPaint={paintDays}
           onMove={moveDay}
         />
@@ -571,6 +587,10 @@ export function AvailabilityEditor({
                     const cellHours = (hours[c.dateIso] ?? '').trim();
                     const hasHours = cellHours !== '' && Number(cellHours) > 0;
                     const projectCode = cellProjectCode[c.dateIso] ?? '';
+                    const stored = initialByDay[c.dateIso];
+                    const fromOutlook =
+                      stored?.source === 'outlook' &&
+                      cellHours === (stored.hours === null ? '' : String(stored.hours));
                     return (
                       <td
                         key={c.dateIso}
@@ -588,8 +608,15 @@ export function AvailabilityEditor({
                           onChange={(e) =>
                             setHourCell(c.dateIso, e.target.value)
                           }
-                          className="h-7 w-14 rounded border border-line bg-surface-elev px-1 text-center text-xs tabular-nums text-ink focus:border-brand"
-                          aria-label={`Hours for ${c.dateIso}`}
+                          title={
+                            fromOutlook
+                              ? 'From Outlook — an all-day or out-of-office event. Type over it to make it yours.'
+                              : undefined
+                          }
+                          className={`h-7 w-14 rounded border bg-surface-elev px-1 text-center text-xs tabular-nums text-ink focus:border-brand ${
+                            fromOutlook ? 'border-dashed border-ink-3' : 'border-line'
+                          }`}
+                          aria-label={`Hours for ${c.dateIso}${fromOutlook ? ' (from Outlook)' : ''}`}
                         />
                         {hasHours && (
                           <select
