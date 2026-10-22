@@ -2143,24 +2143,74 @@ Unapproved time in the range is listed with the approver's name rather than hidd
 **overlap warning:** `/expenses` was restructured by TASK-512 in a parallel session on 2026-10-23. Build this on top of that page, not against the pre-merge layout.
 
 ### TASK-517 — Expenses invoice separately from timesheet fees
-**status:** blocked — needs TT
+**status:** todo
 **depends on:** TASK-509, TASK-511
 
-**Ask (TT, 2026-10-23):** "the invoice/expenses needs to generate a separate invoice from timesheets" — expenses should produce their own invoice document rather than riding on the fee invoice.
+**Ask (TT, 2026-10-23):** expenses should produce their own invoice rather than riding on the fee invoice.
 
-**BLOCKER — this reverses D3, and D3 is six weeks old and live.** D3 (TT, 2026-09-10, TASK-509) chose the opposite explicitly: *"one invoice, expenses as their own section… Matches standard practice: a contractor issues a single monthly tax invoice with a fees section and an expenses section. A separate expenses invoice is the minority pattern and is used where expenses run on a different approval or payment cycle."* That shipped in `58b5885` and is what `confirmContractorInvoice` does today.
+**This reverses D3 and D4**, both decided 2026-09-10 and shipped in `58b5885`. D3 chose one invoice with an expenses section; D4 chose pass-through GST. TT answered the three scoping questions on 2026-10-23:
 
-Reversing it is a legitimate call — the usual reason is exactly the one D3 names, expenses running on a different approval or payment cycle, which is true here since expense approval and timesheet approval are separate gates. But it is a reversal, not a gap, so it needs TT to say which before anything is built:
+| # | Question | Answer |
+|---|---|---|
+| D6 | Both paths, or only the range path? | **Both.** The month path (`confirmContractorInvoice`) and the range path (`generateRangeContractorInvoice`) must behave identically — a contractor's September invoice and their 15 Sep – 14 Oct invoice cannot differ in how expenses are treated. |
+| D7 | A separate invoice, or the same number with bills split out? | **Separate invoice.** A second document the contractor numbers themselves, not a presentation change inside Foundry. |
+| D8 | Does D4 pass-through GST stand? | **No — the contractor adds their own GST.** This is the recharge treatment, which is what TASK-509 already flagged as the likely correct answer where the underlying receipt is in the contractor's own name. |
 
-- [ ] **Q1 — both paths or just the range path?** The month path (`confirmContractorInvoice`) and the range path (`generateRangeContractorInvoice`) both currently merge expenses into the fee bill. Changing one and not the other means a contractor's September invoice and their 15 Sep – 14 Oct invoice behave differently.
-- [ ] **Q2 — separate invoice, or separate Bill?** Today one invoice already becomes several `Bill` rows, one per project. "Separate invoice" could mean (a) a second invoice number for the expense lines, or (b) the same number with expense bills split out. (a) is a real second document the contractor numbers themselves; (b) is a presentation change inside Foundry.
-- [ ] **Q3 — does the GST treatment survive?** D4 pass-through (contractor adds no GST on expense lines, Foundry reclaims the input credit) was decided alongside D3. A standalone expenses invoice does not change the GST logic, but it does make the pass-through much more visible to the ATO, and the "receipt in the contractor's own name" concern already flagged on TASK-509 becomes harder to leave open.
+**What D8 actually changes.** Under pass-through, an expense line carried the GST-inclusive amount the contractor paid and they added no GST; Foundry reclaimed the input credit. Under recharge, the contractor claims that credit themselves, bills Foundry the **net** amount, and adds 10% of their own on top. For a standard-rated expense the total is unchanged (A$110 inc GST → A$100 net + A$10 GST). The difference bites on **GST-free** purchases — overseas flights, basic food — where the net is the full amount and 10% is now added on top of it. That is correct for a recharge: the supply from contractor to Foundry is their taxable supply of services, regardless of how the underlying item was taxed.
 
-**acceptance (once answered):**
-- [ ] Expense lines raise their own Bill(s) with their own invoice number, independent of the fee bill.
-- [ ] `TimesheetPeriod` expense snapshot columns (`draftExpenseTotalCents` / `draftExpenseGstCents` / `draftExpenseCount`) either keep working or are migrated — they exist to stop an expense edit repricing a signed-off month.
-- [ ] Double-payment guard holds: `contractorBillId` still takes the expense out of the reimbursement float either way.
-- [ ] Commit: `feat(TASK-517): expenses invoice separately from fees`
+**acceptance:**
+- [ ] Expense lines raise their own `Bill` rows, separate from the fee bills, with `category = 'Contractor — expenses'` so AP can tell the two apart without inspecting line items.
+- [ ] The expense invoice carries its **own contractor-supplied number**, independent of the fee invoice's. Required whenever there are expenses in scope, autosuggested on the same `{INITIALS}-{YYYY}-{NNN}` sequence, editable, and collision-checked exactly as the fee number is (D1 applies to both documents equally — each is the contractor's own).
+- [ ] Still one Bill per project per invoice, so each lands on the right engagement.
+- [ ] **Recharge arithmetic (D8):** expense bill ex-GST = Σ(`Expense.amount` − `Expense.gst`); GST = 10% of that; total = ex-GST + GST. GST is no longer "the component already inside the figure".
+- [ ] Applied to **both** `confirmContractorInvoice` and `generateRangeContractorInvoice` (D6).
+- [ ] Both UIs updated: the fee and expense sections total separately, each with its own number field, and the copy no longer claims GST is not added to expenses.
+- [ ] `TimesheetPeriod` snapshot columns need **no migration** — `draftExpenseTotalCents` and `draftExpenseGstCents` are both stored, so the net is derivable as the difference. Reinterpret rather than re-migrate, and say so in the column comments.
+- [ ] Double-payment guard holds unchanged: `contractorBillId` still takes the expense out of the reimbursement float, whichever bill it lands on.
+- [ ] A range or month containing expenses but **no** hours raises only the expense invoice, and vice versa — neither document is mandatory.
+- [ ] Update the D3/D4 comments through `actions.ts`, `timesheet.ts` and `schema.prisma` so the code stops asserting a rule that no longer holds.
+- [ ] Tests: existing TASK-509 pass-through assertions **rewritten, not deleted** — they encode the old spec and must now encode the new one; GST added on net; GST-free expense correctly grossed up; separate numbers on separate bills; duplicate expense number rejected; expense-only and fee-only cases; both paths covered.
+- [ ] Commit: `feat(TASK-517): expenses invoice separately from fees, on recharge GST`
+
+**Flagged for the accountant, not blocking:** D8 is the treatment TASK-509 predicted, but it does change what Foundry can reclaim. Under pass-through Foundry claimed the input credit on the original receipt; under recharge the contractor claims it and Foundry claims on the contractor's invoice instead. Net position is the same where the contractor is GST-registered, and worse for Foundry where they are not — a non-registered contractor cannot add GST at all, so their expenses should recharge at net with no GST. **Not handled in this task** — the code assumes a registered contractor, which is true of everyone on the books today. Raise it as its own task if an unregistered contractor is ever onboarded.
+
+---
+
+### TASK-519 — Receipt filenames identify who, what, which project and when
+**status:** done
+**depends on:** TASK-042b, TASK-046b
+
+**Ask (TT, 2026-10-23):** "for uploaded receipts, ensure the file naming convention in sharepoint indicates who, what, what project and when in the file name for identification, and unique identifier for each".
+
+The archive already named date, vendor, amount, initials and an 8-hex short id. **The project was the gap** — a receipt in `FY 26 - 27/Expenses/2026-08/` said nothing about which engagement it belonged to, so a rebill pack had to be assembled by opening files or cross-referencing the app.
+
+**Convention (now):**
+
+```
+YYYY-MM-DD - <PROJECT> - <vendor> - <category> - $<amount> - <INITIALS> - <UID>.<ext>
+2026-07-08 - IFM001 - Amazon Web Services - subscriptions - $89 - TT - EXP-A1B2C3D4.pdf
+```
+
+| Segment | Answers | Fallback |
+|---|---|---|
+| `YYYY-MM-DD` | when | — (always known) |
+| `<PROJECT>` | which project | `NOPROJECT` for overhead / uncoded |
+| `<vendor>` + `<category>` | what | `no-vendor` / `uncategorised` |
+| `<INITIALS>` | who | `??` |
+| `<UID>` | unique identifier | `EXP-`/`BILL-` + 8 uppercase hex |
+
+Date still leads so folders keep sorting chronologically, matching the invoice-PDF convention. The shape is always seven ` - ` segments; a missing fact gets a loud token rather than a collapsed segment, and a vendor containing `" - "` is collapsed to `-` so it cannot fake one.
+
+**acceptance:**
+- [x] `buildReceiptFilename` takes `projectCode`, `category` and `uid`; project code upper-cased, category lower-cased, each segment sanitised and length-capped.
+- [x] `newReceiptUid(kind)` mints `EXP-`/`BILL-` + 8 uppercase hex. Minted before upload (the row does not exist yet) and echoed back on `ReceiptUploadResult.uid`.
+- [x] All four callers pass the project: `/expenses/new` (project lookup now also selects `code`), `/bills/new` (new project lookup), `/bills/intake` (`null` — AP intake runs before coding, so `NOPROJECT` is honest), and the backfill script (`project.code`, uid derived from the row id so a re-run names the same file).
+- [x] Every caller records the uid on its `AuditEvent` delta — that is what ties a file in SharePoint back to its row.
+- [x] Tests: canonical shape, NOPROJECT / uncategorised fallbacks, seven-segment shape when everything is missing, `" - "` collapse, case normalisation, truncation caps, uid format + uniqueness.
+- [x] Typecheck green, 35 tests green in `sharepoint-receipts-helpers.test.ts`, lint clean on changed files.
+- [x] Commit: `feat(TASK-519): receipt filenames carry project, category and a unique id`
+
+**note:** no migration — the uid lives in the filename and the audit delta, not a column. Existing files keep their old names; SharePoint has no rename-on-convention-change step and renaming would break the stored `receiptSharepointUrl` pointers.
 
 ---
 

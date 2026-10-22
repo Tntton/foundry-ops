@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   deriveAustralianFY,
   buildReceiptFilename,
+  newReceiptUid,
   extensionFromMime,
   receiptFolderPath,
   buildInvoiceFilename,
@@ -71,78 +72,112 @@ describe('extensionFromMime', () => {
 });
 
 describe('buildReceiptFilename', () => {
-  it('produces the canonical shape', () => {
+  const base = {
+    date: new Date('2026-07-08T00:00:00Z'),
+    projectCode: 'IFM001',
+    vendor: 'Amazon Web Services',
+    category: 'subscriptions',
+    amountCents: 8912,
+    ownerInitials: 'TT',
+    uid: 'EXP-A1B2C3D4',
+    extension: 'pdf',
+  };
+
+  it('names who, what, which project and when, plus the uid', () => {
+    expect(buildReceiptFilename(base)).toBe(
+      '2026-07-08 - IFM001 - Amazon Web Services - subscriptions - $89 - TT - EXP-A1B2C3D4.pdf',
+    );
+  });
+  it('upper-cases the project code and lower-cases the category', () => {
     const name = buildReceiptFilename({
-      date: new Date('2026-07-08T00:00:00Z'),
-      vendor: 'Amazon Web Services',
-      amountCents: 8912,
-      ownerInitials: 'TT',
-      id: 'exp_ab12cd34',
-      extension: 'pdf',
+      ...base,
+      projectCode: 'ifm001',
+      category: 'Subscriptions',
     });
-    expect(name).toBe('2026-07-08 - Amazon Web Services - $89 - TT - ab12cd34.pdf');
+    expect(name).toContain(' - IFM001 - ');
+    expect(name).toContain(' - subscriptions - ');
+  });
+  it('falls back to NOPROJECT when the cost is untagged overhead', () => {
+    expect(buildReceiptFilename({ ...base, projectCode: null })).toBe(
+      '2026-07-08 - NOPROJECT - Amazon Web Services - subscriptions - $89 - TT - EXP-A1B2C3D4.pdf',
+    );
+  });
+  it('falls back to uncategorised when the category is unknown', () => {
+    expect(buildReceiptFilename({ ...base, category: null })).toContain(
+      ' - uncategorised - ',
+    );
+  });
+  it('keeps the seven-segment shape when everything is missing', () => {
+    const name = buildReceiptFilename({
+      ...base,
+      projectCode: null,
+      vendor: null,
+      category: '  ',
+    });
+    expect(name.split(' - ')).toHaveLength(7);
+    expect(name).toBe(
+      '2026-07-08 - NOPROJECT - no-vendor - uncategorised - $89 - TT - EXP-A1B2C3D4.pdf',
+    );
   });
   it('sanitises invalid SharePoint chars in the vendor', () => {
     const name = buildReceiptFilename({
-      date: new Date('2026-07-08T00:00:00Z'),
+      ...base,
       vendor: 'Rip/off*Vendor?LLC<>',
-      amountCents: 5000,
       ownerInitials: 'JN',
-      id: 'exp_xyz',
-      extension: 'pdf',
+      uid: 'EXP-XYZ12345',
     });
-    // Vendor "Rip/off*Vendor?LLC<>" → each of / * ? < > replaced with '-'
-    // → "Rip-off-Vendor-LLC--" (two trailing dashes for the <>).
-    expect(name).toBe('2026-07-08 - Rip-off-Vendor-LLC-- - $50 - JN - exp_xyz.pdf');
+    // Each of / * ? < > replaced with '-' → "Rip-off-Vendor-LLC--".
+    expect(name).toBe(
+      '2026-07-08 - IFM001 - Rip-off-Vendor-LLC-- - subscriptions - $89 - JN - EXP-XYZ12345.pdf',
+    );
     expect(name).not.toMatch(/[/\\?%*:|"<>]/u);
   });
+  it('collapses a " - " inside a vendor so it cannot fake a segment', () => {
+    const name = buildReceiptFilename({ ...base, vendor: 'Kee - Lee Catering' });
+    expect(name.split(' - ')).toHaveLength(7);
+    expect(name).toContain(' - Kee-Lee Catering - ');
+  });
   it('truncates absurdly long vendor names to 60 chars', () => {
-    const longVendor = 'X'.repeat(200);
-    const name = buildReceiptFilename({
-      date: new Date('2026-07-08T00:00:00Z'),
-      vendor: longVendor,
-      amountCents: 100,
-      ownerInitials: 'AA',
-      id: 'exp_1',
-      extension: 'jpg',
-    });
-    // Extract the vendor segment
-    const parts = name.split(' - ');
-    expect(parts[1]?.length).toBe(60);
+    const name = buildReceiptFilename({ ...base, vendor: 'X'.repeat(200) });
+    expect(name.split(' - ')[2]?.length).toBe(60);
   });
-  it('falls back to "no-vendor" when vendor missing', () => {
-    const name = buildReceiptFilename({
-      date: new Date('2026-07-08T00:00:00Z'),
-      vendor: null,
-      amountCents: 100,
-      ownerInitials: 'TT',
-      id: 'exp_1',
-      extension: 'pdf',
-    });
-    expect(name).toContain(' - no-vendor - ');
+  it('truncates an absurdly long project code to 24 chars', () => {
+    const name = buildReceiptFilename({ ...base, projectCode: 'P'.repeat(80) });
+    expect(name.split(' - ')[1]?.length).toBe(24);
   });
-  it('rounds amount to whole dollars (banker-style)', () => {
+  it('rounds amount to whole dollars', () => {
     // 550 cents = $5.50; expected $6 via Math.round
-    const name = buildReceiptFilename({
-      date: new Date('2026-07-08T00:00:00Z'),
-      vendor: 'V',
-      amountCents: 550,
-      ownerInitials: 'TT',
-      id: 'exp_1',
-      extension: 'pdf',
-    });
-    expect(name).toContain(' - $6 - ');
+    expect(buildReceiptFilename({ ...base, amountCents: 550 })).toContain(' - $6 - ');
   });
   it('normalises the extension case', () => {
+    expect(buildReceiptFilename({ ...base, extension: '.PDF' }).endsWith('.pdf')).toBe(
+      true,
+    );
+  });
+});
+
+describe('newReceiptUid', () => {
+  it('prefixes by kind and uses uppercase hex', () => {
+    expect(newReceiptUid('expense')).toMatch(/^EXP-[0-9A-F]{8}$/u);
+    expect(newReceiptUid('bill')).toMatch(/^BILL-[0-9A-F]{8}$/u);
+  });
+  it('is unique across calls', () => {
+    const uids = new Set(Array.from({ length: 200 }, () => newReceiptUid('expense')));
+    expect(uids.size).toBe(200);
+  });
+  it('survives the filename builder unchanged', () => {
+    const uid = newReceiptUid('bill');
     const name = buildReceiptFilename({
       date: new Date('2026-07-08T00:00:00Z'),
-      vendor: 'V',
-      amountCents: 100,
+      projectCode: 'IFM001',
+      vendor: 'Qantas',
+      category: 'travel',
+      amountCents: 42000,
       ownerInitials: 'TT',
-      id: 'exp_1',
-      extension: '.PDF',
+      uid,
+      extension: 'pdf',
     });
-    expect(name.endsWith('.pdf')).toBe(true);
+    expect(name.endsWith(`${uid}.pdf`)).toBe(true);
   });
 });
 

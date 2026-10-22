@@ -1,6 +1,5 @@
 'use server';
 
-import { randomBytes } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
@@ -10,7 +9,10 @@ import { requireCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
 import { notifyApproversOfNewApproval } from '@/server/user-updates';
 import { resolveRequiredRole } from '@/server/approval-policies';
-import { uploadReceiptToSharePoint } from '@/server/integrations/sharepoint-receipts';
+import {
+  newReceiptUid,
+  uploadReceiptToSharePoint,
+} from '@/server/integrations/sharepoint-receipts';
 
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const ALLOWED_ATTACHMENT_MIME = new Set([
@@ -100,6 +102,7 @@ export async function createBill(
   // records the warning.
   let attachmentUrl: string | null = data.attachmentSharepointUrl ?? null;
   let attachmentDriveItemId: string | null = null;
+  let attachmentUid: string | null = null;
   let uploadWarning: string | null = null;
   const attachmentFile = formData.get('attachment');
   if (attachmentFile instanceof File && attachmentFile.size > 0) {
@@ -116,16 +119,27 @@ export async function createBill(
         message: `Attachment format not accepted — use PDF, JPG, PNG, GIF, WEBP, or HEIC. Got ${mimeType}.`,
       };
     }
+    // The receipt filename names the project the cost belongs to
+    // (TASK-519), so resolve the code before uploading.
+    const billProjectId =
+      data.projectId && data.projectId !== '' ? data.projectId : null;
+    const billProject = billProjectId
+      ? await prisma.project.findUnique({
+          where: { id: billProjectId },
+          select: { code: true },
+        })
+      : null;
     try {
       const buffer = Buffer.from(await attachmentFile.arrayBuffer());
-      const shortId = randomBytes(4).toString('hex');
       const upload = await uploadReceiptToSharePoint({
         kind: 'bill',
         date: data.issueDate,
+        projectCode: billProject?.code ?? null,
         vendor: data.supplierName,
+        category: data.category,
         amountCents,
         ownerInitials: session.person.initials,
-        id: shortId,
+        uid: newReceiptUid('bill'),
         buffer,
         mimeType,
         originalFilename: attachmentFile.name,
@@ -133,6 +147,7 @@ export async function createBill(
       if (upload) {
         attachmentUrl = upload.webUrl;
         attachmentDriveItemId = upload.driveItemId;
+        attachmentUid = upload.uid;
       } else {
         uploadWarning = 'SharePoint not configured — bill saved without an attachment link.';
       }
@@ -209,6 +224,7 @@ export async function createBill(
             projectId: bill.projectId,
             status: bill.status,
             attachmentDriveItemId,
+            attachmentUid,
             uploadWarning,
           },
         },

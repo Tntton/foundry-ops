@@ -1,6 +1,5 @@
 'use server';
 
-import { randomBytes } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
@@ -11,7 +10,10 @@ import { writeAudit } from '@/server/audit';
 import { notifyApproversOfNewApproval } from '@/server/user-updates';
 import { resolveRequiredRole } from '@/server/approval-policies';
 import { EXPENSE_CATEGORY_VALUES } from '@/lib/expense-categories';
-import { uploadReceiptToSharePoint } from '@/server/integrations/sharepoint-receipts';
+import {
+  newReceiptUid,
+  uploadReceiptToSharePoint,
+} from '@/server/integrations/sharepoint-receipts';
 
 // Receipt-attachment limits — mirrors the /bills/intake dropzone.
 // 20MB is a generous ceiling (Foundry's biggest receipt to date is a
@@ -123,12 +125,17 @@ export async function submitExpense(
   // line surfaces in the Payables / Reimbursables "rebillable" float
   // automatically. Reviewer can still untoggle per row.
   let rebillableDefault = false;
+  // `code` rides along for the receipt filename (TASK-519) — the
+  // SharePoint archive names every receipt with the project it belongs
+  // to, so an accountant can identify a file without opening it.
+  let projectCode: string | null = null;
   if (projectId) {
     const proj = await prisma.project.findUnique({
       where: { id: projectId },
-      select: { defaultExpensesRebillable: true },
+      select: { defaultExpensesRebillable: true, code: true },
     });
     rebillableDefault = proj?.defaultExpensesRebillable ?? false;
+    projectCode = proj?.code ?? null;
   }
 
   // If a receipt was attached, upload it to SharePoint BEFORE opening
@@ -139,24 +146,26 @@ export async function submitExpense(
   // receipt (which owner can attach later on /expenses/[id]) than to
   // block the whole submission on a SharePoint outage.
   //
-  // Filename uses a random shortId (not the Expense.id) so the upload
-  // can complete before the row is created; the Expense.id + shortId
+  // Filename carries a freshly minted uid (not the Expense.id) so the
+  // upload can complete before the row is created; the Expense.id + uid
   // are cross-referenced through the AuditEvent delta.
   let uploadedReceiptUrl: string | null = null;
   let uploadedReceiptDriveItemId: string | null = null;
   let receiptFilename: string | null = null;
+  let receiptUid: string | null = null;
   let uploadWarning: string | null = null;
   if (receiptCheck) {
     try {
       const buffer = Buffer.from(await receiptCheck.file.arrayBuffer());
-      const shortId = randomBytes(4).toString('hex');
       const upload = await uploadReceiptToSharePoint({
         kind: 'expense',
         date: data.date,
+        projectCode,
         vendor: data.vendor,
+        category: data.category,
         amountCents,
         ownerInitials: session.person.initials,
-        id: shortId,
+        uid: newReceiptUid('expense'),
         buffer,
         mimeType: receiptCheck.mimeType,
         originalFilename: receiptCheck.file.name,
@@ -165,6 +174,7 @@ export async function submitExpense(
         uploadedReceiptUrl = upload.webUrl;
         uploadedReceiptDriveItemId = upload.driveItemId;
         receiptFilename = upload.filename;
+        receiptUid = upload.uid;
       } else {
         uploadWarning =
           'SharePoint not configured — expense saved without a receipt link. Set SHAREPOINT_SITE_URL to enable receipt archiving.';
@@ -234,6 +244,7 @@ export async function submitExpense(
             status: expense.status,
             receipt: uploadedReceiptUrl
               ? {
+                  uid: receiptUid,
                   filename: receiptFilename,
                   driveItemId: uploadedReceiptDriveItemId,
                   webUrl: uploadedReceiptUrl,
