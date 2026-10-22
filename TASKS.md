@@ -2214,4 +2214,96 @@ Date still leads so folders keep sorting chronologically, matching the invoice-P
 
 ---
 
+## Phase 9 — Resource planning: manager visibility, calendar availability, analyst supply
+
+**Ask (TT, 2026-10-23):** *"on the resource planning, ensure all managers have the same visibility as admin. Also, ensure there is a calendar style view with drag and drop features for availability — this ideally would be synced to each individual foundry outlooks, or the ability to input the hours per day if they don't have blocks. We also need to know what the total 'analyst hours' available each day and week."*
+
+Split by how much of each already existed:
+
+1. Manager visibility — `/resource-planning` already admitted `manager`; `/availability` did not, and that asymmetry was the whole gap (TASK-518).
+2. Calendar + drag-and-drop — new surface over the existing per-day `AvailabilityForecast` rows (TASK-520).
+3. Per-day hours entry — already shipped as the rotated grid. Kept as a view, not replaced (TASK-520).
+4. Analyst hours available per day and per week — new roll-up, nothing like it existed (TASK-521).
+5. Outlook sync — no Graph calendar integration exists, and it needs tenant consent plus three product calls (TASK-522, blocked).
+
+**numbering note (2026-10-23):** this phase was first written as TASK-518/519/520/521. A parallel session rewrote `TASKS.md` from a stale copy, dropped the phase and reused TASK-519 for receipt filenames, which it then committed. The calendar work is renumbered to TASK-520 and the rest shift with it; commit `d14234b` carries the old TASK-519 label and refers to the calendar, not to receipt filenames.
+
+### TASK-518 — Managers see availability the way admin does
+**status:** done
+
+**Gap.** `/resource-planning` had admitted `manager` since TT's 2026-07-20 call. `/availability` never followed: `isAdminGroup` (super_admin / admin) got a firm-wide person picker, while `manager` / `partner` fell into a led-projects branch that walked `Project.managerId` / `primaryPartnerId` and listed only that cohort. A manager resourcing across teams saw a picker with four names and concluded the firm had no bench. `associate_partner` was worse — present in the `/resource-planning` and nav role lists, missing from every on-behalf check in `/availability`, so an AP was offered a person by the page and refused by the action.
+
+- [x] One shared helper (`src/server/availability-access.ts`) decides on-behalf availability access; the page and both server actions call it rather than repeating a role array.
+- [x] `manager`, `partner` and `associate_partner` get the same firm-wide active-person picker admin gets.
+- [x] `associate_partner` added to the on-behalf role list in both server actions.
+- [x] Support_Staff stay out by band, matching the nav `denyBands` rule and the `/resource-planning` page-level defense.
+- [x] On-behalf edits still write an `AuditEvent` naming actor and target.
+- [x] Test: `src/__tests__/availability-access.test.ts`.
+- [x] Commit: `feat(TASK-518): managers get admin-level availability visibility` — `4fdc434`
+
+**note on completion:** the led-projects branch is gone entirely, not widened — every on-behalf role reads the same firm-wide list, which also drops a `Project` query from the page.
+
+### TASK-520 — Calendar view for availability, with drag to paint
+**status:** done
+**depends on:** TASK-518
+
+**Shape.** `AvailabilityForecast` is already one row per person per day (`hours`, optional `projectId`), so the calendar is a new view over existing data — no migration. The rotated grid is TT's "input the hours per day if they don't have blocks" and stays as a toggleable view.
+
+- [x] Calendar renders the 8-week horizon as dated day cells, hours and project shown as a block rather than a number in a box.
+- [x] Drag across a run of days paints the brush onto every day in the run.
+- [x] Drag an existing block onto another day moves it; the source clears.
+- [x] Brush is explicit — hours + project (or Erase) — so a drag is never ambiguous.
+- [x] View toggle between Calendar and Grid; both drive the same state and the same Save, so switching never loses an unsaved edit.
+- [x] Keyboard path survives: Grid keeps real number inputs, and a focused calendar day takes Enter / Space.
+- [x] Weekends de-emphasised but still paintable.
+- [x] Week notes editable from both views, so the calendar is not a lossy view of the same data.
+- [x] Commit: `feat(TASK-519): calendar availability view with drag-to-paint` — `d14234b` (old numbering, see the note above)
+
+**note on completion:** the two gestures are disambiguated by what the pointer goes down on — empty cell paints, block moves — and the block fills most of the cell, so a drag starting on a committed day moves it. That is the intent, and the grab cursor plus the tooltip say so, but it is the one thing that will surprise people on first use.
+
+The transforms live in `availability-brush.ts` as pure functions (`resolveBrush` / `rangeDateIsos` / `applyPaint` / `applyMove`) because the app can't boot in this checkout — no `ENTRA_CLIENT_ID`, stale DB creds — so a unit test is the only test that runs here. The gestures were verified by bundling the component with esbuild and driving real pointer drags against it in a browser: paint across Mon–Fri, move a block Mon → Sat, erase a two-day run. That shook out a double-commit bug — pointerup and pointercancel share a handler and React had not re-rendered between them, so a move cleared the source and then wrote the emptied value onto the target. `commit` now clears the drag ref synchronously, and both components read the cell maps through refs so a mid-drag re-render can't commit against a stale copy.
+
+**not verified here:** the page in situ. Tailwind token classes, the view toggle inside `/availability`, and the interaction with the prefill banner and the inactive-profile gate have not been seen rendered — only the component in isolation.
+
+### TASK-521 — Analyst hours available, per day and per week
+**status:** todo
+
+**Gap.** `computeBandwidthHeatmap` aggregates to person × week. There is no band-level supply number and no daily granularity anywhere, so "how many analyst hours can I sell on Thursday" is currently unanswerable from the app.
+
+**Definition used (stated on the surface so nobody has to guess):** available = forecast hours with no `projectId` attached. Hours tagged to a project are committed; a day with no forecast row at all is unknown, not free — a person who has not submitted contributes zero to supply, and the surface says how many people that is so the number is read with the right scepticism.
+
+- [ ] Server function returns, per day in the horizon: unallocated / allocated / total forecast hours, grouped by band.
+- [ ] Same roll-up at week granularity.
+- [ ] Analyst is the headline band but Consultant and Expert render alongside.
+- [ ] Surfaced on `/resource-planning` above the heatmap, honouring the 4/6/8/12-week selector.
+- [ ] Non-submitters counted and shown, so the figure is not read as complete.
+- [ ] Contractors and partners excluded on the same basis `computeBandwidthHeatmap` excludes them.
+- [ ] Test: fixture people across bands with mixed allocated / unallocated / absent forecasts produce the expected daily and weekly totals.
+- [ ] Commit: `feat(TASK-521): analyst hours available per day and week`
+
+### TASK-522 — Sync availability from each person's Outlook calendar
+**status:** blocked — needs TT + tenant consent
+**depends on:** TASK-520
+
+**Ask:** *"this ideally would be synced to each individual foundry outlooks"*.
+
+**Two blockers, both real.**
+
+*Consent.* There is no Graph calendar integration today. `src/server/graph.ts` holds an app-credentials client, so the code is cheap — `GET /users/{upn}/calendarView` — but the app permission `Calendars.Read` needs Global Admin consent, and per the Mail.Read precedent it must be narrowed with an Exchange `New-ApplicationAccessPolicy` rather than left tenant-wide. Until that is granted the integration can only be tested against mocks.
+
+*Product.* Three calls, none of which the specs answer:
+
+- [ ] **Q1 — which events reduce availability?** Every `busy` event, only `oof`, or only all-day events. Treating every busy block as unavailable means a 30-minute standup eats forecast hours and the numbers go to nonsense within a week. The usual answer is all-day plus `oof`, but it is TT's call.
+- [ ] **Q2 — does Outlook overwrite a manual forecast, or only fill blanks?** Overwriting means a person's typed figure silently changes after they saved it, which breaks the submission signal `/resource-planning` reads. Fill-blanks-only is safer and makes the sync additive.
+- [ ] **Q3 — one direction or two?** Reading from Outlook is read-only and low-risk. Writing Foundry allocations into people's calendars puts the app in everyone's personal calendar and is a much larger consent conversation.
+
+**acceptance (once answered):**
+- [ ] Graph calendar client behind a `FeatureFlag`, off by default, with the Exchange application access policy documented in `INTEGRATIONS.md`.
+- [ ] Sync never silently overwrites a human-entered forecast (subject to Q2).
+- [ ] Synced days visually distinguishable from typed days, and overridable by the person.
+- [ ] Graph failure degrades to the manual grid — never an empty calendar presented as "you are free".
+- [ ] Commit: `feat(TASK-522): Outlook calendar sync for availability`
+
+---
+
 *End of TASKS.md. Start with TASK-001.*
