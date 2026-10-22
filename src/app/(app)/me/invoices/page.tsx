@@ -3,9 +3,16 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { prisma } from '@/server/db';
-import { listMyInvoicePeriods } from '@/server/timesheet';
+import {
+  listMyInvoicePeriods,
+  previewContractorRangeInvoice,
+} from '@/server/timesheet';
+import { suggestContractorInvoiceNumber } from '@/server/contractor-bills';
+import { addDays, daysInMonth, formatIsoDate, startOfMonth } from '@/lib/week';
+import { RangeInvoiceForm } from './range-invoice-form';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { ConfirmInvoiceForm } from './confirm-form';
 
 export const dynamic = 'force-dynamic';
@@ -41,7 +48,7 @@ const BILL_STATUS_COPY: Record<string, { label: string; variant: 'outline' | 'am
 export default async function MyInvoicesPage({
   searchParams,
 }: {
-  searchParams: { personId?: string };
+  searchParams: { personId?: string; start?: string; end?: string };
 }) {
   const session = await getSession();
   if (!session) notFound();
@@ -81,6 +88,42 @@ export default async function MyInvoicesPage({
 
   const periods = await listMyInvoicePeriods(person.id);
 
+  // ─── Date-range invoice (TASK-511) ──────────────────────────────────
+  // Defaults to the current calendar month so the month-at-a-time habit
+  // still works in one click; the point of the range is that it does not
+  // have to be a month.
+  const ISO = /^\d{4}-\d{2}-\d{2}$/;
+  const monthStart = startOfMonth(new Date());
+  const monthEnd = addDays(
+    monthStart,
+    daysInMonth(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1) - 1,
+  );
+  const rangeStartIso = ISO.test(searchParams.start ?? '')
+    ? searchParams.start!
+    : formatIsoDate(monthStart);
+  const rangeEndIso = ISO.test(searchParams.end ?? '')
+    ? searchParams.end!
+    : formatIsoDate(monthEnd);
+  // A backwards range is a typo, not an error page — fall back rather than
+  // throwing, and let the server action be the one that refuses on submit.
+  const rangeValid = rangeEndIso >= rangeStartIso;
+  const parseIso = (iso: string) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    return new Date(Date.UTC(y!, m! - 1, d!));
+  };
+
+  const preview = rangeValid
+    ? await previewContractorRangeInvoice(
+        person.id,
+        parseIso(rangeStartIso),
+        parseIso(rangeEndIso),
+      )
+    : null;
+  const suggestedNumber = (await suggestContractorInvoiceNumber(person.id)) ?? '';
+  const today = new Date();
+  const defaultIssueDate = formatIsoDate(today);
+  const defaultDueDate = formatIsoDate(addDays(today, 14));
+
   return (
     <div className="space-y-6">
       <header>
@@ -88,10 +131,105 @@ export default async function MyInvoicesPage({
           {viewingSelf ? 'My invoices' : `${person.firstName} ${person.lastName}'s invoices`}
         </h1>
         <p className="text-sm text-ink-3">
-          Lodge a month on your timesheet, your project leads approve it, then submit your
-          invoice here. A month can only be invoiced once every project in it is approved.
+          Invoice Foundry for your approved hours. Pick any date range below, or use
+          the month-by-month list further down once a whole month has been approved.
         </p>
       </header>
+
+      {/* TASK-511. The month list below answers "invoice September". This
+          answers "invoice 15 Sep – 14 Oct" — a contractor who started or
+          finished mid-month, or who bills a quarter at a time, had no path
+          at all before this. */}
+      <section className="rounded-lg border border-line bg-card p-4">
+        <h2 className="text-sm font-semibold text-ink">Generate an invoice</h2>
+        <p className="mt-0.5 text-xs text-ink-3">
+          Any range you like. Only approved hours can be invoiced — anything still
+          waiting on a lead is listed so you can see what is holding it up.
+        </p>
+
+        <form method="get" className="mt-3 flex flex-wrap items-end gap-2">
+          {!viewingSelf && <input type="hidden" name="personId" value={person.id} />}
+          <label className="flex flex-col gap-1 text-xs text-ink-3">
+            From
+            <input
+              type="date"
+              name="start"
+              defaultValue={rangeStartIso}
+              className="h-8 rounded-md border border-line bg-surface-elev px-2 text-xs text-ink"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-ink-3">
+            To
+            <input
+              type="date"
+              name="end"
+              defaultValue={rangeEndIso}
+              className="h-8 rounded-md border border-line bg-surface-elev px-2 text-xs text-ink"
+            />
+          </label>
+          <Button type="submit" variant="outline" size="sm">
+            Preview
+          </Button>
+        </form>
+
+        <div className="mt-4">
+          {!rangeValid ? (
+            <p className="text-xs text-status-red">
+              The end date must be on or after the start date.
+            </p>
+          ) : preview && preview.blockers.length > 0 ? (
+            <p className="text-xs text-status-amber">{preview.blockers.join(' ')}</p>
+          ) : preview && preview.groups.length === 0 ? (
+            <div className="text-xs text-ink-3">
+              <p>
+                Nothing to invoice between {rangeStartIso} and {rangeEndIso} — either no
+                approved hours in it, or they are already on a bill.
+              </p>
+              {preview.pending.length > 0 && (
+                <ul className="mt-2 space-y-1">
+                  {preview.pending.map((p) => (
+                    <li key={`${p.projectCode}-${p.status}`}>
+                      <span className="font-mono text-ink-4">{p.projectCode}</span>{' '}
+                      <span className="tabular-nums">{p.hours.toFixed(2)}h</span>{' '}
+                      {p.status === 'draft'
+                        ? '— still in draft on your timesheet'
+                        : `— with ${p.waitingOn.join(' / ')} for approval`}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : preview ? (
+            <RangeInvoiceForm
+              personId={person.id}
+              start={rangeStartIso}
+              end={rangeEndIso}
+              suggestedNumber={suggestedNumber}
+              defaultIssueDate={defaultIssueDate}
+              defaultDueDate={defaultDueDate}
+              rateNote={preview.rateNote}
+              excludedExpenseCount={preview.excludedExpenseCount}
+              groups={preview.groups.map((g) => ({
+                projectId: g.projectId,
+                projectCode: g.projectCode,
+                projectName: g.projectName,
+                hours: g.hours,
+                feesExGstCents: g.feesExGstCents,
+                expenseTotalCents: g.expenseTotalCents,
+                expenseGstCents: g.expenseGstCents,
+                expenseCount: g.expenseIds.length,
+              }))}
+              pending={preview.pending.map((p) => ({
+                projectCode: p.projectCode,
+                projectName: p.projectName,
+                hours: p.hours,
+                status: p.status,
+                waitingOn: p.waitingOn,
+              }))}
+            />
+          ) : null}
+        </div>
+      </section>
 
       {periods.length === 0 ? (
         <Card className="p-12 text-center text-sm text-ink-3">
