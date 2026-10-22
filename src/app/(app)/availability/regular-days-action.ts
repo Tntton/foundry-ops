@@ -6,6 +6,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
+import { canActOnBehalfForAvailability } from '@/server/availability-access';
 import { writeAudit } from '@/server/audit';
 
 export type RegularDaysFormState =
@@ -63,10 +64,7 @@ export async function saveRegularDays(
   const { personId, enabled, mon, tue, wed, thu, fri, sat, sun } = parsed.data;
 
   const isSelf = personId === session.person.id;
-  if (
-    !isSelf &&
-    !hasAnyRole(session, ['super_admin', 'admin', 'partner', 'manager'])
-  ) {
+  if (!isSelf && !canActOnBehalfForAvailability(session)) {
     return { status: 'error', message: 'Not authorized' };
   }
 

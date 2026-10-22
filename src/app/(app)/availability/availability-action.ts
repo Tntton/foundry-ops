@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
+import { canActOnBehalfForAvailability } from '@/server/availability-access';
 import { upsertAvailabilityForPerson } from '@/server/availability';
 import { prisma } from '@/server/db';
 import { addDays, startOfWeek, todayInFirmTz } from '@/lib/week';
@@ -41,8 +42,8 @@ const Schema = z.object({
 
 /**
  * Submit / clear per-day availability forecast cells. Self-edit always
- * works; setting another person's availability requires super_admin /
- * admin / partner / manager.
+ * works; setting another person's availability requires one of the
+ * on-behalf roles (see `availability-access`).
  */
 export async function submitAvailabilityForecast(
   _prev: AvailabilityFormState,
@@ -96,10 +97,11 @@ export async function submitAvailabilityForecast(
   }
 
   const isSelf = personId === session.person.id;
-  if (!isSelf && !hasAnyRole(session, ['super_admin', 'admin', 'partner', 'manager'])) {
+  if (!isSelf && !canActOnBehalfForAvailability(session)) {
     return {
       status: 'error',
-      message: 'Only admin / partner / manager can set someone else\'s forecast.',
+      message:
+        "Only admin / partner / AP / manager can set someone else's forecast.",
     };
   }
 

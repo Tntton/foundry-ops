@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
+import { canActOnBehalfForAvailability } from '@/server/availability-access';
 import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
 import { writeAudit } from '@/server/audit';
@@ -33,8 +34,9 @@ import { ScheduleTable } from './schedule-table';
  *   3. Schedule — read-only project allocation × baseline vs booked
  *      actuals, as a sanity check.
  *
- * On-behalf editing: super_admin / admin / partner / manager can pick
- * any active person via `?personId=…`. Self-edit always works.
+ * On-behalf editing: super_admin / admin / partner / associate_partner
+ * / manager can pick any active person via `?personId=…`. Self-edit
+ * always works.
  */
 export default async function AvailabilityPage({
   searchParams,
@@ -44,9 +46,9 @@ export default async function AvailabilityPage({
   const session = await getSession();
   if (!session || !hasCapability(session, 'timesheet.submit')) notFound();
 
-  const isAdminGroup = hasAnyRole(session, ['super_admin', 'admin']);
-  const isManagerOrLead = hasAnyRole(session, ['manager', 'partner']);
-  const canActOnBehalf = isAdminGroup || isManagerOrLead;
+  // Single source of truth for on-behalf access — shared with both
+  // server actions so the UI and the handlers can't drift apart.
+  const canActOnBehalf = canActOnBehalfForAvailability(session);
 
   let target = session.person;
   let actingOnBehalf = false;
@@ -93,54 +95,21 @@ export default async function AvailabilityPage({
     lastName: string;
   }> = [];
   if (canActOnBehalf) {
-    if (isAdminGroup) {
-      teamOptions = await prisma.person.findMany({
-        where: { endDate: null },
-        orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
-        select: {
-          id: true,
-          initials: true,
-          headshotUrl: true,
-          firstName: true,
-          lastName: true,
-        },
-      });
-    } else {
-      const ledProjects = await prisma.project.findMany({
-        where: {
-          stage: { not: 'archived' },
-          OR: [
-            { managerId: session.person.id },
-            { primaryPartnerId: session.person.id },
-          ],
-        },
-        select: {
-          managerId: true,
-          primaryPartnerId: true,
-          team: { select: { personId: true } },
-        },
-      });
-      const ids = new Set<string>();
-      for (const p of ledProjects) {
-        ids.add(p.managerId);
-        ids.add(p.primaryPartnerId);
-        for (const t of p.team) ids.add(t.personId);
-      }
-      ids.delete(session.person.id);
-      teamOptions = ids.size
-        ? await prisma.person.findMany({
-            where: { id: { in: [...ids] }, endDate: null },
-            orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
-            select: {
-              id: true,
-              initials: true,
-              headshotUrl: true,
-              firstName: true,
-              lastName: true,
-            },
-          })
-        : [];
-    }
+    // Firm-wide for every on-behalf role. Managers used to get only the
+    // people on projects they led, which meant a manager resourcing
+    // across teams saw a four-name picker and concluded there was no
+    // bench (TT, 2026-10-23). Same list admin gets, now.
+    teamOptions = await prisma.person.findMany({
+      where: { endDate: null },
+      orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
+      select: {
+        id: true,
+        initials: true,
+        headshotUrl: true,
+        firstName: true,
+        lastName: true,
+      },
+    });
   }
 
   // Inactive (soft-paused) gate — editor is disabled for inactive
