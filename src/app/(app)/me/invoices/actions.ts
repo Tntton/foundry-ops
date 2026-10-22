@@ -429,6 +429,9 @@ export async function generateRangeContractorInvoice(
     start: formData.get('start'),
     end: formData.get('end'),
     contractorInvoiceNumber: formData.get('contractorInvoiceNumber'),
+    issueDate: formData.get('issueDate'),
+    dueDate: formData.get('dueDate'),
+    description: formData.get('description') || null,
     attachmentSharepointUrl: formData.get('attachmentSharepointUrl') || null,
     notes: formData.get('notes') || null,
   });

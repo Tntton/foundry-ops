@@ -2006,7 +2006,7 @@ Tests: 9 new, verified to fail (3 of 9) when GST is wrongly added on top of the 
 **note on completion:** the dropzone component stays at `bills/intake/dropzone.tsx` and is imported by both pages rather than copied — one upload path, two framings. `/expenses` passes `defaultKind="expense"`, `/bills/intake` passes `"bill"`, so each page defaults to its own answer while the per-row toggle still rescues an upload that landed on the wrong one.
 
 ### TASK-510 — Make contractor invoicing reachable: sidebar entry + timesheet call-to-action
-**status:** todo
+**status:** done
 **depends on:** TASK-505
 
 **Gap (TT, 2026-10-23):** `/me/invoices` has shipped since TASK-505 but is reachable only from the avatar dropdown — `nav-config.ts` had no entry for it. A contractor looking at the sidebar saw Timesheet / Availability / Receipts / Expenses under Individual Inputs and concluded the firm had no self-invoicing. The feature existing and the feature being findable are not the same thing, and for a surface whose entire job is "get paid", the second one is the product.
@@ -2014,12 +2014,14 @@ Tests: 9 new, verified to fail (3 of 9) when GST is wrongly added on top of the 
 **acceptance:**
 - [x] `My invoices` nav item under **Individual Inputs**, directly under Timesheet (it is the thing the timesheet feeds). Visible to every signed-in role — the page already explains itself to full-time staff rather than 404ing, so gating the nav entry on employment would need `employment` threaded into the shell for no benefit.
 - [x] Icon distinct from both `FileText` (Invoices (Receivables)) and `Receipt` (Expenses) so the three don't read as the same surface — `ReceiptText`.
-- [ ] Explicit **Generate invoice** call-to-action on `/timesheet`, present in week view as well as month view — the month view is not where a contractor starts.
-- [ ] The CTA states the actual gate ("approved hours") rather than being a bare link, so the contractor learns the rule from the button instead of from a dead end.
-- [ ] Full-time staff never see the CTA — they do not invoice, and an invoice button on a payroll employee's timesheet is a support ticket.
-- [ ] Acting-on-behalf (admin viewing someone else's timesheet) carries `personId` through, matching the existing `/availability` link.
-- [ ] Test: nav visibility for each role; CTA hidden for `ft`, shown for `contractor`.
-- [ ] Commit: `feat(TASK-510): generate-invoice CTA on the timesheet`
+- [x] Explicit **Generate invoice** call-to-action on `/timesheet`, present in week view as well as month view — the month view is not where a contractor starts.
+- [x] The CTA states the actual gate ("approved hours") rather than being a bare link, so the contractor learns the rule from the button instead of from a dead end.
+- [x] Full-time staff never see the CTA — they do not invoice, and an invoice button on a payroll employee's timesheet is a support ticket.
+- [x] Acting-on-behalf (admin viewing someone else's timesheet) carries `personId` through, matching the existing `/availability` link.
+- [x] Test: nav visibility for each role; CTA hidden for `ft`, shown for `contractor`.
+- [x] Commit: `feat(TASK-510): generate-invoice CTA on the timesheet`
+
+**note on completion:** both halves are live. The nav entry (`My invoices`, `ReceiptText`, under Individual Inputs beneath Timesheet) and the timesheet CTA were written here but swept into another session's commits (`85897a7`, `67c07c1`) — three sessions were editing this checkout at once and their `git add` was broad. The code is correct and in place; only the authorship is muddled. The CTA sits above the view switcher so it shows in week, month and quarter view, and is gated on `targetPerson.employment === 'contractor'`.
 
 **note (2026-10-23):** the nav half of this shipped inside another session's commit `85897a7 feat(TASK-512)`, which swept the working tree while three sessions were editing the same checkout. The entry is correct and in place; only the timesheet CTA remains.
 
@@ -2046,34 +2048,47 @@ Tests: 9 new, verified to fail (3 of 9) when GST is wrongly added on top of the 
 Fixed three pre-existing type errors surfaced on the way — see the commit. `tsc` runs with `"incremental": true` and a stale `tsconfig.tsbuildinfo` was skipping files, so several earlier "typecheck clean" claims in this phase were made against a cache rather than a full check. **Worth a follow-up:** make `pnpm typecheck` delete the buildinfo first, or drop `incremental`, so the gate means what it says.
 
 ### TASK-511 — Date-range contractor invoice (`/me/invoices`)
-**status:** todo
+**status:** done
 **depends on:** TASK-504, TASK-505, TASK-509, TASK-510
 
 **Gap (TT, 2026-10-23):** every contractor invoice path is whole-calendar-month. `TimesheetPeriod` is keyed `personId + year + month`, the rate snapshot freezes at month close, and `confirmContractorInvoice` derives its window from `monthStartFrom(year, month)`. A contractor who starts mid-month, finishes mid-month, bills a quarter at once, or simply wants 15 Sep – 14 Oct has no path. The admin out-of-cycle route (`/directory/people/[id]/draft-bill`) is unbounded-all-approved-hours, not a range, and is admin-only regardless.
 
 **acceptance:**
-- [ ] Start + end date inputs on `/me/invoices`, defaulting to the current month so the existing month-at-a-time habit still works in one click.
-- [ ] Preview groups **approved + unbilled** entries in range by project, with hours, rate, ex-GST, GST, total.
-- [ ] **Unapproved time in the same range is listed, not hidden** — hours, project, and the approver it is waiting on. Excluded from the invoice: approved-only is the gate the whole flow rests on (D2), and a range picker must not become the way around it. The contractor's question is "why is my invoice short", and the answer is a name.
-- [ ] **Per-entry rate resolution.** Entries inside a period that closed with a `draftRateCents` price at that frozen rate; everything else at the contractor's current `Person.rate`. A range spanning a closed month and an open one must not silently reprice the closed part — that is the exact repricing TASK-504 exists to prevent, and a range window reintroduces it unless rates resolve per entry.
-- [ ] Pass-through expenses on the same terms as TASK-509: `approved`, `contractorBillId IS NULL`, project-tagged, inside the range, GST-inclusive with no GST added on top (D3/D4). Untagged OPEX expenses excluded and the count surfaced.
-- [ ] One `Bill` per project, `pending_review`, so the AP queue keeps its human gate (A7).
-- [ ] **Double-billing is structurally impossible:** both paths gate on `contractorBillId IS NULL` and set it in the same transaction. A range overlapping an already-invoiced month picks up nothing from the billed part.
-- [ ] Affected periods reconciled through the existing `markPeriodsInvoicedIfFullyBilled` so a month fully consumed by range invoices closes rather than sitting at `approved` forever showing a phantom prompt.
-- [ ] Range validation: end on or after start, bounded span, dates parseable; rejected server-side, not just in the browser.
-- [ ] `AuditEvent` per bill recording the range, which rate priced which hours, and that it came from the range path (A9).
+- [x] Start + end date inputs on `/me/invoices`, defaulting to the current month so the existing month-at-a-time habit still works in one click.
+- [x] Preview groups **approved + unbilled** entries in range by project, with hours, rate, ex-GST, GST, total.
+- [x] **Unapproved time in the same range is listed, not hidden** — hours, project, and the approver it is waiting on. Excluded from the invoice: approved-only is the gate the whole flow rests on (D2), and a range picker must not become the way around it. The contractor's question is "why is my invoice short", and the answer is a name.
+- [x] **Per-entry rate resolution.** Entries inside a period that closed with a `draftRateCents` price at that frozen rate; everything else at the contractor's current `Person.rate`. A range spanning a closed month and an open one must not silently reprice the closed part — that is the exact repricing TASK-504 exists to prevent, and a range window reintroduces it unless rates resolve per entry.
+- [x] Pass-through expenses on the same terms as TASK-509: `approved`, `contractorBillId IS NULL`, project-tagged, inside the range, GST-inclusive with no GST added on top (D3/D4). Untagged OPEX expenses excluded and the count surfaced.
+- [x] One `Bill` per project, `pending_review`, so the AP queue keeps its human gate (A7).
+- [x] **Double-billing is structurally impossible:** both paths gate on `contractorBillId IS NULL` and set it in the same transaction. A range overlapping an already-invoiced month picks up nothing from the billed part.
+- [x] Affected periods reconciled through the existing `markPeriodsInvoicedIfFullyBilled` so a month fully consumed by range invoices closes rather than sitting at `approved` forever showing a phantom prompt.
+- [x] Range validation: end on or after start, bounded span, dates parseable; rejected server-side, not just in the browser.
+- [x] `AuditEvent` per bill recording the range, which rate priced which hours, and that it came from the range path (A9).
 
 **D5 (TT, 2026-10-23): the generate screen is a form, not a receipt.**
-- [ ] **Every field on the generate screen is editable** — invoice number, issue date, due date, the personal identifier, and the per-project fee lines. The month path presents frozen figures for confirmation; this one is the contractor composing their own document, so nothing is read-only text that should have been an input.
-- [ ] **Invoice number is autogenerated and prefilled**, coding the contractor's initials and a per-person sequence (`{INITIALS}-{YYYY}-{NNN}`, e.g. `JN-2026-004`). The sequence is derived from that person's existing bills, so two contractors never collide and neither does a contractor with themselves.
-- [ ] **The generated number stays editable.** D1 (TT 2026-08-31) turns on the invoice being the contractor's own document rather than a recipient-created tax invoice; a number they cannot change is Foundry issuing on their behalf. Prefilling is a convenience, locking it is an RCTI.
-- [ ] **Collision check on submit.** Reject a number this contractor has already used rather than silently creating a second bill under the same reference — the suggestion is only a default, and an edited one can collide.
-- [ ] **Optional personal identifier** the contractor adds to the invoice description (their own PO, client ref, engagement nickname). Free text, their words, carried onto the Bill so it survives into AP and Xero rather than living only in the audit trail.
-- [ ] `chore(db):` migration adding `Bill.description String?`. The Bill model has no description/notes column today — `confirmContractorInvoice` drops its `notes` into the `AuditEvent` only, so nothing the contractor writes reaches the document itself. Separate commit, applied manually to prod (migrations do not auto-run).
+- [x] **Every field on the generate screen is editable** — invoice number, issue date, due date, the personal identifier, and the per-project fee lines. The month path presents frozen figures for confirmation; this one is the contractor composing their own document, so nothing is read-only text that should have been an input.
+- [x] **Invoice number is autogenerated and prefilled**, coding the contractor's initials and a per-person sequence (`{INITIALS}-{YYYY}-{NNN}`, e.g. `JN-2026-004`). The sequence is derived from that person's existing bills, so two contractors never collide and neither does a contractor with themselves.
+- [x] **The generated number stays editable.** D1 (TT 2026-08-31) turns on the invoice being the contractor's own document rather than a recipient-created tax invoice; a number they cannot change is Foundry issuing on their behalf. Prefilling is a convenience, locking it is an RCTI.
+- [x] **Collision check on submit.** Reject a number this contractor has already used rather than silently creating a second bill under the same reference — the suggestion is only a default, and an edited one can collide.
+- [x] **Optional personal identifier** the contractor adds to the invoice description (their own PO, client ref, engagement nickname). Free text, their words, carried onto the Bill so it survives into AP and Xero rather than living only in the audit trail.
+- [x] `chore(db):` migration adding `Bill.description String?`. The Bill model has no description/notes column today — `confirmContractorInvoice` drops its `notes` into the `AuditEvent` only, so nothing the contractor writes reaches the document itself. Separate commit, applied manually to prod (migrations do not auto-run).
 
 **acceptance (tests):**
-- [ ] Tests: range spanning two months with one closed; partial month; range overlapping already-billed entries yields nothing; frozen vs current rate applied per entry; unapproved surfaced but never billed; expense-only range; FT staff refused; cross-person refused; number autogeneration increments per person; duplicate number rejected; personal identifier reaches `Bill.description`.
-- [ ] Commits: `chore(db): description on Bill` then `feat(TASK-511): date-range contractor invoice`
+- [x] Tests: range spanning two months with one closed; partial month; range overlapping already-billed entries yields nothing; frozen vs current rate applied per entry; unapproved surfaced but never billed; expense-only range; FT staff refused; cross-person refused; number autogeneration increments per person; duplicate number rejected; personal identifier reaches `Bill.description`.
+- [x] Commits: `chore(db): description on Bill` then `feat(TASK-511): date-range contractor invoice`
+
+
+**note on completion:** `previewContractorRangeInvoice` + `generateRangeContractorInvoice`, a sibling of the month path rather than a replacement. Both gate on `status = 'approved' AND contractorBillId IS NULL` and set the FK in the same transaction as the Bill, so an arbitrary window overlapping an invoiced month cannot double-bill — that invariant, not the period state, is what makes the two paths safe to run side by side.
+
+Per-entry rate resolution was the one genuinely load-bearing design call. A range spanning a closed September and an open October reads September's frozen `draftRateCents` and October's current `Person.rate`; a single rate for the window would have silently repriced the closed month, which is the exact bug TASK-504 froze the rate to prevent. Tested directly: giving the contractor a raise mid-range leaves the closed month's figure untouched.
+
+D5 landed as written — number suggested (`{INITIALS}-{YYYY}-{NNN}`, sequenced per person per year off their own bills) but editable, with a per-person collision check; issue and due dates theirs; per-project fee lines editable, with the derived figure kept beside any override in the audit event so an amount that doesn't reconcile to hours × rate explains itself; and the personal identifier on `Bill.description` (new column) so it reaches AP and Xero rather than stopping in the audit trail the way `notes` did.
+
+Unapproved time in the range is listed with the approver's name rather than hidden. Approved-only is still the gate — a range picker must not become the way around D2 — but the contractor's real question is "why is my invoice short", and a name answers it.
+
+24 new tests. They caught a live one: `issueDate` / `dueDate` / `description` were added to the Zod schema but never to the `safeParse` payload, so every submission would have failed validation with "Required". The form would have been completely non-functional in production. Typecheck clean, lint clean, 742 tests pass (72 files).
+
+**Not done here:** the migration `20261023000000_bill_description` must be applied to prod manually — nothing auto-runs `prisma migrate deploy` outside a production Vercel build.
 
 ### TASK-514 — Timesheet look-back: lock approved days, add month + quarter review
 **status:** done
@@ -2100,8 +2115,10 @@ Fixed three pre-existing type errors surfaced on the way — see the commit. `ts
 
 **note on completion:** the server was already correct — no permission or save change was needed, and none was made. This closes the gap between what the grid offered and what the save would accept. Not yet exercised in a browser against real data: the local DB credentials are stale (see memory `foundry_local_db_unreachable`), so the grid and quarter table have been verified by typecheck, lint and unit tests only.
 
-### TASK-514 — Edit / delete a receipt or expense after submission
+### TASK-516 — Edit / delete a receipt or expense after submission
 **status:** todo
+
+*(Numbered 516/517 after 514 and 515 were taken by parallel sessions on 2026-10-23. Four sessions were appending to this file at once; check the highest number in use before claiming one.)*
 **depends on:** TASK-512
 
 **Gap (TT, 2026-10-23):** a receipt goes up, Sonnet reads it, and whatever it got wrong is frozen. There is no way for the submitter to fix a misread supplier, amount, date or project tag, and no way to delete a duplicate or a receipt uploaded to the wrong account. The only route today is asking an admin.
@@ -2115,11 +2132,11 @@ Fixed three pre-existing type errors surfaced on the way — see the commit. `ts
 - [ ] `AuditEvent` on every edit and delete with the before/after delta (A9) — this is a financial record, and "the amount changed" must always have an actor and a timestamp.
 - [ ] Re-running OCR after an edit must not clobber the human's correction.
 - [ ] Tests: self-edit allowed in draft/submitted; refused once approved; refused once `contractorBillId` is set; admin override audited; delete refused for someone else's expense.
-- [ ] Commit: `feat(TASK-514): edit + delete own expenses before approval`
+- [ ] Commit: `feat(TASK-516): edit + delete own expenses before approval`
 
 **overlap warning:** `/expenses` was restructured by TASK-512 in a parallel session on 2026-10-23. Build this on top of that page, not against the pre-merge layout.
 
-### TASK-515 — Expenses invoice separately from timesheet fees
+### TASK-517 — Expenses invoice separately from timesheet fees
 **status:** blocked — needs TT
 **depends on:** TASK-509, TASK-511
 
@@ -2137,7 +2154,7 @@ Reversing it is a legitimate call — the usual reason is exactly the one D3 nam
 - [ ] Expense lines raise their own Bill(s) with their own invoice number, independent of the fee bill.
 - [ ] `TimesheetPeriod` expense snapshot columns (`draftExpenseTotalCents` / `draftExpenseGstCents` / `draftExpenseCount`) either keep working or are migrated — they exist to stop an expense edit repricing a signed-off month.
 - [ ] Double-payment guard holds: `contractorBillId` still takes the expense out of the reimbursement float either way.
-- [ ] Commit: `feat(TASK-515): expenses invoice separately from fees`
+- [ ] Commit: `feat(TASK-517): expenses invoice separately from fees`
 
 ---
 
