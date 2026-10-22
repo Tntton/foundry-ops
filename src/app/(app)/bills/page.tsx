@@ -103,7 +103,7 @@ export default async function BillsPage({
         </div>
         <div className="flex items-center gap-2">
           <Button asChild variant="outline" size="sm">
-            <Link href="/bills/intake">Receipt Upload →</Link>
+            <Link href="/bills/intake">AP intake →</Link>
           </Button>
           <a
             href={`/api/reports/bills${buildQs({ q, status, category })}`}

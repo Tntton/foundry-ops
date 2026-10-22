@@ -165,7 +165,7 @@ export default async function OpexTrackerPage({
               Bills land here once they&apos;re tagged to an FH bucket and
               approved — upload via{' '}
               <Link href="/bills/intake" className="text-brand hover:underline">
-                Receipt Upload
+                AP intake
               </Link>
               .
             </p>

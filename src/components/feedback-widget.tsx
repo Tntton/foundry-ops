@@ -81,14 +81,16 @@ export function FeedbackWidget() {
 
   return (
     <>
-      {/* Trigger pill — sits to the left of the AssistantWidget so the two don't overlap.
-          Assistant widget owns the bottom-right corner (primary surface). */}
+      {/* Bottom-right corner is Feedback's home. The AssistantWidget
+          used to share this corner but moved to the bottom-LEFT to
+          stop obscuring in-app buttons on the right edge, so Feedback
+          gets its original position back. */}
       {!open && (
         <button
           type="button"
           onClick={() => setOpen(true)}
           data-tour="feedback"
-          className="fixed bottom-4 right-[8.5rem] z-40 flex items-center gap-1.5 rounded-full border border-line bg-card px-3 py-2 text-xs font-medium text-ink-2 shadow-lg transition-all hover:bg-surface-hover hover:text-ink"
+          className="fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full border border-line bg-card px-3 py-2 text-xs font-medium text-ink-2 shadow-lg transition-all hover:bg-surface-hover hover:text-ink"
           title="Submit feedback or request a feature"
         >
           <span aria-hidden>💬</span>
@@ -96,11 +98,8 @@ export function FeedbackWidget() {
         </button>
       )}
 
-      {/* Expanded panel sits at bottom-16 — the assistant pill paints
-          at bottom-4 right-4 with the same z-index and was covering
-          the submit button's right corner when this was bottom-4. */}
       {open && (
-        <div className="fixed bottom-16 right-4 z-40 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-line bg-card shadow-xl">
+        <div className="fixed bottom-4 right-4 z-40 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-line bg-card shadow-xl">
           <header className="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
             <div>
               <div className="text-sm font-semibold text-ink">Send feedback</div>

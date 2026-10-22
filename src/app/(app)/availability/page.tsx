@@ -1,17 +1,22 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
-import { hasAnyRole } from '@/server/roles';
+import { canActOnBehalfForAvailability } from '@/server/availability-access';
 import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
+import { writeAudit } from '@/server/audit';
 import { getAvailabilityForecast } from '@/server/timesheet';
 import { loadAvailabilityForPerson } from '@/server/availability';
+import { verifyPrefillToken } from '@/server/agents/assistant/prefill/token';
+import { AvailabilityPrefillSchema } from '@/server/agents/assistant/prefill/schemas';
+import { applyAvailabilityPrefill } from '@/server/agents/assistant/prefill/apply-availability';
 import { addDays, startOfWeek, todayInFirmTz } from '@/lib/week';
 import { PersonAvatar } from '@/components/person-avatar';
+import { PrefillBanner } from '@/components/prefill-banner';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { AvailabilityEditor } from './availability-editor';
+import { AvailabilityEditor, type AvailabilityDayInput } from './availability-editor';
 import { AvailabilityPersonPicker } from './person-picker';
 import { RegularDaysEditor } from './regular-days-editor';
 import { ScheduleTable } from './schedule-table';
@@ -28,20 +33,21 @@ import { ScheduleTable } from './schedule-table';
  *   3. Schedule — read-only project allocation × baseline vs booked
  *      actuals, as a sanity check.
  *
- * On-behalf editing: super_admin / admin / partner / manager can pick
- * any active person via `?personId=…`. Self-edit always works.
+ * On-behalf editing: super_admin / admin / partner / associate_partner
+ * / manager can pick any active person via `?personId=…`. Self-edit
+ * always works.
  */
 export default async function AvailabilityPage({
   searchParams,
 }: {
-  searchParams: { personId?: string };
+  searchParams: { personId?: string; prefill?: string };
 }) {
   const session = await getSession();
   if (!session || !hasCapability(session, 'timesheet.submit')) notFound();
 
-  const isAdminGroup = hasAnyRole(session, ['super_admin', 'admin']);
-  const isManagerOrLead = hasAnyRole(session, ['manager', 'partner']);
-  const canActOnBehalf = isAdminGroup || isManagerOrLead;
+  // Single source of truth for on-behalf access — shared with both
+  // server actions so the UI and the handlers can't drift apart.
+  const canActOnBehalf = canActOnBehalfForAvailability(session);
 
   let target = session.person;
   let actingOnBehalf = false;
@@ -88,54 +94,21 @@ export default async function AvailabilityPage({
     lastName: string;
   }> = [];
   if (canActOnBehalf) {
-    if (isAdminGroup) {
-      teamOptions = await prisma.person.findMany({
-        where: { endDate: null },
-        orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
-        select: {
-          id: true,
-          initials: true,
-          headshotUrl: true,
-          firstName: true,
-          lastName: true,
-        },
-      });
-    } else {
-      const ledProjects = await prisma.project.findMany({
-        where: {
-          stage: { not: 'archived' },
-          OR: [
-            { managerId: session.person.id },
-            { primaryPartnerId: session.person.id },
-          ],
-        },
-        select: {
-          managerId: true,
-          primaryPartnerId: true,
-          team: { select: { personId: true } },
-        },
-      });
-      const ids = new Set<string>();
-      for (const p of ledProjects) {
-        ids.add(p.managerId);
-        ids.add(p.primaryPartnerId);
-        for (const t of p.team) ids.add(t.personId);
-      }
-      ids.delete(session.person.id);
-      teamOptions = ids.size
-        ? await prisma.person.findMany({
-            where: { id: { in: [...ids] }, endDate: null },
-            orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
-            select: {
-              id: true,
-              initials: true,
-              headshotUrl: true,
-              firstName: true,
-              lastName: true,
-            },
-          })
-        : [];
-    }
+    // Firm-wide for every on-behalf role. Managers used to get only the
+    // people on projects they led, which meant a manager resourcing
+    // across teams saw a four-name picker and concluded there was no
+    // bench (TT, 2026-10-23). Same list admin gets, now.
+    teamOptions = await prisma.person.findMany({
+      where: { endDate: null },
+      orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
+      select: {
+        id: true,
+        initials: true,
+        headshotUrl: true,
+        firstName: true,
+        lastName: true,
+      },
+    });
   }
 
   // Inactive (soft-paused) gate — editor is disabled for inactive
@@ -181,6 +154,77 @@ export default async function AvailabilityPage({
     target.id,
     EDITOR_WEEKS,
   );
+
+  // ─── Assistant prefill (#11) ─────────────────────────────────────────
+  // The assistant signs a one-time token of per-day hours. Verify +
+  // merge into the cells BEFORE handing them to the editor so the grid
+  // lands pre-populated. Self-only (never on-behalf) and best-effort:
+  // failures leave the grid untouched and surface a small notice.
+  let prefillCells: AvailabilityDayInput[] = initialCells;
+  let prefillSummary: string | null = null;
+  let prefillIgnored:
+    | ReadonlyArray<{ dateIso: string; reason: string }>
+    | undefined;
+  let prefillNotice: string | null = null;
+  if (searchParams.prefill && target.id === session.person.id) {
+    const verify = verifyPrefillToken(searchParams.prefill, {
+      personId: session.person.id,
+      kind: 'availability',
+    });
+    if (verify.ok) {
+      const payloadCheck = AvailabilityPrefillSchema.safeParse(
+        verify.payload.payload,
+      );
+      if (payloadCheck.success) {
+        const result = applyAvailabilityPrefill(initialCells, payloadCheck.data);
+        prefillCells = result.cells;
+        prefillIgnored =
+          result.ignored.length > 0 ? result.ignored : undefined;
+        const totalH = result.applied.reduce((s, a) => s + a.hours, 0);
+        prefillSummary =
+          result.applied.length > 0
+            ? `${result.applied.length} day${result.applied.length === 1 ? '' : 's'} · ${totalH}h — review and save.`
+            : 'Nothing to populate — the prefilled dates fell outside the 8-week horizon.';
+        try {
+          await prisma.$transaction(async (tx) => {
+            await writeAudit(tx, {
+              actor: { type: 'person', id: session.person.id },
+              action: 'redeemed',
+              entity: {
+                type: 'assistant_prefill',
+                id: `${session.person.id}:availability:${verify.payload.jti}`,
+                after: {
+                  kind: 'availability',
+                  applied: result.applied,
+                  ignored: result.ignored,
+                  jti: verify.payload.jti,
+                },
+              },
+              source: 'agent',
+            });
+          });
+        } catch (err) {
+          console.error('[availability.prefill] audit redeem failed:', err);
+        }
+      } else {
+        prefillNotice =
+          'Prefill payload malformed — opened availability without changes.';
+      }
+    } else if (verify.reason === 'expired') {
+      prefillNotice =
+        'Prefill link expired (15-min TTL). Ask the assistant for a fresh one.';
+    } else if (verify.reason === 'wrong_person') {
+      prefillNotice = "That prefill link wasn't minted for your account.";
+    } else {
+      prefillNotice =
+        'Prefill link invalid — opened availability without changes.';
+    }
+  }
+  // URL the banner's "Undo" navigates to — same page, no prefill param.
+  const cleanUrl =
+    actingOnBehalf && searchParams.personId
+      ? `/availability?personId=${searchParams.personId}`
+      : '/availability';
   const editorWeeks = Array.from({ length: EDITOR_WEEKS }, (_, i) => {
     const ws = addDays(horizonStart, i * 7);
     return {
@@ -432,25 +476,39 @@ export default async function AvailabilityPage({
           </span>
         </div>
       ) : (
-        <AvailabilityEditor
-          // Remount when the person or their regular-days schedule
-          // changes so the grid re-seeds its pre-filled defaults
-          // immediately after a regular-days save (the editor holds
-          // cell state in useState, which ignores prop updates).
-          key={`${target.id}:${JSON.stringify(regularDays)}`}
-          personId={target.id}
-          targetFirstName={
-            target.id === session.person.id ? 'You' : target.firstName
-          }
-          weeklyCapacityHours={targetCapacityHours}
-          weeks={editorWeeks}
-          initialCells={initialCells}
-          allocatableProjects={sortedProjects.map((p) => ({
-            id: p.id,
-            code: p.code,
-            name: p.name,
-          }))}
-        />
+        <>
+          {prefillSummary && (
+            <PrefillBanner
+              summary={prefillSummary}
+              cleanUrl={cleanUrl}
+              ignored={prefillIgnored}
+            />
+          )}
+          {prefillNotice && !prefillSummary && (
+            <div className="rounded-md border border-status-amber bg-status-amber-soft/40 px-3 py-2 text-xs text-status-amber">
+              {prefillNotice}
+            </div>
+          )}
+          <AvailabilityEditor
+            // Remount when the person, their regular-days schedule, or an
+            // applied prefill changes so the grid re-seeds its cell state
+            // (the editor holds cells in useState, which ignores prop
+            // updates after mount).
+            key={`${target.id}:${JSON.stringify(regularDays)}:${searchParams.prefill ? 'pf' : 'nf'}`}
+            personId={target.id}
+            targetFirstName={
+              target.id === session.person.id ? 'You' : target.firstName
+            }
+            weeklyCapacityHours={targetCapacityHours}
+            weeks={editorWeeks}
+            initialCells={prefillCells}
+            allocatableProjects={sortedProjects.map((p) => ({
+              id: p.id,
+              code: p.code,
+              name: p.name,
+            }))}
+          />
+        </>
       )}
 
       {/* ── Read-only schedule + booked ──────────────────────────── */}

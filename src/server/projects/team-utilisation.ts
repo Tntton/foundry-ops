@@ -74,7 +74,7 @@ export async function computeProjectTeamUtilisation(
   const timeEntries = await prisma.timesheetEntry.findMany({
     where: {
       projectId,
-      status: { in: ['approved', 'billed'] },
+      status: 'approved',
     },
     select: {
       hours: true,

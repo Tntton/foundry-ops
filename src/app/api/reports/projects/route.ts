@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { ProjectStage } from '@prisma/client';
 import { getSession } from '@/server/session';
+import { hasAnyRole } from '@/server/roles';
 import { listProjects } from '@/server/projects';
 import { centsToDecimal, toCsv, ymd } from '@/server/reports/csv';
 
@@ -25,10 +26,16 @@ export async function GET(req: Request) {
         : undefined;
   const q = url.searchParams.get('q')?.trim();
 
+  // This CSV carries contract values (commercial data). Firm-wide
+  // project visibility is project-level only, so non-commercial roles
+  // stay scoped to their own projects here — mirrors the pre-2026-07-20
+  // behaviour rather than exposing every contract value.
+  const canSeeAllCommercial = hasAnyRole(session, ['super_admin', 'admin', 'partner']);
   const rows = await listProjects(session, {
     ...(stage ? { stage } : {}),
     ...(active !== undefined ? { active } : {}),
     ...(q ? { search: q } : {}),
+    mineOnly: !canSeeAllCommercial,
   });
 
   const csv = toCsv(

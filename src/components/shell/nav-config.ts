@@ -24,6 +24,7 @@ import {
   Database,
   Upload,
   ListChecks,
+  ReceiptText,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -72,21 +73,23 @@ export const NAV_GROUPS: readonly NavGroup[] = [
       // remains reachable via direct URL for the full history if
       // anyone needs it; simply not promoted in the sidebar.
       {
-        // Projects is the leader's working surface — kanban / grid /
-        // table across the whole firm. Staff don't need it; their
-        // active projects already live on the dashboard.
+        // Projects is a firm-wide working surface — kanban / grid /
+        // table across every engagement. All staff can see projects at
+        // the project level (code / name / client / stage); ops and
+        // commercial detail stay gated on the detail page.
         label: 'Projects',
         href: '/projects',
         icon: FolderKanban,
-        roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'],
+        roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'],
       },
       {
         // BD sits directly under Projects so the pipeline → delivery
-        // path reads top-to-bottom in the sidebar.
+        // path reads top-to-bottom in the sidebar. Managers now get BD
+        // access too (per TT, 2026-07-20).
         label: 'BD pipeline',
         href: '/bd',
         icon: TrendingUp,
-        roles: ['super_admin', 'admin', 'partner', 'associate_partner'],
+        roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'],
       },
       {
         label: 'Approvals',
@@ -98,10 +101,12 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: 'Resource planning',
         href: '/resource-planning',
         icon: Gauge,
-        // Delivery-side capacity tool. Support_Staff (Office Manager
-        // etc.) hold the admin role for ops work but have no business
-        // looking at the bandwidth heatmap — explicitly excluded.
-        roles: ['super_admin', 'admin', 'partner', 'associate_partner'],
+        // Delivery-side capacity tool. Managers resource-plan their own
+        // teams, so they're included (per TT, 2026-07-20). Support_Staff
+        // (Office Manager etc.) hold the admin role for ops work but have
+        // no business looking at the bandwidth heatmap — excluded. Plain
+        // staff never see it.
+        roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'],
         denyBands: ['Support_Staff'],
       },
       {
@@ -145,6 +150,15 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         roles: ['super_admin', 'admin', 'partner'],
       },
       {
+        // Forecast sandbox — what-if over the book of business (toggle
+        // projects, adjust contract values), saved as personal scenarios.
+        // Same planner audience as P&L; read-only against real data.
+        label: 'Forecast',
+        href: '/forecast',
+        icon: LineChart,
+        roles: ['super_admin', 'admin', 'partner'],
+      },
+      {
         // Operational balance sheet — AR + AP + WIP + bank. NOT a
         // substitute for Xero's official BS; flagged on the page
         // itself. Firm financial reporting — same audience as P&L, and
@@ -167,6 +181,28 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         label: 'Payables',
         href: '/payables',
         icon: Wallet,
+        roles: ['super_admin', 'admin'],
+      },
+      {
+        // Master ledger — the firm-wide AR/AP audit sheet (every money
+        // flow in and out, one row shape). super_admin + admin only,
+        // matching the `report.ledger.view` capability: the surface is
+        // PII-adjacent (the export carries payment refs / BSB / acct).
+        // This is Jas's accountant/audit review surface.
+        label: 'Master ledger',
+        href: '/reports/ledger',
+        icon: ScrollText,
+        roles: ['super_admin', 'admin'],
+      },
+      {
+        // Payments register — consolidates receivables / payables /
+        // reimbursables into one reviewable list with a payment-status
+        // lens + drill-through to each record's edit surface. Same
+        // super_admin + admin audience as the ledger (the intersection
+        // of the three underlying surfaces; gated on report.ledger.view).
+        label: 'Payments',
+        href: '/payments',
+        icon: HandCoins,
         roles: ['super_admin', 'admin'],
       },
       {
@@ -197,9 +233,11 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   {
     // Day-to-day input surfaces every staff member uses — log time, drop a
     // receipt, track the resulting reimbursement. Visible to all signed-in
-    // people. Receipt Upload double-routes to vendor bills for admins, but
-    // the page handles that in-context with the per-row kind toggle, so
-    // there's no second nav entry needed for them.
+    // people. Expenses carries the receipt dropzone AND the submitted list:
+    // two nav entries for one errand ("Receipt Upload" vs "Submitted
+    // Expenses") read as two different things and sent people to the wrong
+    // one. Vendor AP intake stays separate under Company Inputs — that is a
+    // different question (who gets paid), not a different step.
     id: 'inputs-individual',
     label: 'Individual Inputs',
     items: [
@@ -223,17 +261,27 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         denyBands: ['Support_Staff'],
       },
       {
-        label: 'Receipt Upload',
-        href: '/bills/intake',
-        icon: Inbox,
-        // Open to every staff member — `expense.submit` (any role) is the
-        // gate enforced server-side. Vendor-bill uploads still require
-        // bill.create, but the page renders an expense-only mode for
-        // others.
+        // The contractor's own invoicing surface. Shipped in TASK-505 but
+        // lived only in the avatar dropdown until TASK-510 — which meant a
+        // contractor scanning the sidebar for "how do I get paid" found
+        // Timesheet, Receipts and Expenses and concluded there was no
+        // self-invoicing at all. Sits directly under Timesheet because that
+        // is what feeds it.
+        //
+        // Deliberately NOT gated on employment: the shell doesn't know
+        // contractor vs full-time, and the page already renders a "you're on
+        // payroll" explainer rather than 404ing, so threading `employment`
+        // through the shell would buy nothing.
+        label: 'My invoices',
+        href: '/me/invoices',
+        icon: ReceiptText,
         roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'],
       },
       {
-        label: 'Submitted Expenses',
+        // Upload + submitted list on one page. `expense.submit` (any role)
+        // is the gate enforced server-side; the per-row vendor-bill toggle
+        // on the dropzone still requires bill.create.
+        label: 'Expenses',
         href: '/expenses',
         icon: Receipt,
         roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'],

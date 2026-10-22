@@ -35,7 +35,7 @@ function formatMoney(cents: number): string {
 
 export default async function BdOutcomesPage() {
   const session = await getSession();
-  if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
+  if (!hasAnyRole(session, ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'])) notFound();
 
   const commercialsVisible = await readCommercialsVisible();
 

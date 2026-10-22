@@ -1,5 +1,6 @@
 import type { TimesheetRow } from '@/server/timesheet';
 import type { TimesheetPrefillPayload } from './schemas';
+import { isCellEditable } from '@/lib/timesheet-lock';
 import { formatIsoDate } from '@/lib/week';
 
 /**
@@ -92,7 +93,11 @@ export function applyTimesheetPrefill(
         projectStage: project.stage,
         description: entry.notes ?? '',
         status: 'draft',
-        cells: cells.map((date) => ({ date, hours: 0 })),
+        // A freshly prefilled row has no TimesheetEntry behind it yet, so
+        // there is no status and nothing is billed. Both fields are
+        // required on TimesheetCell — the grid reads them per cell to
+        // decide which days are editable.
+        cells: cells.map((date) => ({ date, hours: 0, status: null, billed: false })),
       };
       working.push(newRow);
       rowIdx = working.length - 1;
@@ -108,6 +113,18 @@ export function applyTimesheetPrefill(
       continue;
     }
     const cell = row.cells[dayIdx]!;
+    // Row-level `locked_row` above only catches a row that is approved end
+    // to end. A mixed row (last week approved, this week draft) needs the
+    // same guard per DAY, or the assistant adds hours to a day the save
+    // will refuse to write and the user is told it worked.
+    if (!isCellEditable(cell, false)) {
+      ignored.push({
+        projectCode: code,
+        dateIso: entry.dateIso,
+        reason: 'locked_day',
+      });
+      continue;
+    }
     cell.hours = Number((cell.hours + entry.hours).toFixed(2));
     if (entry.notes && row.description.trim().length === 0) {
       row.description = entry.notes;

@@ -65,6 +65,7 @@ async function migrateExpenses(): Promise<{
     },
     include: {
       person: { select: { id: true, initials: true } },
+      project: { select: { code: true } },
     },
     orderBy: { createdAt: 'asc' },
     take: LIMIT > 0 ? LIMIT : undefined,
@@ -87,14 +88,17 @@ async function migrateExpenses(): Promise<{
     }
     try {
       const buffer = Buffer.from(payload.base64, 'base64');
-      const shortId = row.id.slice(-8);
       const upload = await uploadReceiptToSharePoint({
         kind: 'expense',
         date: row.date,
+        projectCode: row.project?.code ?? null,
         vendor: row.vendor,
+        category: row.category,
         amountCents: row.amount,
         ownerInitials: row.person.initials,
-        id: shortId,
+        // Backfilled rows already exist, so the uid is derived from the
+        // row id rather than minted — a re-run names the same file.
+        uid: `EXP-${row.id.slice(-8).toUpperCase()}`,
         buffer,
         mimeType: payload.mimeType,
       });
@@ -151,6 +155,9 @@ async function migrateBills(): Promise<{
     where: {
       attachmentSharepointUrl: { startsWith: 'data:' },
     },
+    include: {
+      project: { select: { code: true } },
+    },
     orderBy: { createdAt: 'asc' },
     take: LIMIT > 0 ? LIMIT : undefined,
   });
@@ -171,14 +178,15 @@ async function migrateBills(): Promise<{
     }
     try {
       const buffer = Buffer.from(payload.base64, 'base64');
-      const shortId = row.id.slice(-8);
       const upload = await uploadReceiptToSharePoint({
         kind: 'bill',
         date: row.issueDate,
+        projectCode: row.project?.code ?? null,
         vendor: row.supplierName,
+        category: row.category,
         amountCents: row.amountTotal,
         ownerInitials: 'FH', // Firm-attributed — bills don't carry a person
-        id: shortId,
+        uid: `BILL-${row.id.slice(-8).toUpperCase()}`,
         buffer,
         mimeType: payload.mimeType,
       });

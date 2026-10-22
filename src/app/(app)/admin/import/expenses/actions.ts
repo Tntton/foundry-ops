@@ -28,7 +28,7 @@ export async function parseExpensesCsv(
   }
   const result = await buildExpensesPreview(csvText, fileName);
   if (!result.ok) return { ok: false, message: result.error.message };
-  const token = stashExpenses(session.person.id, result.preview);
+  const token = await stashExpenses(session.person.id, result.preview);
   return { ok: true, token };
 }
 
@@ -48,7 +48,7 @@ export async function commitExpensesCsv(
   }
   const token = (formData.get('token') as string | null) ?? '';
   if (!token) return { status: 'error', message: 'Missing token.' };
-  const preview = readExpenses(session.person.id, token);
+  const preview = await readExpenses(session.person.id, token);
   if (!preview) {
     return {
       status: 'error',
@@ -57,7 +57,7 @@ export async function commitExpensesCsv(
   }
   try {
     const result = await commitExpensesImport(preview, session.person.id);
-    discard(token);
+    await discard(token);
     revalidatePath('/expenses');
     revalidatePath('/admin/audit');
     const params = new URLSearchParams({

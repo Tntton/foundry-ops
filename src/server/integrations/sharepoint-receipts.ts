@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 import {
   graph,
   graphConfigured,
@@ -26,15 +28,21 @@ import { optionalEnv } from '@/server/env';
  *   - FY subfolder is auto-derived from the receipt date. AU FY starts
  *     July 1 (see `deriveAustralianFY`), so a July-2026 receipt lands
  *     in `FY 26 - 27/` and stays there forever — never renamed.
- *   - Filename is `YYYY-MM-DD - <vendor> - $<amount> - <initials> - <shortId>.<ext>`
- *     so an accountant scrolling the folder can identify a row without
- *     opening it, and search-by-date/vendor works in the SharePoint UI.
+ *   - Filename answers who / what / which project / when, plus a
+ *     unique reference, without anyone opening the file (TASK-519):
+ *       `YYYY-MM-DD - <PROJECT> - <vendor> - <category> - $<amount>
+ *        - <INITIALS> - <UID>.<ext>`
+ *     e.g. `2026-07-08 - IFM001 - Amazon Web Services - subscriptions
+ *     - $89 - TT - EXP-A1B2C3D4.pdf`. Every segment is also a prefix
+ *     SharePoint search matches on, so "IFM001" or "EXP-A1B2C3D4"
+ *     finds the file from the folder search box.
  *   - Returns both `webUrl` (for direct clicks / audit trail) AND
  *     `driveItemId` (for the proxied inline preview at
  *     /api/attachments/*, which needs Graph binary streaming).
- *   - Doesn't dedupe on filename — collisions (same date, same vendor,
- *     same amount) fall through to a `-1`, `-2` suffix via SharePoint's
- *     conflictBehavior=rename. Prevents silent overwrites.
+ *   - Doesn't dedupe on filename — the uid makes a collision all but
+ *     impossible, and anything that does collide falls through to a
+ *     `-1`, `-2` suffix via SharePoint's conflictBehavior=rename.
+ *     Prevents silent overwrites.
  *
  * Graph permission required: `Files.ReadWrite.All` (Application) — same
  * scope the SharePoint backup + Uber email-intake already use. No new
@@ -46,6 +54,12 @@ const DEFAULT_RECEIPTS_ROOT =
 
 // SharePoint disallows these in filenames — replace with `-`.
 const FILENAME_INVALID_CHARS = /[/\\?%*:|"<>#]/gu;
+
+// Placeholder tokens so the filename keeps a fixed seven-segment shape
+// even when the fact isn't known at upload time. Both are deliberately
+// loud: an accountant scanning the folder should see what's unassigned.
+const NO_PROJECT_TOKEN = 'NOPROJECT';
+const NO_CATEGORY_TOKEN = 'uncategorised';
 
 // Chunked upload threshold — Graph docs say <4MB is fine as a direct
 // PUT; larger goes through createUploadSession. Receipts are usually
@@ -79,32 +93,70 @@ function pad2(n: number): string {
 // ─── Filename derivation ────────────────────────────────────────────
 
 /**
- * Build the canonical receipt filename.
+ * Strip SharePoint-illegal characters, collapse whitespace and cap the
+ * length of one ` - `-delimited filename segment. The ` - ` separator
+ * itself is collapsed to a single `-` so a vendor called "Kee - Lee"
+ * can't fake an extra segment and break filename parsing.
+ */
+function sanitiseSegment(raw: string, maxLength: number): string {
+  return raw
+    .replace(FILENAME_INVALID_CHARS, '-')
+    .replace(/\s+/gu, ' ')
+    .replace(/ - /gu, '-')
+    .trim()
+    .slice(0, maxLength);
+}
+
+/**
+ * Mint the unique reference that identifies one uploaded receipt.
  *
- *   `2026-07-08 - Amazon Web Services - $89 - TT - exp_ab12cd.pdf`
+ *   `EXP-A1B2C3D4` / `BILL-A1B2C3D4`
  *
- * Vendor is truncated/sanitised so path length stays under the 400-char
- * SharePoint URL limit even for very long amounts + IDs. Empty vendor
- * falls back to "no-vendor" so the shape is stable.
+ * 32 bits of randomness, not a slice of the row id: the upload happens
+ * before the Expense/Bill row exists, so the uid is generated first and
+ * then carried into the AuditEvent delta, which is what ties file back
+ * to row. Uppercase hex because the uid is the token a human types into
+ * the SharePoint search box.
+ */
+export function newReceiptUid(kind: 'expense' | 'bill'): string {
+  const prefix = kind === 'expense' ? 'EXP' : 'BILL';
+  return `${prefix}-${randomBytes(4).toString('hex').toUpperCase()}`;
+}
+
+/**
+ * Build the canonical receipt filename — who / what / which project /
+ * when, plus the unique reference (TASK-519):
+ *
+ *   `2026-07-08 - IFM001 - Amazon Web Services - subscriptions - $89 - TT - EXP-A1B2C3D4.pdf`
+ *    └ when ──┘   └ project ┘  └─ what ─────────────────────┘  └ who ┘  └ uid ──────┘
+ *
+ * Date leads so the folder still sorts chronologically, matching the
+ * existing archive and the invoice-PDF convention. Every segment is
+ * truncated/sanitised so the path stays under the 400-char SharePoint
+ * URL limit; missing facts fall back to a fixed token rather than
+ * collapsing a segment, so the shape is always seven parts.
  */
 export function buildReceiptFilename(input: {
   date: Date;
+  projectCode: string | null | undefined;
   vendor: string | null | undefined;
+  category: string | null | undefined;
   amountCents: number;
   ownerInitials: string;
-  id: string;
+  uid: string;
   extension: string;
 }): string {
   const iso = input.date.toISOString().slice(0, 10);
-  const vendor = (input.vendor ?? 'no-vendor')
-    .replace(FILENAME_INVALID_CHARS, '-')
-    .replace(/\s+/gu, ' ')
-    .trim()
-    .slice(0, 60);
+  const project =
+    sanitiseSegment(input.projectCode ?? '', 24).toUpperCase() || NO_PROJECT_TOKEN;
+  const vendor = sanitiseSegment(input.vendor ?? '', 60) || 'no-vendor';
+  const category =
+    sanitiseSegment(input.category ?? '', 24).toLowerCase() || NO_CATEGORY_TOKEN;
   const dollars = Math.round(input.amountCents / 100);
-  const shortId = input.id.slice(-8);
+  const initials = sanitiseSegment(input.ownerInitials, 6) || '??';
+  const uid = sanitiseSegment(input.uid, 20) || 'NOUID';
   const ext = input.extension.replace(/^\.+/u, '').toLowerCase() || 'bin';
-  return `${iso} - ${vendor} - $${dollars} - ${input.ownerInitials} - ${shortId}.${ext}`;
+  return `${iso} - ${project} - ${vendor} - ${category} - $${dollars} - ${initials} - ${uid}.${ext}`;
 }
 
 /**
@@ -154,15 +206,22 @@ export type ReceiptUploadResult = {
   driveItemId: string;
   folderPath: string;
   filename: string;
+  /** Echoed back so the caller can record it on the AuditEvent delta. */
+  uid: string;
 };
 
 export type ReceiptUploadInput = {
   kind: 'expense' | 'bill';
   date: Date;
+  /** Project code the cost is tagged to, e.g. `IFM001`. Null = overhead. */
+  projectCode: string | null | undefined;
   vendor: string | null | undefined;
+  /** Expense/Bill category — the "what" segment of the filename. */
+  category: string | null | undefined;
   amountCents: number;
   ownerInitials: string;
-  id: string;
+  /** Unique receipt reference from `newReceiptUid`, e.g. `EXP-A1B2C3D4`. */
+  uid: string;
   buffer: Buffer;
   mimeType: string;
   originalFilename?: string | null;
@@ -191,10 +250,12 @@ export async function uploadReceiptToSharePoint(
   const ext = extensionFromMime(input.mimeType);
   const filename = buildReceiptFilename({
     date: input.date,
+    projectCode: input.projectCode,
     vendor: input.vendor,
+    category: input.category,
     amountCents: input.amountCents,
     ownerInitials: input.ownerInitials,
-    id: input.id,
+    uid: input.uid,
     extension: ext,
   });
   const filePath = `${folderPath}/${filename}`;
@@ -209,7 +270,264 @@ export async function uploadReceiptToSharePoint(
     driveItemId: item.id,
     folderPath,
     filename: item.name,
+    uid: input.uid,
   };
+}
+
+// ─── Invoice PDF archival (TASK-068) ────────────────────────────────
+//
+// Finalised tax-invoice PDFs land in the same corporate archive as
+// receipts, under a sibling `Invoices` bucket so an accountant sees
+// AR PDFs alongside the AP receipts they were rebilled from:
+//
+//   <RECEIPTS_ROOT>/FY YY - YY+1/Invoices/YYYY-MM/<filename>
+//
+// FY is derived from the invoice issue date (same AU-FY rule as
+// receipts). Targeting the per-project admin/financial folder
+// (`Project.sharepointAdminFolderUrl`) is a future refinement — it
+// needs a webUrl→drive-path resolver we don't have yet — so for now
+// every finalised invoice files into this one date-partitioned tree,
+// which is itself audit-complete.
+
+/**
+ * Drive-relative folder path (no leading slash) for a finalised invoice
+ * PDF, partitioned by the invoice issue date. Exported for tests.
+ */
+export function invoiceFolderPath(issueDate: Date): string {
+  const root =
+    optionalEnv('SHAREPOINT_RECEIPTS_ROOT') ?? DEFAULT_RECEIPTS_ROOT;
+  const fy = deriveAustralianFY(issueDate);
+  const yyyyMM = `${issueDate.getUTCFullYear()}-${pad2(issueDate.getUTCMonth() + 1)}`;
+  return `${root}/${fy}/Invoices/${yyyyMM}`;
+}
+
+/**
+ * Canonical filename for an archived tax-invoice PDF, e.g.
+ *   `2026-07-08 - IFM001-INV-12 - $18700 - TT - a1b2c3d4.pdf`
+ * so the invoice number, total and issuer are legible in the SharePoint
+ * folder without opening the file. Exported for tests.
+ */
+export function buildInvoiceFilename(input: {
+  issueDate: Date;
+  invoiceNumber: string;
+  amountTotalCents: number;
+  ownerInitials: string;
+  id: string;
+}): string {
+  const iso = input.issueDate.toISOString().slice(0, 10);
+  const num = (input.invoiceNumber || 'no-number')
+    .replace(FILENAME_INVALID_CHARS, '-')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, 60);
+  const dollars = Math.round(input.amountTotalCents / 100);
+  const shortId = input.id.slice(-8);
+  return `${iso} - ${num} - $${dollars} - ${input.ownerInitials} - ${shortId}.pdf`;
+}
+
+export type InvoiceUploadResult = {
+  webUrl: string;
+  driveItemId: string;
+  folderPath: string;
+  filename: string;
+};
+
+export type InvoiceUploadInput = {
+  issueDate: Date;
+  invoiceNumber: string;
+  amountTotalCents: number;
+  ownerInitials: string;
+  id: string;
+  buffer: Buffer;
+};
+
+/**
+ * Upload a finalised tax-invoice PDF to the corporate SharePoint
+ * archive. Returns null when Graph or SharePoint isn't configured so
+ * the finalise action can gracefully degrade to a DB-only record with
+ * no pointer (and retry on the next finalise). All other errors throw.
+ */
+export async function uploadInvoicePdfToSharePoint(
+  input: InvoiceUploadInput,
+): Promise<InvoiceUploadResult | null> {
+  if (!graphConfigured()) return null;
+  const siteUrl = optionalEnv('SHAREPOINT_SITE_URL');
+  if (!siteUrl) return null;
+
+  const siteId = await resolveSiteId(siteUrl);
+  const driveId = await resolveDriveId(siteId);
+
+  const folderPath = invoiceFolderPath(input.issueDate);
+  await ensureFolderTree(driveId, folderPath);
+
+  const filename = buildInvoiceFilename({
+    issueDate: input.issueDate,
+    invoiceNumber: input.invoiceNumber,
+    amountTotalCents: input.amountTotalCents,
+    ownerInitials: input.ownerInitials,
+    id: input.id,
+  });
+  const filePath = `${folderPath}/${filename}`;
+
+  const item =
+    input.buffer.length < CHUNKED_UPLOAD_THRESHOLD
+      ? await uploadSmallFile(driveId, filePath, input.buffer, 'application/pdf')
+      : await uploadLargeFile(driveId, filePath, input.buffer, filename);
+
+  return {
+    webUrl: item.webUrl,
+    driveItemId: item.id,
+    folderPath,
+    filename: item.name,
+  };
+}
+
+/**
+ * Encode a SharePoint / OneDrive web URL into a Graph sharing token so
+ * the `/shares/{token}/driveItem` endpoint resolves it to a DriveItem.
+ * Per the Graph docs: `u!` + base64(url), with `+`/`/` → `-`/`_` and
+ * trailing `=` trimmed. Pure — exported for tests.
+ */
+export function encodeSharingToken(webUrl: string): string {
+  const b64 = Buffer.from(webUrl, 'utf8').toString('base64');
+  const safe = b64.replace(/=+$/u, '').replace(/\//gu, '_').replace(/\+/gu, '-');
+  return `u!${safe}`;
+}
+
+/**
+ * Resolve a folder web URL to its `{ driveId, itemId }` via the shares
+ * API. Returns null when the URL can't be resolved (bad/renamed folder,
+ * permissions) so the caller falls back to the date-partitioned tree.
+ */
+async function resolveFolderByWebUrl(
+  webUrl: string,
+): Promise<{ driveId: string; itemId: string } | null> {
+  try {
+    const token = encodeSharingToken(webUrl);
+    const item = await graph<{
+      id: string;
+      parentReference?: { driveId?: string };
+    }>('GET', `/shares/${token}/driveItem?$select=id,parentReference`);
+    const driveId = item.parentReference?.driveId;
+    if (!driveId || !item.id) return null;
+    return { driveId, itemId: item.id };
+  } catch (err) {
+    if (err instanceof GraphError) {
+      console.error(
+        '[invoice-archive] could not resolve admin folder webUrl:',
+        err.status,
+      );
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Upload a finalised invoice PDF into a project's admin/financial folder,
+ * addressed by its stored `webUrl` (TASK-068b). Returns null when Graph
+ * is unconfigured or the folder can't be resolved, so the caller can
+ * fall back to the shared `Invoices/FY …` tree.
+ */
+export async function uploadInvoicePdfToAdminFolder(input: {
+  adminFolderWebUrl: string;
+  issueDate: Date;
+  invoiceNumber: string;
+  amountTotalCents: number;
+  ownerInitials: string;
+  id: string;
+  buffer: Buffer;
+}): Promise<InvoiceUploadResult | null> {
+  if (!graphConfigured()) return null;
+
+  const folder = await resolveFolderByWebUrl(input.adminFolderWebUrl);
+  if (!folder) return null;
+
+  const filename = buildInvoiceFilename({
+    issueDate: input.issueDate,
+    invoiceNumber: input.invoiceNumber,
+    amountTotalCents: input.amountTotalCents,
+    ownerInitials: input.ownerInitials,
+    id: input.id,
+  });
+
+  const item =
+    input.buffer.length < CHUNKED_UPLOAD_THRESHOLD
+      ? await uploadSmallFileToItem(
+          folder.driveId,
+          folder.itemId,
+          filename,
+          input.buffer,
+          'application/pdf',
+        )
+      : await uploadLargeFileToItem(
+          folder.driveId,
+          folder.itemId,
+          filename,
+          input.buffer,
+        );
+
+  return {
+    webUrl: item.webUrl,
+    driveItemId: item.id,
+    folderPath: input.adminFolderWebUrl,
+    filename: item.name,
+  };
+}
+
+/**
+ * Archive a finalised invoice PDF: into the project's admin/financial
+ * folder when one is set (TASK-068b), else the shared date-partitioned
+ * `Invoices/FY …` tree (TASK-068). An admin-folder failure falls back to
+ * the tree rather than losing the archive.
+ */
+export async function archiveInvoicePdf(input: {
+  adminFolderWebUrl: string | null;
+  issueDate: Date;
+  invoiceNumber: string;
+  amountTotalCents: number;
+  ownerInitials: string;
+  id: string;
+  buffer: Buffer;
+}): Promise<InvoiceUploadResult | null> {
+  const {
+    adminFolderWebUrl,
+    issueDate,
+    invoiceNumber,
+    amountTotalCents,
+    ownerInitials,
+    id,
+    buffer,
+  } = input;
+
+  if (adminFolderWebUrl) {
+    try {
+      const res = await uploadInvoicePdfToAdminFolder({
+        adminFolderWebUrl,
+        issueDate,
+        invoiceNumber,
+        amountTotalCents,
+        ownerInitials,
+        id,
+        buffer,
+      });
+      if (res) return res;
+    } catch (err) {
+      console.error(
+        '[invoice-archive] admin-folder upload failed, falling back to Invoices tree:',
+        err,
+      );
+    }
+  }
+
+  return uploadInvoicePdfToSharePoint({
+    issueDate,
+    invoiceNumber,
+    amountTotalCents,
+    ownerInitials,
+    id,
+    buffer,
+  });
 }
 
 // ─── Graph primitives ───────────────────────────────────────────────
@@ -283,8 +601,8 @@ async function uploadSmallFile(
 ): Promise<DriveItem> {
   const token = await getAppToken();
   // ?@microsoft.graph.conflictBehavior=rename guarantees a `-1`/`-2`
-  // suffix on collision, protecting against silent overwrites when
-  // (date + vendor + amount + person + shortId) happen to match.
+  // suffix on collision, protecting against silent overwrites in the
+  // (vanishingly unlikely) case that two uids collide in one folder.
   const url =
     `https://graph.microsoft.com/v1.0/drives/${driveId}` +
     `/root:/${encodePath(filePath)}:/content` +
@@ -319,6 +637,75 @@ async function uploadLargeFile(
         name: filename,
       },
     },
+  );
+  const chunkSize = 5 * 1024 * 1024;
+  let offset = 0;
+  let lastResponse: DriveItem | null = null;
+  while (offset < buffer.length) {
+    const end = Math.min(offset + chunkSize, buffer.length);
+    const slice = buffer.subarray(offset, end);
+    const res = await fetch(session.uploadUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Length': String(slice.length),
+        'Content-Range': `bytes ${offset}-${end - 1}/${buffer.length}`,
+      },
+      body: slice as unknown as BodyInit,
+    });
+    if (res.status === 202 || res.status === 201 || res.status === 200) {
+      if (end === buffer.length) {
+        lastResponse = (await res.json()) as DriveItem;
+      }
+    } else {
+      const text = await res.text();
+      throw new GraphError(res.status, text);
+    }
+    offset = end;
+  }
+  if (!lastResponse) throw new Error('Upload completed but no DriveItem returned');
+  return lastResponse;
+}
+
+/**
+ * Upload a small file into a folder addressed by its DriveItem id (used
+ * for the project admin-folder path, TASK-068b, where we resolved the
+ * folder via /shares rather than a root-relative path).
+ */
+async function uploadSmallFileToItem(
+  driveId: string,
+  folderItemId: string,
+  filename: string,
+  buffer: Buffer,
+  contentType: string,
+): Promise<DriveItem> {
+  const token = await getAppToken();
+  const url =
+    `https://graph.microsoft.com/v1.0/drives/${driveId}` +
+    `/items/${folderItemId}:/${encodeURIComponent(filename)}:/content` +
+    `?@microsoft.graph.conflictBehavior=rename`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType },
+    body: buffer as unknown as BodyInit,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new GraphError(res.status, text);
+  }
+  return (await res.json()) as DriveItem;
+}
+
+/** Chunked upload session into a folder addressed by its DriveItem id. */
+async function uploadLargeFileToItem(
+  driveId: string,
+  folderItemId: string,
+  filename: string,
+  buffer: Buffer,
+): Promise<DriveItem> {
+  const session = await graph<{ uploadUrl: string }>(
+    'POST',
+    `/drives/${driveId}/items/${folderItemId}:/${encodeURIComponent(filename)}:/createUploadSession`,
+    { item: { '@microsoft.graph.conflictBehavior': 'rename', name: filename } },
   );
   const chunkSize = 5 * 1024 * 1024;
   let offset = 0;

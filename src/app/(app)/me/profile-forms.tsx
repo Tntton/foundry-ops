@@ -131,7 +131,11 @@ export function BankDetailsForm({
               className="font-mono uppercase"
             />
           </Field>
-          <Field label="Local account number" error={errs['bankAcc']}>
+          <Field
+            label="Local account number"
+            hint="For countries without IBAN — e.g. NZ 00-0000-0000000-00"
+            error={errs['bankAcc']}
+          >
             <Input
               name="bankAcc"
               defaultValue={defaults.bankAcc ?? ''}

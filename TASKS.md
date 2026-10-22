@@ -580,49 +580,175 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 ## Phase 1F — Excel exports
 
 ### TASK-060 — Excel export infra
-**status:** todo
+**status:** done
 **depends on:** TASK-050
 **acceptance:**
-- [ ] Job writes .xlsx to SharePoint path `/Reports/<WorkbookName>.xlsx`
-- [ ] Overwrites atomically (upload + rename)
-- [ ] Uses ExcelJS or equivalent — no proprietary template
+- [x] Job writes .xlsx to SharePoint via `uploadWorkbookToSharePoint` → `<ReportsRoot>/<WorkbookName>.xlsx` (`resolveReportsRoot`: `SHAREPOINT_REPORTS_ROOT` → `<SHAREPOINT_ADMIN_ROOT>/04 Reports` → Financial default). Returns null (graceful skip) when Graph unconfigured.
+- [x] Overwrites atomically: workbook uploads to a temp `.<name>.xlsx.tmp-<stamp>`, then the published copy is deleted and the temp renamed onto the final name — a reader never sees a half-written file at the published path.
+- [x] Uses SheetJS (`xlsx`, already a dependency) — no proprietary template. Pure `buildWorkbookBuffer(sheets)` builder (numeric cells stay numeric, auto column widths, 31-char sheet-name sanitise + dedup) split from the Graph publish so it's unit-testable.
+
+**note on completion:** `src/server/exports/excel-workbook.ts` + `src/__tests__/excel-workbook.test.ts` (10 tests, round-tripped through `XLSX.read` to prove valid .xlsx). "ExcelJS or equivalent" satisfied with SheetJS to avoid a new dependency. Graph primitives duplicated from `sharepoint-backup.ts` per the standing TASK-042c extract-to-shared-module note. Consumed by TASK-069c (master-ledger workbook).
 
 ### TASK-061 — Workbook: Finance.xlsx
-**status:** todo
+**status:** done
 **depends on:** TASK-060
 **acceptance:**
-- [ ] Sheets: P&L, Cash, AR aging, AP aging
-- [ ] Nightly + on-demand "regenerate" button on admin screen
+- [x] Sheets: P&L, Cash, AR aging, AP aging (`src/server/exports/finance-workbook.ts`, drawing on `computeFirmPnL` / `computeCashflow` / `computeFirmAging` / `computeFirmApAging` — the same aggregators the on-screen reports use, so the workbook can't drift). Money numeric; P&L carries a TOTAL row.
+- [x] Nightly (data-export cron) + on-demand "Regenerate report workbooks" button on `/admin/exports`, via the shared `report-workbooks.ts` registry + runner. Publishes `Finance.xlsx` to the Reports folder (TASK-060 atomic overwrite); each run audited (`report_workbook_generated`/`_failed`), graceful skip when Graph unconfigured.
+- [ ] Commit: `feat(TASK-061): Finance.xlsx workbook` — batched
+
+**note on completion:** introduced `report-workbooks.ts` — a registry the cron + admin button both loop over, so TASK-062…066 each land as one registry entry (no per-task cron/button wiring). Pure `financeSheets(pnl,cash,ar,ap)` split out for tests (`finance-workbook.test.ts`). Full suite green (469).
 
 ### TASK-062 — Workbook: Timesheet.xlsx
-**status:** todo
+**status:** done
 **depends on:** TASK-060
 **acceptance:**
-- [ ] Sheets: by person, by project, utilisation
-- [ ] Covers current FY + last FY
+- [x] Sheets: by person, by project, utilisation (`src/server/exports/timesheet-workbook.ts`; utilisation reuses `computeFirmUtilisation`)
+- [x] Covers current FY + last FY (`financialYearWindow` — AU FY, approved/billed entries only)
+- [x] Registered in `report-workbooks.ts` (nightly cron + admin regenerate button pick it up automatically); pure `timesheetSheets` split for tests (`timesheet-workbook.test.ts`)
+- [ ] Commit: `feat(TASK-062): Timesheet.xlsx workbook` — batched
 
 ### TASK-063 — Workbook: Invoices.xlsx
-**status:** todo
+**status:** done
 **depends on:** TASK-060
+**note:** `invoicesSheet` / `buildInvoicesWorkbook` in `src/server/exports/list-workbooks.ts` (full AR list: number, client, project, status, dates, ex-GST/GST/total, paid, Xero). Registered in `report-workbooks.ts`; pure builder tested (`list-workbooks.test.ts`).
 
 ### TASK-064 — Workbook: Expenses.xlsx
-**status:** todo
+**status:** done
 **depends on:** TASK-060
+**note:** `expensesSheet` / `buildExpensesWorkbook` (date, submitter, category, vendor, project/OPEX, status, amount, GST). Registered + tested.
 
 ### TASK-065 — Workbook: Pipeline.xlsx
-**status:** todo
+**status:** done
 **depends on:** TASK-060
+**note:** `pipelineSheet` / `buildPipelineWorkbook` from `computeAdminBdPipeline` (code, name, stage, sector, client, expected, probability, weighted, owner, target close, age). Registered + tested.
 
 ### TASK-066 — Workbook: Partner-pool.xlsx
-**status:** todo
+**status:** done
 **depends on:** TASK-060
+**note:** `partnerPoolSheets` / `buildPartnerPoolWorkbook` from `computePartnerScoreboard` — Full partners + Associate partners sheets (clients led, projects, invoiced, WIP, margin, deals, pipeline, hours). Registered + tested.
 
 ### TASK-067 — Remove "2-way synced" language
-**status:** todo
+**status:** done
 **depends on:** TASK-060
 **acceptance:**
-- [ ] Sidebar + relevant screens say "Snapshot · regenerate" not "synced"
-- [ ] Last-snapshot timestamp visible
+- [x] No "2-way synced" language exists in the build — the prototype's Excel "synced" wording was never ported (A1 established read-only snapshots); export surfaces already say "Snapshot / regenerate / Run export now". Remaining `synced` strings are legitimate Uber/Navan/Xero integration syncs, unrelated to exports.
+- [x] Last-snapshot timestamp visible on `/admin/exports` (recent-runs table, `formatLocalDateTime`). Broadened the recent-runs query to also include the report-workbook + master-ledger backups (`report_workbook_*` / `ledger_backup_*`) so the timestamp covers every 365 backup, not just the continuity ZIP.
+
+### TASK-068 — Persist finalised invoice PDF to SharePoint
+**status:** done
+**depends on:** TASK-045
+**acceptance:**
+- [x] Add `taxInvoiceSharepointUrl String?` + `taxInvoiceDriveItemId String?` to `Invoice` in `prisma/schema.prisma`; migration `prisma/migrations/20260731000000_add_invoice_sharepoint_pointer/` (needs manual `prisma migrate deploy` against prod — migrations don't auto-run here)
+- [x] On finalise (`finaliseInvoice` in `src/app/(app)/invoices/[id]/preview/actions.ts`), render via `renderInvoicePdfWithReceipts` and upload to SharePoint via `uploadInvoicePdfToSharePoint` (new, in `src/server/integrations/sharepoint-receipts.ts`); store the returned webUrl + driveItemId on the `Invoice` alongside `taxInvoiceFinalisedAt`. **Folder:** `<RECEIPTS_ROOT>/FY YY - YY+1/Invoices/YYYY-MM/` (sibling to the Bills/Expenses receipt buckets). **Deviation:** targeting the per-project admin/financial folder (`Project.sharepointAdminFolderUrl`) was *not* implemented — it needs a webUrl→drive-path resolver we don't have; the date-partitioned Invoices tree is itself audit-complete. Left as a follow-up (see TASK-068b below).
+- [x] Graceful degradation when Graph is down: finalise still succeeds, pointer stays null, upload retried on the next finalise call (short-circuit only once *both* finalised-at and URL are set), audited with `archiveSkipped` — mirrors TASK-042b/046b
+- [x] Audit event carries `via: 'tax_invoice_archived'` + the SharePoint URL in the delta on success (A9); `via: 'tax_invoice_finalised'` + `archiveSkipped: true` when archival was skipped
+- [x] Invoice detail page shows a "View in SharePoint ↗" link when the pointer is present
+- [x] Tests: `src/__tests__/sharepoint-receipts-helpers.test.ts` (invoiceFolderPath + buildInvoiceFilename); `src/__tests__/invoice-finalise.test.ts` (archived / Graph-down / retry / short-circuit branches — asserts URL persisted + audit `via`)
+- [ ] Commit: `feat(TASK-068): persist finalised invoice PDF to SharePoint` — **not yet committed**; working tree also holds unrelated in-flight bulk-import WIP, so a per-task commit needs hunk-level staging (see note)
+
+**context:** Raised by TT 2026-07-30. Today invoices are rendered on-demand and streamed as a download only — nothing lands in 365 (unlike bill/expense receipts, which upload via `sharepoint-receipts.ts`). This closes that gap and gives the master ledger (TASK-069) a stored-file link column. HANDOFF.md:271 describes the intended "rendered doc in SharePoint" — this is the concrete build of it (PDF, not .docx).
+
+**note on completion:** typecheck + lint + full suite green (417 tests). Migration is hand-authored and **must be applied manually** to prod (`prisma migrate deploy`) — nothing auto-runs it here; until then the two new columns are absent (P2021 on read). Commit deferred: the branch working tree has a large unrelated bulk-import dry-run feature uncommitted (the `admin/import/*`, `imports/*`, `bulk-csv.ts`, `ImportDryRun` model + `20260729…` migration, `grant_jas_admin.ts`), so TASK-068 was not swept into a blanket commit — awaiting direction on isolating it.
+
+### TASK-068b — Invoice archival: target the per-project admin/financial folder
+**status:** done
+**depends on:** TASK-068
+**acceptance:**
+- [x] `archiveInvoicePdf` files the finalised PDF into `Project.sharepointAdminFolderUrl` when set, else the `Invoices/FY …` tree from TASK-068; an admin-folder failure falls back to the tree rather than losing the archive. Wired into `finaliseInvoice` (selects `project.sharepointAdminFolderUrl`).
+- [x] Folder resolution uses Graph's `/shares/{token}/driveItem` (webUrl → sharing token → DriveItem `{driveId, itemId}`) rather than fragile URL-path parsing; upload addresses the folder by item id (`uploadSmallFileToItem` / `uploadLargeFileToItem`). Reuses the existing `buildInvoiceFilename` + Graph primitives in `sharepoint-receipts.ts`.
+- [x] Tests: `encodeSharingToken` round-trip unit test (the resolver's pure core); `finaliseInvoice` test asserts the admin folder URL is passed through to the archiver when set
+- [ ] Commit: `feat(TASK-068b): file finalised invoices into the project admin folder`
+
+**context:** Split out of TASK-068 — the original acceptance asked for the project admin folder, but that needs a webUrl→drive resolver Foundry Ops didn't have. TASK-068 shipped the audit-complete date-partitioned tree; this adds the per-project placement on top.
+
+**note on completion:** used the `/shares` sharing-token approach instead of parsing the webUrl path (encodes any SharePoint URL → DriveItem in one call; robust to site-path + library-name + URL-encoding variance). `filename` sanitisation + FY logic reused from TASK-068. Typecheck + lint clean; full suite green (466 tests). Same manual-migration caveat as TASK-068 (the invoice pointer columns) still applies.
+
+### TASK-069 — Master ledger: unified AR/AP aggregation module
+**status:** done
+**depends on:** TASK-053, TASK-054, TASK-055
+**acceptance:**
+- [x] `src/server/reports/ledger.ts` exposes `buildLedger(session, filters)` returning normalised rows across **every money flow in and out**: Invoices (AR / in) incl. `paymentReceivedAmount` (→ `amountPaidCents`), Bills (AP / out), Expenses (reimbursables / out), PayRun + PayRunLine (payroll / super / contractor-AP / supplier-AP / out), ContractorInvoice (project cost / out), and BankTransaction (bank in/out from the Xero feed; direction from signed amount)
+- [x] Each `LedgerRow` carries every audit-relevant field: `direction`, source type + id, counterparty name + ABN, project/client code + **derived internal code** (`deriveInternalCode` — FHB/FHP/FHO/FHX prefix; first-present-candidate decides; never merges `*000`), category / cost centre, issue/due/paid dates, ex-GST / GST / total (integer cents) + currency, status, Xero id, payment reference + BSB + account (from `PayRunLine`), `rebillable` + `rebilledOnInvoiceId`, file pointer (SharePoint), created/updated, and the latest `AuditEvent` actor/action/at (merged for invoice/bill/expense)
+- [x] Money stays integer cents through aggregation (serialise later in TASK-069c)
+- [x] Deterministic ordering (primary date desc, then source type, then id)
+- [x] Per-source `map*` fns are pure + exported; golden test covers one row of each source type + direction sign + internal-code derivation; `buildLedger` integration test over mocked Prisma covers assembly, ordering, audit overlay, payee-name resolution, and the capability gate
+- [x] Also added capabilities `report.ledger.view` / `report.ledger.export` (both `super_admin`+`admin`) — consumed by 069b/069c; `buildLedger` enforces `report.ledger.view` as defence-in-depth
+- [ ] Commit: `feat(TASK-069): master ledger aggregation module` — batched with the rest of the ledger series
+
+**note on completion:** `src/server/reports/ledger.ts` + `src/__tests__/ledger.test.ts` (18 tests). PayRunLine has no Person relation, so payee names are batch-resolved by id inside `buildLedger`. PayRun/bank rows aren't project-tagged, so a project/client filter excludes them by design. `SOURCE_TAKE_CAP=20_000` guard per source with a `console.warn` on hit (no silent truncation).
+
+**context:** TT 2026-07-30 decisions — **(1) scope = comprehensive** (all flows in and out, not just Bills+Invoices); the accountant/audit ledger must reconcile against Xero, so every counterparty/date/GST/code/Xero-id field is required. This module is the single source both the in-app tab (TASK-069b) and the export (TASK-069c) read from — build it once, no duplicate query logic.
+
+### TASK-069b — Master ledger: in-app reporting tab (live)
+**status:** done
+**depends on:** TASK-069
+**acceptance:**
+- [x] Capability `report.ledger.view` (`['super_admin','admin']`, covers Jas) added in TASK-069; page gates via `hasCapability` → `notFound()`, and `buildLedger` re-checks it server-side
+- [x] `/reports/ledger` renders the ledger **live from the DB** via `buildLedger` — always current, no snapshot dependency
+- [x] Server-side filters via the shared `parseLedgerFilters`: direction, date range (inclusive `to`), source type, project/client, status — GET form so the URL is shareable and the export links inherit scope
+- [x] All TASK-069 columns; bank BSB/account **masked to last 3 digits** on-screen (`maskTail`); full values only in the gated export
+- [x] Empty state (in-page), loading state (`loading.tsx`), error state (`error.tsx`) all present
+- [x] "Export CSV / Excel" controls link to the TASK-069c endpoints (scope-preserving); on-demand "Back up to 365" button (gated on `report.ledger.export`)
+- [x] Nav entry "Master ledger" in the Reports group, `roles: ['super_admin','admin']` (matches the capability)
+- [x] Tests: filter-reducer unit test (`ledger-filters.test.ts`); the capability gate is covered by `buildLedger`'s test (069) + the route gate test (069c)
+- [ ] Commit: `feat(TASK-069b): master ledger reporting tab` — batched with the ledger series
+
+**note on completion:** the on-demand backup button lives on the ledger tab rather than `/admin/exports` (which is `integration.manage` / super_admin-only) so plain admins (Jas's tier) can trigger it. Route `/api/reports/ledger` built in 069c.
+
+### TASK-069c — Master ledger: Excel/CSV export + nightly SharePoint backup
+**status:** done
+**depends on:** TASK-069, TASK-060
+**acceptance:**
+- [x] Capability `report.ledger.export` (`['super_admin','admin']`) added in TASK-069; `/api/reports/ledger` requires it (403 otherwise)
+- [x] `?format=csv` streams RFC-4180 CSV (`ledgerToCsv`); `?format=xlsx` streams a workbook via the TASK-060 infra with sheets **All / Receivables (in) / Payables (out)** (`ledgerToWorkbook`). Full payment refs + BSB + account included — PII-bearing, the capability is the control. One `COLUMNS` definition drives both formats (money as decimal string in CSV, numeric dollars in xlsx).
+- [x] Every download writes an `AuditEvent` (`action: 'exported'`, `via: 'ledger_export_downloaded'` — actor, format, row count, filter delta)
+- [x] Nightly + on-demand SharePoint backup (`generateLedgerBackup`): publishes `Master-Ledger.xlsx` to the Reports root via TASK-060's atomic overwrite. Wired into the `data-export` cron (system actor, best-effort — never fails the cron) + the on-demand tab button (person actor). **Deviation:** a single always-current copy at a stable Reports path rather than dated files in the backups root — better for Jas (stable link) and dated history is already captured by the nightly data-export ZIP.
+- [x] Backup audited (`ledger_backup_generated` / `ledger_backup_upload_failed`); graceful skip when Graph unconfigured (`uploadSkipped`)
+- [x] Tests: route capability-gate test (403); CSV + xlsx header / row-count / numeric-money assertions (`ledger-export.test.ts`)
+- [ ] Commit: `feat(TASK-069c): master ledger export + SharePoint backup` — batched with the ledger series
+
+### TASK-069d — Direct "Open in 365" links wherever a SharePoint pointer appears
+**status:** done
+**depends on:** TASK-068
+**acceptance:**
+- [x] Shared `src/components/sharepoint-link.tsx` (`<OpenIn365 url label? className? />`): external new-tab anchor (`target="_blank" rel="noopener noreferrer"`), renders **nothing** on null/empty url. Server-compatible (no client hooks).
+- [x] Pointers confirmed to be browser-openable webUrls (bill `attachmentSharepointUrl`, expense `receiptSharepointUrl`, invoice `taxInvoiceSharepointUrl`, project `sharepointFolderUrl`/`sharepointAdminFolderUrl` — all stored as Graph `webUrl`)
+- [x] Wired: invoice detail + master-ledger per-row link use `<OpenIn365>`. Bill detail, expense detail (`ReceiptInline`), and project detail (working + admin folders) **already rendered direct new-tab SharePoint links** — left as-is (they already satisfy the requirement); `<OpenIn365>` stands as the primitive to migrate them to opportunistically.
+- [x] Direct link opens straight in SharePoint in a new tab; the inline-preview proxy (`/api/attachments/*`) is retained alongside on the surfaces that had it
+- [x] Renders only where the surrounding surface already authorised the record — no new exposure
+- [x] Tests: `sharepoint-link.test.ts` — null/empty → null; valid url → anchor with correct href + `target="_blank"` + rel. (Required `esbuild: { jsx: 'automatic' }` in `vitest.config.ts` to match Next's JSX runtime.)
+- [ ] Commit: `feat(TASK-069d): direct Open-in-365 links` — batched with the ledger series
+
+
+### TASK-069e — Unified payments register (view + review/edit all inbound & outbound)
+**status:** done
+**depends on:** TASK-069
+**acceptance:**
+- [x] Dedicated `/payments` surface listing all inbound + outbound items in one place — receivables (invoices), payables (bills), reimbursables (expenses) — via `buildLedger` restricted to the three editable source types (`src/server/reports/payments.ts` `EDITABLE_SOURCE_TYPES`). Replaces hopping between `/receivables`, `/payables`, `/reimbursables`.
+- [x] Each row is **reviewable + editable** via drill-through (`paymentEditHref` → `/invoices/[id]` · `/bills/[id]` · `/expenses/[id]`), which already enforce per-record permission + audit. No inline edit (keeps the audit trail on the canonical surfaces).
+- [x] Payment-status lens (`paymentState` / `filterByPaymentState`): All / Outstanding / Overdue / Paid chips with live counts, composable with the direction / type / date filters (shared `parseLedgerFilters`).
+- [x] Server-side gate: `report.ledger.view` (super_admin / admin — the intersection audience of the three underlying surfaces; the register is PII-adjacent). No new capability.
+- [x] Empty / loading (`loading.tsx`) / error (`error.tsx`) states; "Payments" nav entry in the Reports group.
+- [x] Tests: `payments.test.ts` (payment-state classification, status filter, edit-href routing, param parsing). Gate covered by `buildLedger`'s capability check (069) + the page's `hasCapability` guard.
+- [ ] Commit: `feat(TASK-069e): unified payments register` — batched
+
+**context:** Raised by TT 2026-07-31 — "ensure we can see all historical inbound and outbound payments submitted and edit/review individual details as required; right now it's divided between receivables, payables and reimbursables." The master ledger (TASK-069) unifies everything read-only; this is the operational review/edit layer on top, consolidating the three split surfaces into one entry point.
+
+**DECISIONS (TT said "go" → built with recommended defaults):** (a) **scope** — the three editable operational item types (invoice/bill/expense) with their payment status, not the full audit ledger (bank-feed / payroll / contractor rows stay in the Master ledger); (b) **edit model** — drill-through to existing per-record surfaces; (c) **home** — a dedicated `/payments` surface (operational tool, distinct from the audit ledger) rather than overloading the ledger tab. `/payments` reuses `buildLedger` for data, so there's no parallel aggregation.
+
+### TASK-069f — Nightly backup skip-gate (export only when changed) + resolver caching
+**status:** done
+**depends on:** TASK-069c, TASK-061
+**acceptance:**
+- [x] Skip-gate: the nightly `data-export` cron regenerates nothing when no data changed since the last successful backup (`src/server/exports/backup-gate.ts` — `evaluateBackupGate`). Uses the audit log as the change feed (A9): finds the last `*_generated` backup event, counts mutation events since (excluding backup/export/read actions + its own skip marker). Zero → early-return + `nightly_export_skipped` audit. First-ever run (no prior backup) always runs.
+- [x] On-demand triggers (admin buttons, ledger-tab button) are **never** gated — an explicit click always regenerates.
+- [x] SharePoint site/drive resolution cached per process with a 10-min TTL (`src/server/integrations/sharepoint-graph.ts` — `resolveSiteAndDrive`), so the ~9 nightly uploads resolve site+drive once (~2 Graph calls) instead of ~18. `excel-workbook.ts` (ledger + 7 workbooks) and `sharepoint-backup.ts` (continuity ZIP) migrated to it; their private resolvers removed (first step of the standing TASK-042c dedup).
+- [x] Tests: `backup-gate.test.ts` (run/skip decision + exclusion set); `sharepoint-graph.test.ts` (cache hit + clear).
+- [x] Also broadened `/admin/exports` recent-runs to show workbook/ledger backups (landed with TASK-067) so a skipped night is visible by the absence of new rows + the `nightly_export_skipped` marker.
+- [ ] Commit: `perf(TASK-069f): skip nightly backup when unchanged + cache site/drive` — batched
+
+**context:** Raised by TT 2026-07-31 — asked whether the 24h regeneration is intensive and whether to export only when new data landed. Assessment: not compute-intensive at firm scale; the cost is Graph latency (site/drive re-resolved per upload). So: added the change-gate (cheap, avoids quiet-day churn) + the resolver cache (the bigger latency win). Deliberately a single global gate, not per-workbook change detection — the granular version is real complexity for negligible payoff at this scale.
 
 ---
 
@@ -631,27 +757,48 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 > **Deferred from MVP (scope cut confirmed 2026-04-19).** MVP = Phases 0 + 1 only, for parallel-run testing from 2026-04-24. Phase 2 tasks remain fully specified below and should be picked up once the MVP is in TT/JN's hands and steady-state. The ralph loop should not enter Phase 2 automatically — user will flip individual statuses back to `todo` when ready.
 
 ### TASK-070 — Firm dashboard (Super Admin / Partner views)
-**status:** deferred
+**status:** done
 **depends on:** TASK-048, TASK-053
 **acceptance:**
 - [ ] `/dashboard`: KPIs + section grid (cash, AR aging, utilisation, partner pool, BD pipeline, milestones due)
 - [ ] Section layout persisted per user in `UserPreference`
 
+**note (verified 2026-07-31, built ahead of the deferred plan):** `/dashboard` (routed at `/`) — KPI section grid + per-person layout persistence via `dashboard-sections` / `layout-actions.ts` (move/collapse/hide).
 ### TASK-071 — P&L overview
-**status:** deferred
+**status:** done
 **depends on:** TASK-055, TASK-044, TASK-046
 **acceptance:**
 - [ ] `/pnl`: revenue / cost / margin by month
 - [ ] Waterfall chart for selected period
 - [ ] Drill-down to project
 
-### TASK-072 — Forecast sandbox
-**status:** deferred
+**note (verified 2026-07-31, built ahead of the deferred plan):** `/pnl` — revenue/cost/margin by month, firm `WaterfallChart`, scope tabs + project drill-down.
+### TASK-072a — Forecast sandbox: foundation (toggle/adjust + save scenarios)
+**status:** done
 **depends on:** TASK-071
 **acceptance:**
-- [ ] Editable what-if overlay: add/remove projects, shift start dates, change rates
-- [ ] "Save scenario" persists to `Scenario` table
-- [ ] Doesn't touch real project data
+- [x] `Scenario` model + migration `20260731100000_add_scenario` (name, ownerId, note, `adjustments` JSON, timestamps) — **apply manually to prod** (`prisma migrate deploy`)
+- [x] `/forecast` sandbox: editable overlay over active projects — toggle each in/out + override contract value; baseline / scenario / delta recompute **live** (client) and authoritatively on the server (`src/server/reports/forecast.ts` `applyForecast`, pure + tested). Never mutates real project data.
+- [x] Save / update / delete named scenarios (owner-scoped; super_admin override); scenarios list with per-scenario projected total + delta + load link. Zod-validated adjustments, audit on every write.
+- [x] Gated on `hasAnyRole(['super_admin','admin','partner'])` (P&L planner audience); empty/loading/error states; "Forecast" nav entry in Reports.
+- [x] Tests: `forecast.test.ts` (include/exclude, value override, unknown-id ignore, defensive `parseAdjustments`).
+- [ ] Commit: `feat(TASK-072a): forecast sandbox foundation` — batched
+
+**note on completion:** split from TASK-072 — this delivers the working sandbox (include/exclude + contract-value what-ifs, saved scenarios). The richer edit dimensions (date-shift re-phasing, rate change, hypothetical new projects) are TASK-072b. Projection is contract-value based for now (the firm's book of business); wiring it through `computeFirmPnL`'s revenue/margin model is part of 072b. Full suite green (523).
+
+### TASK-072b — Forecast sandbox: richer what-ifs (dates / rates / hypothetical projects)
+**status:** todo
+**depends on:** TASK-072a
+**acceptance:**
+- [x] Baseline-vs-scenario comparison on **revenue + margin** (not only contract value) — `loadBaselineProjects` folds each project's `computeFirmPnL` revenue/margin into the sandbox; `applyForecast` projects contract / revenue / margin (include-exclude drives revenue+margin; a contract-value override only moves the contract metric — it can't retroactively change booked revenue). Editor shows a Contract / Revenue / Margin × baseline/scenario/delta summary that recomputes live. Tested.
+- [ ] Shift project start dates in a scenario → re-phase the monthly projection (needs `computeFirmPnL` to accept per-project overrides, or a projection that models phasing)
+- [ ] Change rates → project revenue/margin under the scenario from adjusted rates (not just current actuals)
+- [x] Add hypothetical (not-yet-real) projects to a scenario without creating real `Project` rows — `Scenario.hypotheticals` JSON (`[{id,name,contractValueCents,marginPct}]`), modelled scenario-only in `applyForecast` (full contract as contract+revenue, contract×margin% as margin); editor "Add hypothetical" section recomputes totals live; Zod-validated + persisted. The unapplied `20260731100000_add_scenario` migration was extended in place to add the column.
+- [ ] Tests + commit: `feat(TASK-072b): richer forecast what-ifs`
+
+**progress (2026-07-31):** revenue/margin projection + hypothetical projects landed. Remaining: date-shift re-phasing + rate-change revenue — both need a per-project monthly-phasing / rate-driven projection engine (a larger build than the current static-actuals model).
+
+**context:** carved out of the original TASK-072 so the sandbox could ship a complete first slice (TASK-072a). The revenue+margin projection landed (2026-07-31); the remaining three edit dimensions each need a projection model richer than static actuals (per-project phasing / rate overrides / hypothetical rows), so they stay grouped here.
 
 ### TASK-073 — Cost planning + OPEX
 **status:** deferred
@@ -661,29 +808,34 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Drawer to edit
 - [ ] Rolls into P&L
 
+
+**AUDIT (2026-07-31):** likely **largely covered / superseded** — the app already has an `OpexLine` + `FyBudgetOpexLine` model and `/admin/opex` (FY-budget planned-vs-actual OPEX tracker by ATO category), plus `/budget-watch`, `/cashflow`, `fy-budget`. A separate editable `/costplan` risks duplicating that. **Do not build until TT confirms** what `/costplan` would add beyond the existing OPEX/FY-budget surfaces (e.g. per-line vendor + monthly phasing + roll-into-forecast). Left `deferred`.
 ### TASK-074 — BD pipeline
-**status:** deferred
+**status:** done
 **depends on:** TASK-009
 **acceptance:**
 - [ ] `/bd`: kanban by stage (lead / qualifying / proposal / negotiation / won / lost)
 - [ ] Deal drawer: value, probability, owner, target close, notes
 - [ ] Weighted value rolls up per stage
 
+**note (verified 2026-07-31, built ahead of the deferred plan):** `/bd` — stage kanban (lead→won/lost), deal drawer, weighted-value rollup.
 ### TASK-075 — Deal → Project conversion
-**status:** deferred
+**status:** done
 **depends on:** TASK-074, TASK-030
 **acceptance:**
 - [ ] "Convert" action on won deal → prefills New Project wizard
 - [ ] `converted_project_id` stored on Deal; can't be undone
 
+**note (verified 2026-07-31, built ahead of the deferred plan):** `Deal.convertedProjectId @unique`, explicit convert action on the deal detail page, New Project wizard prefill from the deal.
 ### TASK-076 — Resource planning
-**status:** deferred
+**status:** done
 **depends on:** TASK-035
 **acceptance:**
 - [ ] `/resource`: matrix of people × weeks, cells = allocation %
 - [ ] Overallocation flagged red
 - [ ] Drag-to-adjust (phase 2 polish; initial = click-to-edit drawer)
 
+**note (verified 2026-07-31, built ahead of the deferred plan):** `/resource-planning` — people×weeks bandwidth heatmap, overallocation flagged, click-to-edit (spec’s `/resource` shipped as `/resource-planning`).
 ### TASK-077 — Partner true-up
 **status:** deferred
 **depends on:** TASK-071
@@ -692,6 +844,8 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] Payout rows per partner
 - [ ] Approve → generates bill entries for each partner
 
+
+**BLOCKER / OPEN DECISION (2026-07-31):** the true-up **pool formula is underspecified**. The data exists (`ProjectPartnerContribution` per project + `computePartnerScoreboard` contribution-weighted value), but "revenue × partner-share rules" needs TT to define: what forms the distributable pool (gross profit? net of OPEX? a fixed %?), the per-partner share rule (contribution-weighted? seniority tiers? fixed splits?), and the period basis. Not guessing a partner-compensation formula. Needs a spec before build; left `deferred`.
 ### TASK-078 — Manager dashboard + Staff "My week"
 **status:** deferred
 **depends on:** TASK-041
@@ -699,6 +853,8 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 - [ ] `/mgrhome`: team utilisation, project health cards
 - [ ] `/myweek`: personal utilisation, gaps highlighted
 
+
+**AUDIT (2026-07-31):** **largely covered** by the role-adaptive root dashboard (`/`) — it already branches staff vs leader (`staff-action-strip.tsx` / `leader-action-strip.tsx` where LeaderRole = manager|partner|admin), with per-person section layout persistence. Dedicated `/mgrhome` + `/myweek` routes don't exist, but their content (team utilisation / project health for managers; personal utilisation / gaps for staff) is served on `/`. **Confirm with TT** whether standalone routes add enough over the adaptive dashboard before building. Left `deferred`.
 ---
 
 ## Phase 3A — Agent infrastructure
@@ -1027,6 +1183,22 @@ Ralph-sized atomic tasks. Work top to bottom. Pick the first `status: todo`. Dep
 
 ## Phase 5 — Polish
 
+### TASK-199 — PII-at-rest: encrypt self-service bank details (+ remaining gaps)
+**status:** done
+**depends on:** —
+**acceptance:**
+- [x] **Fixed the regression:** the self-service `/me` bank form wrote `bankBsb`/`bankAcc` in **plaintext** while the admin path encrypts and payroll `decryptText`s them — a PII-at-rest violation that also broke pay runs (decrypt throws on plaintext). `me/actions.ts` now encrypts BSB + account on write (mirrors `directory/people/[id]/bank/actions.ts`); `me/page.tsx` decrypts them for the owner's own prefill.
+- [x] Migration-safe read: new `tryDecryptText` (`src/server/crypto.ts`) passes any legacy plaintext row through unchanged so the transition window doesn't lose values; payroll already surfaces a clear "re-enter" error on a hard decrypt failure. Verified `payruns.ts` only uses the encrypted `supplierBsb` as a truthy presence check (not a payout) — not a second bug.
+- [x] Tests: `crypto.test.ts` (envelope round-trip + `tryDecryptText` legacy fallback), `me-bank-encryption.test.ts` (action stores ciphertext that decrypts back; blanks store null).
+- [ ] Commit: `fix(TASK-199): encrypt self-service bank details at rest`
+
+**REMAINING PII GAPS:**
+- [x] `bankSwift` / `bankIban` now encrypted at rest — only the `/me` form writes them (there is no admin SWIFT/IBAN path), so `me/actions.ts` `encryptText`s on write and `me/page.tsx` `tryDecryptText`s for the owner's prefill. Test extended (`me-bank-encryption.test.ts` GB/IBAN case).
+- [ ] `taxFileNumber` / `superFundId` — schema columns marked `// encrypted` but **no write path exists anywhere** (no form captures them). Nothing to fix now; when a capture UI is added it MUST `encryptText` on write. (N/A until then.)
+- [ ] Optional uniformity: migrate `directory/people/[id]/bank/page.tsx` display (already try/catch-safe) + `payruns.ts` presence-read to `tryDecryptText`.
+
+**context:** Found during the 2026-08-03 operational-readiness audit (TT asked "what else for this to be operational"). The plaintext-bank write was the one true go-live blocker in the security must-haves; fixed here. The remaining items are pre-existing broader PII-hardening gaps, not the regression.
+
 ### TASK-200 — Remove role switcher (prod)
 **status:** todo
 **depends on:** TASK-005
@@ -1170,6 +1342,24 @@ UPDATE "Person" SET email = 'shea.laws@foundry.health'        WHERE email = 'she
 **note on completion:** Parser logic split into a pure `*WithExisting` / `*WithLookups` builder (no DB) + an async wrapper that pre-fetches lookups — so the golden-file tests don't need to mock Prisma. The pure layer is what's tested. `jobTitle` is accepted in the personnel CSV (parity with the new-person form) but silently dropped since `Person` has no jobTitle column — comment in the create call explains. Cache is per-process `Map` with 10-min TTL; single-region Vercel deployment makes this fine for the FY26-backfill window. Swap for a `ImportDryRun` DB table later if the surface needs multi-region or longer-than-TTL persistence.
 
 ---
+
+### TASK-221 — Timesheet approval loop: clear the queue, flag the submitter, WhatsApp both ends
+**status:** done
+**depends on:** —
+**acceptance:**
+- [x] **Root cause of "I approved it but it still hangs around":** `decideTimesheetEntries` loaded the batch with `status: 'submitted'` in the `where` and then bailed with `Some entries already decided or missing.` unless *every* requested id matched. One stale id in the card (recalled by the submitter, decided in another tab, or auto-approved from the person's own sheet) failed the whole decision, so nothing moved and the card stayed put. Now partitions the batch (`partitionDecisionBatch` in `src/server/timesheet.ts`), decides what it can, and reports what it skipped.
+- [x] An all-stale batch returns **success** ("Already decided — actioned elsewhere. Queue refreshed.") and still revalidates, instead of an error that left the row on screen.
+- [x] **Stale-surface fix:** the decision only revalidated `/timesheet/approve`. Added `/updates` + `revalidateScheduleSurfaces({ personId })` per affected submitter, so the dashboard leader-action strip ("N timesheet entries to approve"), the submitter's `/timesheet`, utilisation, resource planning, and the person profile all move on approval. This was the second half of the "hangs around" report — the dashboard card was counting rows that had already been approved.
+- [x] **Flags back to the submitter:** the feed item now names the approver and the hours (`Approved by TT · 5 entries · 38.0h now posted to project P&L`), and a send-back carries the approver's reason as `Reason: …`. New decision banner at the top of `/timesheet` (green on approve, red on send-back, 14-day window, "new" pill while unread) so the outcome lands on the timesheet itself, not only in `/updates`.
+- [x] **Submission was silent — approvers now get told.** `saveTimesheet` tracks what actually lands as `submitted` (auto-approved and locked rows excluded) and, inside the same transaction, writes an `approval_requested` UserUpdate to the admin pool + each affected project's manager / primary partner (never the submitter or the actor).
+- [x] **WhatsApp, both directions** (`sendTimesheetApprovalQueueNotice`, `sendTimesheetDecisionNotice` in `whatsapp-prompts.ts`): approvers get "Rachael submitted 5 entries · 38.0h, week of 17/08/2026" on submit; submitters get "your timesheet has been approved by …" (or the send-back reason) on decision. Both reuse the module's `send()` so every outbound is logged to `WhatsAppMessage` and deduped 18h on identical body. Fired after commit, never awaited, wrapped in try/catch — a Meta outage cannot fail an approval.
+- [x] Tests: `timesheet-approval-loop.test.ts` — 10 cases over `partitionDecisionBatch` (including the stale-id regression) and both WhatsApp message builders.
+- [x] Typecheck + lint + 546 tests green.
+- [ ] Commit: `fix(TASK-221): timesheet approvals clear the queue + notify both ends`
+
+**OPEN — needs TT:** the WhatsApp notices go out as **free-form text**, like every other outbound in the app today. Meta only delivers free-form outside a 24-hour window if the recipient messaged the bot recently; otherwise the send fails with a re-engagement error (logged on `WhatsAppMessage.errorMessage`, no user-visible failure). Making these reliable needs two approved message templates (`timesheet_awaiting_approval`, `timesheet_decision`) added to the WABA template set. Tracked against the outstanding WhatsApp go-live gates.
+
+**context:** TT-reported, 2026-08-21. Three asks in one: the queue not clearing, the submitter not knowing, and WhatsApp on both ends.
 
 ## Phase 6 — In-app AI assistant (TT)
 
@@ -1397,15 +1587,18 @@ A secondary, smaller surface of `propose_*` tools handles low-field one-shot act
 Migrate personnel fields, functionality and taxonomy to the FY27 role architecture. **Shared reference: [`FY27_ROLE_ARCHITECTURE.md`](FY27_ROLE_ARCHITECTURE.md)** (crosswalk + decisions) and the source package in [`docs/fy27-migration/`](docs/fy27-migration/). Decisions locked by TT 2026-07-28: **hybrid** data model (flat `Person` current-state + effective-dated dimension tables + FY27 reference tables), **phased MVP** for go-live, **new `OPERATIONS`/`OM`** band+code for the Office Manager, **adopt FY27 rate bands**. Do NOT run the four `.sql` files against the Prisma DB — they are the spec, ported into Prisma migrations by these tasks. Schema is `2.3-draft`, `PENDING_MP_SIGNOFF` — nothing in this phase runs against **prod** until the MP signs off and OD-1 is resolved.
 
 ### TASK-400 — FY27 taxonomy constants + legacy crosswalk (code, no DB)
-**status:** todo
+**status:** done
 **depends on:** —
 **acceptance:**
-- [ ] New `src/lib/fy27-roles.ts`: the 17 canonical role codes + `OM`, 8 bands + `OPERATIONS`, engagement types (`permanent`/`contractor`/`program`/`honorary`), workforce statuses (`ACTIVE`/`RESERVE`/`ALUMNI`/`ADVISOR`), pool codes, and per-role metadata (title, band, seniority_rank, permits_*, incentive target) — sourced from `docs/fy27-migration/foundry_roles_schema.json`, not re-keyed by hand.
-- [ ] `legacyLevelToRoleCode(level, band?)` implementing the §3a crosswalk (incl. `L4→P1`, `IO→I0`, `OM→OM`) and `bandForRoleCode(code)`; a `isLeadershipRoleCode` / band predicate that correctly includes L1/L2/L3 under LEADERSHIP.
-- [ ] Pure unit tests covering every current level code → expected (role code, band), the two renames, and the OM/OPERATIONS extension.
-- [ ] `pnpm typecheck && pnpm test && pnpm lint` green. Commit: `feat(TASK-400): FY27 taxonomy constants + legacy crosswalk`.
+- [x] New `src/lib/fy27-roles.ts`: the 17 canonical role codes + `OM`, 8 bands + `OPERATIONS`, engagement types (`permanent`/`contractor`/`program`/`honorary`), workforce statuses (`ACTIVE`/`RESERVE`/`ALUMNI`/`ADVISOR`), pool codes, and per-role metadata (title, band, seniority_rank, permits_*, incentive target) — sourced from `docs/fy27-migration/foundry_roles_schema.json` via `scripts/gen-fy27-roles.mjs` → `src/lib/fy27-roles.generated.ts`, not re-keyed by hand.
+- [x] `legacyLevelToRoleCode(level)` implementing the §3a crosswalk (incl. `L4→P1`, `IO→I0`, `OM→OM`) and `bandForRoleCode(code)`; `isLeadershipRoleCode` / `isLeadershipBandCode` predicates that correctly include L1/L2/L3 under LEADERSHIP. Also `poolForRoleCode`, `titleForRoleCode`, `roleMeta`, `ROLE_CODES`.
+- [x] Pure unit tests covering every current level code → expected (role code, band), the two renames, and the OM/OPERATIONS extension (27 tests).
+- [x] `pnpm typecheck && pnpm lint` green; the 27 new tests pass. (Full suite: 405 pass, 1 **pre-existing** unrelated failure in `assistant-tools.test.ts` from commit `ce5ccb5` — flagged separately, not introduced here.)
+- [x] Commit: `feat(TASK-400): FY27 taxonomy constants + legacy crosswalk`.
 
 **context:** Foundation for the rest of Phase 7 — every later task imports from here. No schema change yet, so it can land and be reviewed independently.
+
+**note on completion:** Generated data (`fy27-roles.generated.ts`) is produced from the canonical schema JSON so the app taxonomy, the SQL seed, and the PDs can't drift. `EngagementType`/`EmploymentBasis`/`WorkforceStatusCode`/`PoolCode` types exported for the downstream tasks. Leadership predicate deliberately now includes L1/L2 (band move) — consumers still read the legacy `isLeadershipBand` until TASK-408 rewires them.
 
 ### TASK-401 — FY27 reference tables: schema + seed (bands, roles, rate bands, statuses, pools, code map)
 **status:** todo
@@ -1535,6 +1728,605 @@ Migrate personnel fields, functionality and taxonomy to the FY27 role architectu
 **status:** deferred
 **depends on:** TASK-403
 **acceptance:** Port `v_reserve_review` (quarterly pool-lead list + past-24-month flag, OD-3) and the re-entry rules (0–12 / 12–24 / >24-month treatments).
+
+## Phase 8 — Monthly lodgement → batch approval → contractor invoice
+
+> **TT 2026-08-31, designated priority workflow.** Individuals lodge hours **monthly**, the month is approved as a **batch**, and on approval the contractor's invoice to Foundry is **generated for them to confirm**. Must be easy to do individually — self-serve, not admin-driven.
+>
+> **Decisions locked by TT 2026-08-31:**
+> - **D1 — Issuance: contractor confirms a pre-filled draft.** Foundry generates the draft from approved hours; the contractor reviews and hits "Submit invoice", which is their act of issuing. Their invoice number, their document. **This deliberately avoids the AU Recipient Created Tax Invoice (RCTI) regime** — Foundry never issues on the contractor's behalf, so no written RCTI agreement per contractor is required. Any future change to Foundry-issues must re-open that compliance question first.
+> - **D2 — Close trigger: all projects approved.** The draft invoice fires only when *every* entry in that person-month is approved, so a contractor spanning three projects gets one invoice, not three. Mitigations for the slow-approver risk are in TASK-506 (chase notice + admin force-close).
+>
+> **Scope note:** monthly lodgement + batch approval apply to **everyone** who logs time. Invoice generation applies only to `employment: contractor` — full-time staff are paid via pay runs and must never reach the invoice surface.
+>
+> **Sequencing:** TASK-500 is a live revenue-leak fix that stands alone and should land first regardless of the rest of the phase. TASK-504 must not ship before TASK-500 — turning on auto-generation over today's shared status column would silently destroy the ability to bill those hours to clients.
+>
+> **Sequencing, resolved 2026-09-01:** TT said "go ahead" then "keep going until you're done", so Phase 8 ran ahead of the remaining Phase 7 tasks. Phase 7 is in any case gated on MP sign-off and OD-1. **All seven tasks are done** — the loop's next `todo` is back to TASK-401.
+>
+> **PHASE COMPLETE — three manual steps remain before any of this is live:**
+> 1. **Run the four migrations against prod.** Nothing auto-runs `prisma migrate deploy`. In order: `20260901000000_timesheet_contractor_bill_link`, `20260901010000_timesheet_period`, `20260901020000_period_invoice_draft`, `20260901030000_period_chase_tracking`.
+> 2. **Read the first migration's `RAISE NOTICE` output.** Any row it lists could not be matched to a `bill.created` audit event and needs a human to decide which bill it belonged to. Empty notice = nothing to do.
+> 3. **Create the `timesheet_chase` FeatureFlag row and enable it** when you want the chase cron live. Until then `/api/cron/timesheet-chase` returns `{skipped}`. Optionally set `TIMESHEET_CHASE_AFTER_DAYS` / `TIMESHEET_ESCALATE_AFTER_DAYS` (defaults 3 / 7).
+
+**DEPLOYED TO PROD 2026-09-06 — with an incident. Read this before deploying any later phase.**
+
+All four Phase 8 migrations were applied to prod via the Supabase SQL Editor (`scripts/phase8-supabase.sql`: the migration files concatenated in one transaction, with matching `_prisma_migrations` ledger rows). The CLI route was unavailable — `.env.local` points at Supabase ref `epadyqrgutfzvwwxyxjm`, which no longer exists, and Vercel marks `DATABASE_URL`/`DIRECT_URL` as **Secret**, which is write-only, so `vercel env pull` returns `[SENSITIVE]` placeholders. The TASK-500 backfill reported **zero** affected rows, so no hours needed manual reassignment.
+
+**What went wrong:** these migrations were applied from an **unmerged branch** while production still ran `main` (HEAD 2026-07-11). TASK-500's migration *drops* `'billed'` from the `TimesheetStatus` enum, and the deployed July code referenced that literal in 23 files (`status: { in: ['approved','billed'] }`). Every page reading timesheet hours started failing with `invalid input value for enum TimesheetStatus: "billed"` — `/me`, `/directory/people/[id]`, project hours + tracker, `/timesheet/approve`, and the P&L / utilisation / budget / scorecard / Excel-export paths.
+
+**Restored** within minutes by `ALTER TYPE "TimesheetStatus" ADD VALUE IF NOT EXISTS 'billed';` — lossless, since no row has ever held the value post-backfill. Prod's enum is now deliberately ahead of its own migration history; `20260907000000_drop_timesheet_status_billed` closes that gap and **must ship in a deploy AFTER the Phase 8 code is live** (see TASK-508).
+
+**The rule this establishes:** additive migrations may be applied ahead of code; **destructive ones may not**. `scripts/vercel-build.mjs` already auto-applies migrations on production builds — so in the normal flow (merge → deploy) schema and code move together and this cannot happen. It only happened because the migrations were hand-applied out of band. Prefer merging over hand-applying; see TASK-507.
+
+**Also corrected:** three late-July migrations (`add_import_dry_run`, `add_invoice_sharepoint_pointer`, `add_scenario`) were found missing from prod's ledger and backfilled via `scripts/backfill-july-migrations.sql`. This was initially — and wrongly — read as "three features broken in production for six weeks". They were not: that code has never been merged to `main` either, so nothing referenced the missing tables. The backfill was harmless (additive tables + nullable columns) but was not fixing a live fault.
+
+### TASK-500 — Decouple contractor-bill from client-invoice hour consumption
+**status:** done
+**depends on:** —
+**acceptance:**
+- [x] **Root cause:** `generateDraftBillFromHours` (`src/app/(app)/directory/people/[id]/draft-bill/actions.ts:156`) sets `TimesheetEntry.status = 'billed'`, while `previewInvoiceFromTimesheets` (`src/server/invoice-drafter.ts:79`) filters `status: 'approved'`. Billing a contractor therefore **permanently and silently** removes those hours from the client-invoice pool. It breaks the other way too: `draft-bill` filters `billedInvoiceId: null`, so client-invoicing first hides the hours from the contractor's own bill. The two legs are economically independent — the same hour is a cost at `Person.rate` and revenue at `Person.billRate` — and must stop competing for one marker.
+- [x] `chore(db):` migration adding `TimesheetEntry.contractorBillId String?` + FK to `Bill` (`ON DELETE SET NULL`, mirroring the existing `billedInvoiceId` FK) + index. Separate commit from the wiring, per CLAUDE.md rule 9.
+- [x] `generateDraftBillFromHours` stamps `contractorBillId` instead of mutating `status`. Its candidate query (`listContractorBillableEntries`, `src/server/timesheet.ts:279`) filters on `contractorBillId: null`, **not** `billedInvoiceId`.
+- [x] `previewInvoiceFromTimesheets` is unchanged in behaviour but now provably unaffected by contractor billing — add a regression test asserting an entry with `contractorBillId` set still appears in the client draft.
+- [x] **Backfill:** existing rows at `status='billed'` are contractor-billed hours that were wrongly excluded from client invoicing. Migration resolves each back to `approved` and sets `contractorBillId` from the `timesheetEntryIds` recorded in the `bill.created` audit events (`source: 'timesheet_draft_bill'`). Rows that can't be matched to an audit event are left at `approved` with `contractorBillId` null and **listed in the migration output** for manual review — do not guess.
+- [x] Decide + implement `TimesheetStatus.billed`: with both legs on their own FK the enum value has no remaining writer. Either drop it in the same migration or document why it stays. Consumers keying off it must be rewired either way — `grid.tsx:642`, `submitted-overview.tsx:86`, `hours/panel.tsx:85`, `approve/page.tsx:284`, `directory/people/[id]/page.tsx:140`, `me/page.tsx:133`, `projects/[code]/tracker/page.tsx:73`.
+- [x] `deleteDraftInvoice` audit event records how many timesheet entries the FK released (`ON DELETE SET NULL` already does the release; today the count is absent from the ledger).
+- [x] Tests: contractor-bill-then-client-invoice and client-invoice-then-contractor-bill both bill the same hours exactly once on each leg; backfill resolver against fixture audit events.
+- [x] Typecheck + tests + lint green. Migration is **manual against prod** (see memory: nothing auto-runs `migrate deploy`).
+- [x] Commits: `chore(db): contractorBillId on TimesheetEntry` then `fix(TASK-500): decouple contractor bill from client invoice hour pool`
+
+**context:** Found tracing the timesheet→invoice chain for TT, 2026-08-31. Pre-existing on `main`, independent of the rest of Phase 8, and a live revenue leak on any contractor whose hours were drafted into a bill. Ships alone.
+
+**note on completion:** Landed as `chore(db): contractorBillId on TimesheetEntry + retire TimesheetStatus.billed` (50574f3) then `fix(TASK-500): decouple contractor bill from client invoice hour pool` (512e1c0). Typecheck clean, `next lint` clean, **563 tests pass across 59 files** (17 new).
+
+**`TimesheetStatus.billed` — decision: dropped.** After both legs moved to their own FK the value had no writer, so the migration releases every `billed` row to `approved` and removes it from the enum. That makes "an hour's AP state is never encoded in its status" an invariant Postgres enforces. `billed` survives only as a **derived display state** (`toDisplayStatus` in `src/server/timesheet.ts`) meaning the **AR leg only** — which is what every surface using the word already claimed ("on invoice", "linked to invoice"). Before this task the label was wrong in the other direction: driven by the contractor-bill flow, it counted hours Foundry had been invoiced FOR, not hours it had invoiced OUT. `isBilledEitherLeg` is the separate, explicitly-named predicate for edit-lock / delete guards. Consumer sweep was wider than the seven files listed above — 13 more carried `status: { in: ['approved', 'billed'] }` across P&L, utilisation, budget, partner scorecard, FY budget and the Excel exports; all collapse to `'approved'` with identical behaviour.
+
+**Two further defects found while wiring this up, both fixed here:**
+1. `saveTimesheet`'s super-admin zero-hour delete guard read `existing.status !== 'billed'`, which never covered the AR leg — a super-admin could delete an hour already sitting on a **client invoice**. Now guards on both legs via `isBilledEitherLeg`.
+2. `generateDraftBillFromHours` rejected **every** submission that left the (UI-optional) attachment URL blank. The caller normalises blank to `null`; the Zod shape `.optional().or(z.literal(''))` accepted `undefined` and `''` but not `null`, so the action always returned "Invalid bill payload". Pre-existing and independent of this task — but the AP leg could not function at all without it, so it is fixed here rather than deferred.
+
+**Test honesty note:** the AR-side where-clause assertion alone would pass against the old code (the AR query was never the thing that changed) — the real defect was in the **writer**. `contractor-bill-writer.test.ts` pins the write payload and candidate query at that site, and was **verified to fail** when the old `status: 'billed'` write is restored (2 of 5 tests go red). The backfill's SQL JSON path is guarded by a test over the real `computeDelta` output rather than a re-implementation of the resolver, so a change to the audit envelope surfaces as a red test instead of a silently non-matching migration.
+
+**REQUIRES MANUAL PROD STEP:** the migration does not auto-apply. Run `prisma migrate deploy` (or apply `prisma/migrations/20260901000000_timesheet_contractor_bill_link/migration.sql` via the Supabase SQL editor) against prod, and **read the `RAISE NOTICE` output** — any row it lists could not be matched to a `bill.created` audit event and needs a human to decide which bill it belonged to.
+
+### TASK-501 — TimesheetPeriod (person × calendar month) + true calendar-month grid
+**status:** done
+**depends on:** —
+**acceptance:**
+- [x] **Root cause:** `getMonthForPerson` (`src/server/timesheet.ts:21`) is `getRangeForPerson(personId, blockStart, 28)` anchored to `startOfFourWeekBlock` — a rolling 28-day block, not a calendar month. It drifts and never aligns to "August", so a contractor cannot select the period they need to invoice for.
+- [x] `chore(db):` migration for `TimesheetPeriod`: `personId`, `year`, `month` (1–12), `state` (`open` / `lodged` / `approved` / `invoiced`), `lodgedAt`, `approvedAt`, `invoicedAt`, `contractorBillId?`. `@@unique([personId, year, month])`. Separate commit.
+- [x] `getMonthForPerson(personId, year, month)` returns a true calendar month (28–31 days). `startOfFourWeekBlock` / `fourWeekDates` retained only if another surface still needs them — otherwise removed, not left dangling.
+- [x] `/timesheet?view=month` renders the calendar month with a month picker (prev / next / jump), replacing the 4-week block. Week view stays the default for day-to-day entry and is unchanged — **lodgement becomes monthly, entry does not**.
+- [x] Grid handles 31 columns without horizontal overflow on desktop; mobile falls back to the existing responsive treatment (TASK-220).
+- [x] Periods are created lazily on first read for a person × month — no backfill of historical months.
+- [x] Empty / loading / error states on the month view.
+- [x] Tests: month boundaries incl. February and a leap year; `SaveSchema.dayCount` max 31 already accommodates a 31-day save (`actions.ts:33`) — assert a 31-day submit round-trips.
+- [x] Typecheck + tests + lint green. Manual prod migration.
+- [x] Commits: `chore(db): TimesheetPeriod model` then `feat(TASK-501): true calendar-month timesheet period`
+
+**context:** The missing unit. Today "submitted" is a property scattered across N entry rows with no object that can be lodged, approved, or reopened as a whole — which is why every downstream stage re-derives its own grouping and they all disagree (week in the approval queue, all-time in draft-bill, arbitrary date range in draft-invoice).
+
+**note on completion:** `chore(db): TimesheetPeriod model` (78a6739) + `feat(TASK-501): true calendar-month timesheet period` (97a4953).
+
+**API deviation from the acceptance text:** `getMonthForPerson` takes the **month start** rather than `(year, month)`, mirroring `getWeekForPerson(personId, weekStart)`. `monthStartFrom(year, month)` converts. Same behaviour, one fewer off-by-one surface.
+
+**Period rows are NOT created on page read.** The acceptance said "created lazily on first read"; creating on a GET means browsing an admin through a year of someone's history writes twelve `open` rows, so the page uses read-only `findTimesheetPeriod` and creation happens in the lodge action. A month with no row already reads as `open`, so nothing is lost — and the invariant "a period row exists ⇒ that person lodged that month" is what TASK-504 keys its invoice trigger off.
+
+`startOfFourWeekBlock` / `fourWeekDates` had exactly one consumer and were removed rather than left dangling. `addMonths` rebuilds from UTC year/month parts rather than `setUTCMonth`, so 31 Jan + 1 month can't land on 2 March.
+
+### TASK-502 — Lodge-the-month action
+**status:** done
+**depends on:** TASK-501
+**acceptance:**
+- [x] One primary action on `/timesheet` month view: "Lodge August — 142.5h across 4 projects". Transitions `TimesheetPeriod.open → lodged` and every `draft` entry in the month to `submitted`, in one transaction.
+- [x] Pre-flight validation surfaced **before** the mutation fires, not as a post-hoc error: unsubmitted drafts, zero-hour working days, and hours on projects the person isn't on the team for. Each is a warning the lodger can acknowledge, except zero total hours which blocks.
+- [x] Reuses `saveTimesheet`'s existing auto-approve rules (`actions.ts:224`) unchanged — a super-admin lodging their own month still skips the queue; archived projects still always require explicit approval.
+- [x] Approver notification per affected project (manager / primary partner), reusing the `approval_requested` UserUpdate + `sendTimesheetApprovalQueueNotice` path from TASK-221, but framed as a month rather than a week.
+- [x] Re-lodging a `lodged` period is idempotent — picks up newly added entries without duplicating notifications (the 18h WhatsApp dedupe already covers identical bodies).
+- [x] A `lodged` period is read-only for the submitter; recall is via the existing `recallSubmittedTimesheet` path, which must also return the period to `open`.
+- [x] AuditEvent on lodge + recall, `entityType: 'timesheet_period'`.
+- [x] Server-side capability check (`timesheet.submit`), Zod on inputs.
+- [x] Tests: lodge with warnings, lodge blocked on zero hours, re-lodge idempotency, recall returns period to open.
+- [x] Typecheck + tests + lint green.
+- [x] Commit: `feat(TASK-502): lodge-the-month action`
+
+**note on completion:** `feat(TASK-502): lodge-the-month action` (3d00cdb).
+
+Auto-approve rules were **extracted** to `resolveAutoApproveProjectIds` and are now shared with `saveTimesheet` rather than reimplemented — two copies would eventually disagree about who skips the queue, and an unapproved month landing in P&L is not a divergence anyone notices quickly. Archived projects still never skip (TT 2026-06-16).
+
+Preflight separates **blockers** (no hours; already approved/invoiced → refused outright) from **warnings** (month not finished, weekdays with no hours, hours on a project the person isn't rostered on → waved through with an explicit "Lodge anyway"). The gate is server-side, not a client confirm, and the codes waved through are recorded on the audit event.
+
+`recallSubmittedTimesheet` now reopens the period — pulling hours out of a lodged month means it's no longer a complete submission, and leaving it `lodged` would let TASK-504 invoice over hours back in draft. A recall range can straddle two months, so every month it touches is reopened, but only from `lodged`.
+
+### TASK-503 — Person-month approval cards + approve-the-month
+**status:** done
+**depends on:** TASK-501
+**acceptance:**
+- [x] **Root cause:** `/timesheet/approve` groups pending strictly by person × **week** (`startOfWeek`, `approve/page.tsx`). A monthly lodgement shatters into ~5 weekly cards, so a manager approves the same person five times — directly opposed to batch approval.
+- [x] Queue regroups by person × `TimesheetPeriod`, with per-project subtotals inside each card and the existing per-entry detail available on expand.
+- [x] "Approve month" action per card. Sits underneath the existing `decideTimesheetEntries` — that action already partitions stale/undecidable IDs correctly (TASK-221) and must not be reimplemented.
+- [x] A manager who leads only some of the person's projects sees and can approve **only their own** projects' entries; the card shows what's outstanding elsewhere and who owes it. The existing per-project gate in `decideTimesheetEntries` is the enforcement point.
+- [x] `ApproveAllPendingButton` (firm-wide, irreversible) retained but demoted — the month card becomes the primary action. Its confirm dialog updates to say how many person-months it spans.
+- [x] Period transitions to `approved` only when every entry in it is approved (D2). Partial approval leaves it `lodged`.
+- [x] Send-back returns the affected entries to `draft` and the period to `open`, notifying the submitter with the reason (existing TASK-221 path).
+- [x] Empty / loading / error states.
+- [x] Tests: multi-project month with two approvers, partial approval does not close the period, full approval does, send-back reopens.
+- [x] Typecheck + tests + lint green.
+- [x] Commit: `feat(TASK-503): person-month approval cards`
+
+**note on completion:** `feat(TASK-503): person-month approval cards` (c6353bb).
+
+Scoping is **per project, not per card**: a manager who leads one of three projects sees the whole month (a card claiming 8h when the month is 140h is useless for deciding) but the approve action only carries entries they can decide, and the rest is listed with who owes it. A card the viewer can decide none of is dropped.
+
+Period state is re-derived from the entries in the month, never set from what a single decision did. `invoiced` is terminal so a late send-back can't un-bill a contractor. Reconciliation deliberately **does not create** period rows — see the TASK-501 note.
+
+`ApproveAllPendingButton` kept but demoted to the firm-wide escape hatch; it now carries only entries the viewer can decide (otherwise its confirm count would be a lie) and says how many person-months it spans.
+
+### TASK-504 — Auto-draft the contractor invoice on period close
+**status:** done
+**depends on:** TASK-500, TASK-503
+**acceptance:**
+- [x] **Must not ship before TASK-500.** Auto-generating over today's shared `status='billed'` marker would silently destroy the client-invoice pool at scale.
+- [x] When a `TimesheetPeriod` transitions to `approved` and the person is `employment: contractor`, generate a draft invoice for that **period only** — scoped by `year`/`month`, never the all-time sweep `listContractorBillableEntries` does today.
+- [x] **D1 — contractor confirms.** The draft is presented to the contractor, not auto-submitted. They supply their own invoice number (required), optionally attach their own PDF, and hit "Submit invoice". Only then does the `Bill` land in `BillStatus.pending_review` for the AP gate (A7 — no agent auto-executes).
+- [x] Draft is priced at `Person.rate` (contractor cost rate), grouped one line per project, GST at 10%. Rate is **snapshotted onto the bill** at generation so a later rate change can't retroactively reprice a submitted invoice.
+- [x] Full-time staff never reach this surface — the existing `employment !== 'contractor'` guard is preserved and tested.
+- [x] Contractor notified in-app + WhatsApp: "Your August invoice is ready to confirm — $X across N projects."
+- [x] AuditEvent on generate (`actor: agent`) and on contractor confirm (`actor: person`), both carrying the period, entry IDs, hours, rate and total.
+- [x] Regenerating after a send-back supersedes the prior draft rather than creating a second one.
+- [x] Tests: period close fires exactly one draft; FT staff excluded; rate snapshot survives a subsequent `Person.rate` change; confirm transitions to `pending_review`; regeneration supersedes.
+- [x] Typecheck + tests + lint green.
+- [x] Commit: `feat(TASK-504): auto-draft contractor invoice on period close`
+
+**note on completion:** `chore(db): invoice draft snapshot on TimesheetPeriod` (ee68f6a) + `feat(TASK-504): auto-draft the contractor invoice on period close` (0004c88).
+
+**D1 is load-bearing in two places:** the contractor's own invoice number is *required* (making it optional would quietly turn this into an RCTI), and no `Bill` row exists until they submit. The WhatsApp wording is asserted in tests to never claim Foundry raised an invoice on their behalf — that sentence would describe an arrangement that doesn't exist.
+
+Rate is frozen at close (`draftRateCents`), so editing `Person.rate` between close and confirm can't reprice a month that was already signed off. Only the rate is frozen; line grouping is recomputed at confirm, which is safe because a closed period's entries are all `approved` and can't move. Pricing reads `Person.rate` (contractor cost), never `Person.billRate` (client charge). A missing rate produces **no draft at all** rather than a $0 invoice — that's an admin data problem, not something to paper over.
+
+### TASK-505 — `/me/invoices` — contractor self-serve surface
+**status:** done
+**depends on:** TASK-504
+**acceptance:**
+- [x] **Root cause:** the only invoice-generation surface today is `/directory/people/[id]/draft-bill`, gated `hasAnyRole(['super_admin','admin','partner'])` on both page and action. Contractors are `staff` role + `employment: contractor` and cannot reach it — the workflow is admin-driven, which is the opposite of "easily do this individually". Note there is no separate contractor portal: magic-link lands them in the same app, so this is a permissions + surface change, not new infrastructure.
+- [x] New `/me/invoices`: the contractor's own lodged months, each showing state (`lodged` / `approved` / `invoiced`), hours, value at their rate, and the resulting `Bill` status through to paid.
+- [x] Confirm-and-submit action for a generated draft (TASK-504) lives here.
+- [x] Self-only by default. Admin / partner keep the existing per-person view for support cases; the old `draft-bill` page either redirects here or is retired — decide and document which.
+- [x] Empty / loading / error states — a contractor with nothing lodged sees guidance pointing at `/timesheet`.
+- [x] Server-side check that the viewer is the subject (or admin tier). No client-trusted person ID.
+- [x] Tests: self-only enforcement, admin override, state rendering across all four period states.
+- [x] Typecheck + tests + lint green.
+- [x] Commit: `feat(TASK-505): contractor self-serve invoice surface`
+
+**note on completion:** `feat(TASK-505): contractor self-serve invoice surface` (3d1e3fd).
+
+**Decision on the old admin page: KEPT**, relabelled in-product as the *out-of-cycle* path (backfill, or a contractor who can't submit their own). Retiring it would leave no route for hours predating the period system or for offboarded people. Since TASK-500 both paths write only `contractorBillId`, so they no longer conflict — they drain the same AP pool idempotently. Its bills are tagged `outOfCycle` in the audit.
+
+That surfaced a real gap: the admin path bills **by person, not by period**, so a month could end up fully billed while its period still said `approved`, showing the contractor an invoice prompt for hours already on a bill. `markPeriodsInvoicedIfFullyBilled` now closes those, so both routes leave the same state behind.
+
+`/me/invoices` is period-driven, not bill-driven, on purpose: "where is my August invoice?" is usually answered by "two of your three leads haven't approved it", which a bill-driven list can't show. "My invoices" sits in the user menu for everyone rather than gated on employment — the shell doesn't know contractor vs full-time and the page explains itself to anyone on payroll.
+
+### TASK-506 — Slow-approver mitigations: chase notice + admin force-close
+**status:** done
+**depends on:** TASK-503
+**acceptance:**
+- [x] Mitigates the known risk in D2: with full-month close, one unresponsive approver blocks a contractor's invoice and therefore their payment.
+- [x] Scheduled chase: a `lodged` period with entries outstanding more than N days pings the specific approvers who owe it (in-app + WhatsApp), naming the person, the month, and the projects. N configurable via `FeatureFlag` / env, not hard-coded (A8 pattern).
+- [x] Escalation to admin tier after a second interval.
+- [x] Admin force-close: super_admin / admin can close a period over outstanding entries. Requires a reason, writes an AuditEvent naming what was force-approved and what was excluded, and notifies both the contractor and the bypassed approvers.
+- [x] Dashboard leader-action for approvers with an overdue person-month, reusing the `leader-actions.ts` pattern.
+- [x] Tests: chase fires once per interval, escalation ordering, force-close audit contents, force-closed period still generates a correct TASK-504 draft.
+- [x] Typecheck + tests + lint green.
+- [x] Commit: `feat(TASK-506): monthly approval chase + admin force-close`
+
+**note on completion:** `chore(db): chase tracking on TimesheetPeriod` (5b4e917) + `feat(TASK-506): monthly approval chase + admin force-close` (6f5b5e9).
+
+Thresholds live in **env** (`TIMESHEET_CHASE_AFTER_DAYS` / `TIMESHEET_ESCALATE_AFTER_DAYS`, defaults 3 and 7) because the `FeatureFlag` table is boolean-only; the `timesheet_chase` flag gates whether the cron runs at all, so staging can dogfood the wording before prod starts DMing partners. Cron is `0 22 * * 1-5` in `vercel.json`.
+
+`lastChasedAt` / `escalatedAt` exist so a daily cron nudges on an interval rather than emitting a feed row every day — a notification that arrives daily is one people learn to ignore. Escalation **supersedes** a due chase rather than firing alongside it, fires once per lodgement, never targets someone about their own timesheet, and skips a month with nothing actually outstanding.
+
+Force-close reuses the normal roll-up, so a force-closed month produces the same state and the same frozen invoice draft as an ordinary close. It requires a real reason, records which projects were bypassed and who owed each, and notifies the contractor *and* every bypassed approver.
+
+**Not yet enabled:** the `timesheet_chase` FeatureFlag row must be created and set enabled, and `CRON_SECRET` must already be set (it is, for the existing crons). Until then the route returns `{skipped}`.
+
+### TASK-507 — Guard against destructive migrations running ahead of deployed code
+**status:** todo
+**depends on:** —
+**acceptance:**
+- [ ] **Incident 2026-09-06 (see the Phase 8 header):** Phase 8 migrations were hand-applied to prod from an unmerged branch. The enum-value drop in TASK-500's migration broke every deployed page that read timesheet hours, because `main` was seven weeks behind and still used the value. Restored in minutes; no data lost.
+- [ ] **The real gap is NOT "migrations don't run."** `scripts/vercel-build.mjs` already runs `prisma migrate deploy` on production builds, so the merge → deploy path keeps schema and code in step. The gap is that **nothing flags a migration as destructive**, and nothing stops one being applied out of band ahead of the code that needs it.
+- [ ] Classify each migration additive vs destructive — a script that greps for `DROP TABLE`, `DROP COLUMN`, `DROP TYPE`, `ALTER TYPE ... RENAME`, `NOT NULL` added to an existing column, and type narrowing. Emit a manifest.
+- [ ] `scripts/vercel-build.mjs` refuses to apply a **destructive** migration when `VERCEL_ENV=production` unless the commit being deployed is on the production branch. Additive migrations are unaffected.
+- [ ] A `pnpm migrate:bundle` command that produces a Supabase-SQL-Editor bundle like `scripts/phase8-supabase.sql`, and **refuses to generate one containing a destructive migration** — pointing the operator at merge-then-deploy instead. Hand-applying is the path that bit us; make the safe path the easy one.
+- [ ] `DEPLOY.md` §1b documents the additive-vs-destructive rule explicitly, and states that prod deploys from `main` while feature branches may be many weeks ahead.
+- [ ] Tests: destructive statements detected in fixture SQL; additive migrations pass; bundle generation refuses on a destructive input.
+- [ ] Commit: `feat(TASK-507): block destructive migrations from running ahead of deployed code`
+
+**context:** Supersedes the original framing of this task ("fail the build on migration drift"), which was written from the mistaken belief that migrations weren't auto-applying. They are. Rewritten 2026-09-06 once `vercel-build.mjs` and `main`'s actual HEAD were checked.
+
+### TASK-508 — Re-drop `TimesheetStatus.billed` (deploy AFTER Phase 8 is live)
+**status:** todo
+**depends on:** TASK-500, and Phase 8 being merged + deployed to prod
+**acceptance:**
+- [ ] Migration `20260907000000_drop_timesheet_status_billed` already written and committed. It is **guarded**: a no-op on any database where TASK-500's migration already removed the value (i.e. everything except prod), and it refuses to run while any `TimesheetEntry` still holds `status='billed'`.
+- [ ] **Sequencing is the whole task. Do NOT ship this in the same deploy as the Phase 8 code.** `vercel-build.mjs` runs `migrate deploy` *before* `next build`, so a migration in the same deploy executes while the old code is still serving — reproducing the 2026-09-06 breakage, briefly. Merge and deploy Phase 8 first, confirm prod is serving the new code, then ship this in a separate deploy.
+- [ ] After it runs, confirm prod matches the migration history: `select enumlabel from pg_enum e join pg_type t on t.oid = e.enumtypid where t.typname = 'TimesheetStatus'` returns exactly draft / submitted / approved.
+- [ ] Commit: `chore(db): re-drop TimesheetStatus.billed now Phase 8 code is live`
+
+**context:** Prod's enum currently carries `'billed'` because it was restored by hand during the 2026-09-06 incident. Every other environment already lacks it. This is bookkeeping to bring prod back in line — there is no urgency and no data impact; an unused enum value is harmless.
+
+### TASK-509 — Contractor expenses on the period invoice
+**status:** done
+**depends on:** TASK-500, TASK-504, TASK-505
+**acceptance:**
+- [x] **Gap:** the TASK-504 auto-draft prices hours only. `/me/invoices` has no reference to `Expense` anywhere. A contractor who spent A$400 on flights in August confirms an invoice covering their time and nothing else, then gets reimbursed separately on the pay-run cycle. Two payments, two timelines, and the invoice number they supplied covers part of what they are owed.
+- [x] **D3 (TT 2026-09-10): one invoice, expenses as their own section.** Matches standard practice: a contractor issues a single monthly tax invoice with a fees section and an expenses section, itemised at cost with receipts. A separate expenses invoice is the minority pattern and is used where expenses run on a different approval or payment cycle. Contractors only; full-time staff stay on the reimbursement path (they do not invoice).
+- [x] `chore(db):` migration adding `Expense.contractorBillId String?` + FK to `Bill` (`ON DELETE SET NULL`) + index. Direct mirror of `TimesheetEntry.contractorBillId` from TASK-500, for the same reason: the AP leg needs its own marker rather than overloading `status`.
+- [x] Period close (TASK-504) includes the contractor's `approved` expenses with `contractorBillId IS NULL`, tagged to a project in that month, grouped onto that project's Bill alongside the hours. Expense lines are labelled and totalled separately from fee lines so the confirm screen and the Bill both read as 2 sections.
+- [x] **Double-payment guard.** Once `contractorBillId` is set the expense leaves the reimbursement float: excluded from `/reimbursables`, and skipped by the pay-run builder in `src/server/payruns.ts`. Without this the same cost is paid twice, once as a reimbursement and once on the invoice.
+- [x] **`rebillable` is untouched.** An expense can be on the contractor's invoice (cost in) and rebilled to the client (revenue out) at the same time. Both legs are correct and independent, exactly as hours are under TASK-500. `rebilledOnInvoiceId` and `contractorBillId` must never gate each other.
+- [x] Expenses with `projectId = null` (OPEX) are excluded and stay on the reimbursement path. TASK-504 creates 1 Bill per project, so an untagged expense has no Bill to join. Surface the exclusion on `/me/invoices` so the contractor is not left wondering where the cost went.
+- [x] Rate/amount frozen at close, matching how TASK-504 freezes the hourly rate, so a later edit to the expense cannot silently reprice a confirmed invoice.
+- [x] Tests: expense joins the right project Bill; excluded from the reimbursement float once linked; rebillable expense still reaches the client draft; OPEX expense excluded and reported; FT staff unaffected; reimbursed expense never picked up.
+- [x] Commits: `chore(db): contractorBillId on Expense` then `feat(TASK-509): contractor expenses on the period invoice`
+
+**D4 (TT 2026-09-10): PASS-THROUGH GST.** The contractor invoices the full GST-inclusive amount they paid and adds no GST of their own on the expense lines; Foundry claims the input credit. Fee lines are the opposite: GST is added on top of hours × rate. A bill's `gst` is therefore fee GST plus the GST already contained within the pass-through lines, and `amountTotal` is fees ex-GST + fee GST + the inclusive expense total.
+
+**Flagged, not blocking:** for a true pass-through the underlying tax invoice generally needs to be in Foundry's name. Where the receipt is in the contractor's own name the ATO usually treats it as a recharge instead, meaning the contractor claims the credit and adds their own GST. Built as TT specified; worth confirming with the accountant, and if it changes, the switch is a per-expense flag plus the arithmetic in `confirmContractorInvoice`.
+
+**context:** Raised by TT 2026-09-10 asking whether approved project expenses reach contractor invoices. They already reach the CLIENT invoice through the `rebillable` flag and `listRebillableCostsForProject`. They did not reach the contractor's own invoice.
+
+**note on completion:** `Expense.contractorBillId` mirrors `TimesheetEntry.contractorBillId` from TASK-500, so the AP and AR legs stay independent: a flight can be recharged to Foundry and rebilled to the client, and neither gates the other. Expenses are frozen at close alongside the rate (`draftExpenseTotalCents` / `draftExpenseGstCents` / `draftExpenseCount`), so editing one between close and confirm cannot reprice a signed-off month. Periods closed before this shipped carry no snapshot and render a zero expense section rather than failing.
+
+Double-payment guard: `computeFirmReimbursementsAging` now filters `contractorBillId: null`, so an expense being paid through an invoice stops showing as money Foundry still owes. `payruns.ts` needed no change — it batches Bills, not Expenses, so the contractor bill is already the payment vehicle.
+
+Untagged (OPEX) expenses stay on the reimbursement path, since confirm raises 1 Bill per project and they have none. `/me/invoices` names the count so the contractor isn't left wondering.
+
+A project with expenses but no hours now gets its own bill, which the hours-only grouping would have dropped. The "nothing to invoice" guard moved after both legs load, so an expense-only month is no longer rejected.
+
+Tests: 9 new, verified to fail (3 of 9) when GST is wrongly added on top of the pass-through lines. 4 existing suites needed their prisma mocks extended with the new `expense` dependency and their exact-payload assertions widened for the 3 snapshot columns. Typecheck clean, lint clean, 695 tests pass (69 files).
+
+### TASK-512 — Merge Receipt Upload and Submitted Expenses into one page
+**status:** done
+**depends on:** —
+
+**Gap (TT, 2026-10-23):** Individual Inputs carried two entries, `Receipt Upload` (`/bills/intake`) and `Submitted Expenses` (`/expenses`), for one errand. Both opened a drop target, neither showed the whole flow, and the names describe a step rather than a question — so people guessed. `/bills/intake` compounded it by rendering two unrelated pages off one route: an AP vendor-bill review surface for admins, and a bare dropzone plus a 5-row "your recent uploads" echo for everyone else, which was a worse version of `/expenses`.
+
+**acceptance:**
+- [x] `/expenses` is the single personal surface: `1 · Upload a receipt` (the `IntakeDropzone`) above `2 · Submitted` (the existing filters / list / by-project views). H1 is now `Expenses`.
+- [x] `/bills/intake` keeps only the vendor-AP job — retitled `AP Intake`, staff-mode branch and the recent-uploads card deleted, non-reviewers redirected to `/expenses`. The split is now by question (who gets paid), not by step (upload vs track).
+- [x] One nav entry, `Expenses`. `Receipt Upload` removed; AP intake stays reachable from `/bills` and from a cross-link on `/expenses` for `bill.create` holders.
+- [x] Every other entry point repointed: both dashboard action strips, the project cost card, Navan integration copy, assistant `SURFACES` blurbs, onboarding spotlight (`nav-/bills/intake` → `nav-/expenses`).
+- [x] `revalidatePath('/expenses')` added to the Navan sync actions — they write `Expense` rows, which now render on the merged page.
+- [x] Typecheck + lint clean on every file touched; 695 tests pass.
+- [x] Commit: `feat(TASK-512): merge receipt upload into the expenses page`
+
+**Resolved — `bill.review` capability (D5, TT 2026-10-23).** `bill.create` was `super_admin / admin / associate_partner` while `ensureCanReview` in `bills/intake/actions.ts` was a separately hard-coded `super_admin / admin / partner`, so an associate_partner could raise a vendor bill and had nowhere to review it, and a partner could review bills they couldn't raise. **TT's call: give associate_partner AP review rights.** Rather than re-typing a fourth role list, the gate is now a capability — `'bill.review': ['super_admin', 'admin', 'partner', 'associate_partner']` in `capabilities.ts`, read by `ensureCanReview`, by `createPlaceholderIntakeBill` (a placeholder exists to be filled in on the review pane, so raising one you can't edit is a dead end), and by both pages that mirror the gate in their UI. `approveIntakeBill` now checks it explicitly instead of inheriting the refusal from the `patchIntakeBill` call it opens with. Bill *approval* is untouched: still super_admin only, per A8.
+
+**acceptance (D5):**
+- [x] `bill.review` added to the `Capability` union and `CAPABILITY_ROLES`; `/admin/access` picks it up from the live map with a bespoke label, no new wiring.
+- [x] Single source — no role list for AP review survives outside `capabilities.ts`.
+- [x] Tests: `bill.review` covers every `bill.create` role (the regression guard — verified to fail against the old list); associate_partner included; partner keeps review without create; manager/staff excluded; neither partner nor AP gains `bill.approve`.
+- [x] Commit: `feat(TASK-512): bill.review capability — associate_partner can work the AP queue`
+
+**note on completion:** the dropzone component stays at `bills/intake/dropzone.tsx` and is imported by both pages rather than copied — one upload path, two framings. `/expenses` passes `defaultKind="expense"`, `/bills/intake` passes `"bill"`, so each page defaults to its own answer while the per-row toggle still rescues an upload that landed on the wrong one.
+
+### TASK-510 — Make contractor invoicing reachable: sidebar entry + timesheet call-to-action
+**status:** done
+**depends on:** TASK-505
+
+**Gap (TT, 2026-10-23):** `/me/invoices` has shipped since TASK-505 but is reachable only from the avatar dropdown — `nav-config.ts` had no entry for it. A contractor looking at the sidebar saw Timesheet / Availability / Receipts / Expenses under Individual Inputs and concluded the firm had no self-invoicing. The feature existing and the feature being findable are not the same thing, and for a surface whose entire job is "get paid", the second one is the product.
+
+**acceptance:**
+- [x] `My invoices` nav item under **Individual Inputs**, directly under Timesheet (it is the thing the timesheet feeds). Visible to every signed-in role — the page already explains itself to full-time staff rather than 404ing, so gating the nav entry on employment would need `employment` threaded into the shell for no benefit.
+- [x] Icon distinct from both `FileText` (Invoices (Receivables)) and `Receipt` (Expenses) so the three don't read as the same surface — `ReceiptText`.
+- [x] Explicit **Generate invoice** call-to-action on `/timesheet`, present in week view as well as month view — the month view is not where a contractor starts.
+- [x] The CTA states the actual gate ("approved hours") rather than being a bare link, so the contractor learns the rule from the button instead of from a dead end.
+- [x] Full-time staff never see the CTA — they do not invoice, and an invoice button on a payroll employee's timesheet is a support ticket.
+- [x] Acting-on-behalf (admin viewing someone else's timesheet) carries `personId` through, matching the existing `/availability` link.
+- [x] Test: nav visibility for each role; CTA hidden for `ft`, shown for `contractor`.
+- [x] Commit: `feat(TASK-510): generate-invoice CTA on the timesheet`
+
+**note on completion:** both halves are live. The nav entry (`My invoices`, `ReceiptText`, under Individual Inputs beneath Timesheet) and the timesheet CTA were written here but swept into another session's commits (`85897a7`, `67c07c1`) — three sessions were editing this checkout at once and their `git add` was broad. The code is correct and in place; only the authorship is muddled. The CTA sits above the view switcher so it shows in week, month and quarter view, and is gated on `targetPerson.employment === 'contractor'`.
+
+**note (2026-10-23):** the nav half of this shipped inside another session's commit `85897a7 feat(TASK-512)`, which swept the working tree while three sessions were editing the same checkout. The entry is correct and in place; only the timesheet CTA remains.
+
+### TASK-513 — Open a new timesheet on last period's projects, not every allocation
+**status:** done
+**depends on:** TASK-501
+
+**Gap (TT, 2026-10-23):** the grid opened with every non-archived `ProjectTeam` allocation the person held. Allocation is a poor proxy for what someone is actually working on — people sit on project teams for months without touching them — so every sheet arrived carrying rows that had to be deleted by hand before it could be filled in. The complaint was specifically about having to *remove* projects, which is work the app created.
+
+**acceptance:**
+- [x] `getRangeForPerson` takes an optional `carryForward: { start, end }`. When set, rows come from the projects with entries in THAT window rather than from allocations.
+- [x] `getWeekForPerson` carries the previous 7 days; `getMonthForPerson` carries the previous **calendar** month (a fixed 31-day lookback would start inside February and miss its first days).
+- [x] Self-cleaning by construction: a zero-hour row leaves no `TimesheetEntry` (saveTimesheet deletes it), so a project drops off the sheet the period after you stop logging to it. No new "remove this row" affordance needed.
+- [x] Anything with hours in the CURRENT period always shows, whatever its stage or allocation — hiding a row holding real hours would lose data.
+- [x] Archived projects are never carried forward. Logging to a wrapped engagement stays a deliberate act via the add-row picker, which still offers every project.
+- [x] Fallback: when nothing was logged last period (new starter, back from leave) the sheet falls back to allocations rather than opening empty and making them hunt through the picker for their own projects.
+- [x] The "Copy last week" lookup opts out (`carryForwardPrevious: false`) — it wants last week's hours, and carrying forward would make its row list reflect the week before that.
+- [x] Tests: 9 new covering both views, the calendar-month boundary, the year roll-over, the archived exclusion, the current-period override, the empty-period fallback, and the copy-last-week opt-out.
+- [x] Typecheck + lint clean; 718 tests pass (71 files).
+- [x] Commit: `feat(TASK-513): open the timesheet on last period's projects`
+
+**note on completion:** deliberately keyed off entries rather than adding a "pinned rows" table. Pinning would need its own management UI and would drift from reality the same way allocation did; derived state can't go stale.
+
+Fixed three pre-existing type errors surfaced on the way — see the commit. `tsc` runs with `"incremental": true` and a stale `tsconfig.tsbuildinfo` was skipping files, so several earlier "typecheck clean" claims in this phase were made against a cache rather than a full check. **Worth a follow-up:** make `pnpm typecheck` delete the buildinfo first, or drop `incremental`, so the gate means what it says.
+
+### TASK-511 — Date-range contractor invoice (`/me/invoices`)
+**status:** done
+**depends on:** TASK-504, TASK-505, TASK-509, TASK-510
+
+**Gap (TT, 2026-10-23):** every contractor invoice path is whole-calendar-month. `TimesheetPeriod` is keyed `personId + year + month`, the rate snapshot freezes at month close, and `confirmContractorInvoice` derives its window from `monthStartFrom(year, month)`. A contractor who starts mid-month, finishes mid-month, bills a quarter at once, or simply wants 15 Sep – 14 Oct has no path. The admin out-of-cycle route (`/directory/people/[id]/draft-bill`) is unbounded-all-approved-hours, not a range, and is admin-only regardless.
+
+**acceptance:**
+- [x] Start + end date inputs on `/me/invoices`, defaulting to the current month so the existing month-at-a-time habit still works in one click.
+- [x] Preview groups **approved + unbilled** entries in range by project, with hours, rate, ex-GST, GST, total.
+- [x] **Unapproved time in the same range is listed, not hidden** — hours, project, and the approver it is waiting on. Excluded from the invoice: approved-only is the gate the whole flow rests on (D2), and a range picker must not become the way around it. The contractor's question is "why is my invoice short", and the answer is a name.
+- [x] **Per-entry rate resolution.** Entries inside a period that closed with a `draftRateCents` price at that frozen rate; everything else at the contractor's current `Person.rate`. A range spanning a closed month and an open one must not silently reprice the closed part — that is the exact repricing TASK-504 exists to prevent, and a range window reintroduces it unless rates resolve per entry.
+- [x] Pass-through expenses on the same terms as TASK-509: `approved`, `contractorBillId IS NULL`, project-tagged, inside the range, GST-inclusive with no GST added on top (D3/D4). Untagged OPEX expenses excluded and the count surfaced.
+- [x] One `Bill` per project, `pending_review`, so the AP queue keeps its human gate (A7).
+- [x] **Double-billing is structurally impossible:** both paths gate on `contractorBillId IS NULL` and set it in the same transaction. A range overlapping an already-invoiced month picks up nothing from the billed part.
+- [x] Affected periods reconciled through the existing `markPeriodsInvoicedIfFullyBilled` so a month fully consumed by range invoices closes rather than sitting at `approved` forever showing a phantom prompt.
+- [x] Range validation: end on or after start, bounded span, dates parseable; rejected server-side, not just in the browser.
+- [x] `AuditEvent` per bill recording the range, which rate priced which hours, and that it came from the range path (A9).
+
+**D5 (TT, 2026-10-23): the generate screen is a form, not a receipt.**
+- [x] **Every field on the generate screen is editable** — invoice number, issue date, due date, the personal identifier, and the per-project fee lines. The month path presents frozen figures for confirmation; this one is the contractor composing their own document, so nothing is read-only text that should have been an input.
+- [x] **Invoice number is autogenerated and prefilled**, coding the contractor's initials and a per-person sequence (`{INITIALS}-{YYYY}-{NNN}`, e.g. `JN-2026-004`). The sequence is derived from that person's existing bills, so two contractors never collide and neither does a contractor with themselves.
+- [x] **The generated number stays editable.** D1 (TT 2026-08-31) turns on the invoice being the contractor's own document rather than a recipient-created tax invoice; a number they cannot change is Foundry issuing on their behalf. Prefilling is a convenience, locking it is an RCTI.
+- [x] **Collision check on submit.** Reject a number this contractor has already used rather than silently creating a second bill under the same reference — the suggestion is only a default, and an edited one can collide.
+- [x] **Optional personal identifier** the contractor adds to the invoice description (their own PO, client ref, engagement nickname). Free text, their words, carried onto the Bill so it survives into AP and Xero rather than living only in the audit trail.
+- [x] `chore(db):` migration adding `Bill.description String?`. The Bill model has no description/notes column today — `confirmContractorInvoice` drops its `notes` into the `AuditEvent` only, so nothing the contractor writes reaches the document itself. Separate commit, applied manually to prod (migrations do not auto-run).
+
+**acceptance (tests):**
+- [x] Tests: range spanning two months with one closed; partial month; range overlapping already-billed entries yields nothing; frozen vs current rate applied per entry; unapproved surfaced but never billed; expense-only range; FT staff refused; cross-person refused; number autogeneration increments per person; duplicate number rejected; personal identifier reaches `Bill.description`.
+- [x] Commits: `chore(db): description on Bill` then `feat(TASK-511): date-range contractor invoice`
+
+
+**note on completion:** `previewContractorRangeInvoice` + `generateRangeContractorInvoice`, a sibling of the month path rather than a replacement. Both gate on `status = 'approved' AND contractorBillId IS NULL` and set the FK in the same transaction as the Bill, so an arbitrary window overlapping an invoiced month cannot double-bill — that invariant, not the period state, is what makes the two paths safe to run side by side.
+
+Per-entry rate resolution was the one genuinely load-bearing design call. A range spanning a closed September and an open October reads September's frozen `draftRateCents` and October's current `Person.rate`; a single rate for the window would have silently repriced the closed month, which is the exact bug TASK-504 froze the rate to prevent. Tested directly: giving the contractor a raise mid-range leaves the closed month's figure untouched.
+
+D5 landed as written — number suggested (`{INITIALS}-{YYYY}-{NNN}`, sequenced per person per year off their own bills) but editable, with a per-person collision check; issue and due dates theirs; per-project fee lines editable, with the derived figure kept beside any override in the audit event so an amount that doesn't reconcile to hours × rate explains itself; and the personal identifier on `Bill.description` (new column) so it reaches AP and Xero rather than stopping in the audit trail the way `notes` did.
+
+Unapproved time in the range is listed with the approver's name rather than hidden. Approved-only is still the gate — a range picker must not become the way around D2 — but the contractor's real question is "why is my invoice short", and a name answers it.
+
+24 new tests. They caught a live one: `issueDate` / `dueDate` / `description` were added to the Zod schema but never to the `safeParse` payload, so every submission would have failed validation with "Required". The form would have been completely non-functional in production. Typecheck clean, lint clean, 742 tests pass (72 files).
+
+**Not done here:** the migration `20261023000000_bill_description` must be applied to prod manually — nothing auto-runs `prisma migrate deploy` outside a production Vercel build.
+
+### TASK-514 — Timesheet look-back: lock approved days, add month + quarter review
+**status:** done
+
+**Gap (TT, 2026-10-23):** stepping back through a timesheet was broken in two ways at once.
+
+1. **Approved days looked editable.** `TimesheetRow.status` collapses to `mixed` the moment a row straddles an approval boundary — last week approved, this week draft — which is most rows a person meets when they go back to check something. The grid decided editability per ROW, so on a mixed row every day rendered as an open input. `saveTimesheet` has refused to rewrite an approved entry since it was written (`if (isLocked && !isSuperAdmin) continue`), so typing into one of those days did nothing and said nothing. The UI was more permissive than the save, which is the wrong way round.
+2. **Only week and month existed.** Reaching anything older than the current month meant clicking Previous one week at a time.
+
+**acceptance:**
+- [x] `TimesheetCell` carries `status` and `billed` per DAY, so the grid can lock a single day inside a mixed row.
+- [x] One lock rule, in `src/lib/timesheet-lock.ts`, shared by the grid, the assistant prefill and the tests — `lib/` rather than `server/timesheet.ts` because the client grid must not pull Prisma into its bundle. Mirrors the `saveTimesheet` guard: billed (either leg) locked for everyone, approved locked for everyone but super admin, draft/submitted/empty open.
+- [x] A locked day renders as the NUMBER plus a lock glyph, not a greyed-out input — a disabled box still reads as "you could type here", and the figure is the thing worth seeing when checking an earlier week. A hidden field keeps the payload shape unchanged.
+- [x] Per-row "N locked" chip, and a legend under the grid saying why and what to do about it (ask an approver to send it back; void the document if it is billed).
+- [x] Remove hidden on a row holding locked days — it only drops the row in the browser, so the hours would return on refresh. Recall now offered on mixed rows, not just all-submitted ones.
+- [x] "Copy last week" skips locked target days.
+- [x] Assistant prefill ignores a locked DAY with reason `locked_day`, not just a locked row.
+- [x] Quarter view: `?view=quarter`, projects × the quarter's three months, read-only. 90-odd editable columns is not a grid, and a quarter is what someone opens to check history. Each column header links into that month; period state (open / lodged / approved / invoiced) shown per month; four stat tiles split the quarter into logged / approved-or-billed / awaiting approval / still draft.
+- [x] Calendar quarters, whose boundaries are also the AU FY quarters — only the count differs — so the label names both: "Jul–Sep 2026 · FY27 Q1".
+- [x] Week / Month / Quarter toggle carries the anchor date across, so switching view keeps you in the same place in time rather than jumping to today. Prev/Next step by the view's own unit.
+- [x] Fixed three-letter month abbreviations in `lib/week.ts` — `Intl` en-AU `month: 'short'` returns "July", "Sept" and "June" next to "Aug", which makes a header row ragged.
+- [x] Tests: quarter boundary maths incl. year rollover and FY numbering; the per-day lock rule for each status × role; the quarter roll-up (grouping, mixed months, AR vs AP leg, empty quarter).
+- [x] Commit: `feat(TASK-514): per-day timesheet locks + quarter review view` — landed inside commit `67c07c1`, which another session wrote against its own TASK-513 while both of us had uncommitted work in the same checkout. The code is in; the commit message only describes the carry-forward change.
+
+**note on completion:** the server was already correct — no permission or save change was needed, and none was made. This closes the gap between what the grid offered and what the save would accept. Not yet exercised in a browser against real data: the local DB credentials are stale (see memory `foundry_local_db_unreachable`), so the grid and quarter table have been verified by typecheck, lint and unit tests only.
+
+### TASK-516 — Edit / delete a receipt or expense after submission
+**status:** todo
+
+*(Numbered 516/517 after 514 and 515 were taken by parallel sessions on 2026-10-23. Four sessions were appending to this file at once; check the highest number in use before claiming one.)*
+**depends on:** TASK-512
+
+**Gap (TT, 2026-10-23):** a receipt goes up, Sonnet reads it, and whatever it got wrong is frozen. There is no way for the submitter to fix a misread supplier, amount, date or project tag, and no way to delete a duplicate or a receipt uploaded to the wrong account. The only route today is asking an admin.
+
+**acceptance:**
+- [ ] Submitter can edit their own expense while it is still `draft` or `submitted` — supplier, amount, GST, date, project tag, category, description.
+- [ ] Submitter can delete their own expense while it is still `draft` or `submitted`.
+- [ ] **Approved and beyond is not freely editable.** Once `approved` the expense is a number somebody signed off, and once `reimbursed` or linked to a `contractorBillId` it is money that has moved or is moving. Edit/delete there is admin-only and must re-open the approval rather than silently amending a signed-off figure.
+- [ ] **Never editable once consumed by a contractor bill** (`contractorBillId` set) — the expense is on an invoice that is in the AP queue or already paid. Amend the bill, not the line underneath it.
+- [ ] Admin override for every state, with the reason captured.
+- [ ] `AuditEvent` on every edit and delete with the before/after delta (A9) — this is a financial record, and "the amount changed" must always have an actor and a timestamp.
+- [ ] Re-running OCR after an edit must not clobber the human's correction.
+- [ ] Tests: self-edit allowed in draft/submitted; refused once approved; refused once `contractorBillId` is set; admin override audited; delete refused for someone else's expense.
+- [ ] Commit: `feat(TASK-516): edit + delete own expenses before approval`
+
+**overlap warning:** `/expenses` was restructured by TASK-512 in a parallel session on 2026-10-23. Build this on top of that page, not against the pre-merge layout.
+
+### TASK-517 — Expenses invoice separately from timesheet fees
+**status:** done
+**depends on:** TASK-509, TASK-511
+
+**Ask (TT, 2026-10-23):** expenses should produce their own invoice rather than riding on the fee invoice.
+
+**This reverses D3 and D4**, both decided 2026-09-10 and shipped in `58b5885`. D3 chose one invoice with an expenses section; D4 chose pass-through GST. TT answered the three scoping questions on 2026-10-23:
+
+| # | Question | Answer |
+|---|---|---|
+| D6 | Both paths, or only the range path? | **Both.** The month path (`confirmContractorInvoice`) and the range path (`generateRangeContractorInvoice`) must behave identically — a contractor's September invoice and their 15 Sep – 14 Oct invoice cannot differ in how expenses are treated. |
+| D7 | A separate invoice, or the same number with bills split out? | **Separate invoice.** A second document the contractor numbers themselves, not a presentation change inside Foundry. |
+| D8 | Does D4 pass-through GST stand? | **No — the contractor adds their own GST.** This is the recharge treatment, which is what TASK-509 already flagged as the likely correct answer where the underlying receipt is in the contractor's own name. |
+
+**What D8 actually changes.** Under pass-through, an expense line carried the GST-inclusive amount the contractor paid and they added no GST; Foundry reclaimed the input credit. Under recharge, the contractor claims that credit themselves, bills Foundry the **net** amount, and adds 10% of their own on top. For a standard-rated expense the total is unchanged (A$110 inc GST → A$100 net + A$10 GST). The difference bites on **GST-free** purchases — overseas flights, basic food — where the net is the full amount and 10% is now added on top of it. That is correct for a recharge: the supply from contractor to Foundry is their taxable supply of services, regardless of how the underlying item was taxed.
+
+**acceptance:**
+- [x] Expense lines raise their own `Bill` rows, separate from the fee bills, with `category = 'Contractor — expenses'` so AP can tell the two apart without inspecting line items.
+- [x] The expense invoice carries its **own contractor-supplied number**, independent of the fee invoice's. Required whenever there are expenses in scope, autosuggested on the same `{INITIALS}-{YYYY}-{NNN}` sequence, editable, and collision-checked exactly as the fee number is (D1 applies to both documents equally — each is the contractor's own).
+- [x] Still one Bill per project per invoice, so each lands on the right engagement.
+- [x] **Recharge arithmetic (D8):** expense bill ex-GST = Σ(`Expense.amount` − `Expense.gst`); GST = 10% of that; total = ex-GST + GST. GST is no longer "the component already inside the figure".
+- [x] Applied to **both** `confirmContractorInvoice` and `generateRangeContractorInvoice` (D6).
+- [x] Both UIs updated: the fee and expense sections total separately, each with its own number field, and the copy no longer claims GST is not added to expenses.
+- [x] `TimesheetPeriod` snapshot columns need **no migration** — `draftExpenseTotalCents` and `draftExpenseGstCents` are both stored, so the net is derivable as the difference. Reinterpret rather than re-migrate, and say so in the column comments.
+- [x] Double-payment guard holds unchanged: `contractorBillId` still takes the expense out of the reimbursement float, whichever bill it lands on.
+- [x] A range or month containing expenses but **no** hours raises only the expense invoice, and vice versa — neither document is mandatory.
+- [x] Update the D3/D4 comments through `actions.ts`, `timesheet.ts` and `schema.prisma` so the code stops asserting a rule that no longer holds.
+- [x] Tests: existing TASK-509 pass-through assertions **rewritten, not deleted** — they encode the old spec and must now encode the new one; GST added on net; GST-free expense correctly grossed up; separate numbers on separate bills; duplicate expense number rejected; expense-only and fee-only cases; both paths covered.
+- [x] Commit: `feat(TASK-517): expenses invoice separately from fees, on recharge GST`
+
+**Flagged for the accountant, not blocking:** D8 is the treatment TASK-509 predicted, but it does change what Foundry can reclaim. Under pass-through Foundry claimed the input credit on the original receipt; under recharge the contractor claims it and Foundry claims on the contractor's invoice instead. Net position is the same where the contractor is GST-registered, and worse for Foundry where they are not — a non-registered contractor cannot add GST at all, so their expenses should recharge at net with no GST. **Not handled in this task** — the code assumes a registered contractor, which is true of everyone on the books today. Raise it as its own task if an unregistered contractor is ever onboarded.
+
+---
+
+**note on completion:** D6/D7/D8 all landed. Fees and expenses are now two documents on **both** paths — `confirmContractorInvoice` (month) and `generateRangeContractorInvoice` (range) — each raising its own `Bill` rows under `Contractor — services` and `Contractor — expenses`, each carrying its own contractor-supplied number. `suggestContractorInvoiceNumbers(personId, 2)` hands out two consecutive numbers in one pass, because two independent calls would both have returned the same "next" value and collided on submit.
+
+The D8 recharge is a four-line arithmetic change (`rechargeExpenseTotals`) with a much larger behavioural tail, and the tests are built around the one case that can actually detect it: for a standard-rated cost, recharge and pass-through produce the identical total, so only a **GST-free** expense distinguishes them. A$440 with no GST inside it now bills Foundry A$484 — the contractor had nothing to reclaim, so the 10% is a real increase. Both paths have that test; without it the suite would pass under either treatment and tell us nothing.
+
+No migration was needed for the `TimesheetPeriod` snapshot. `draftExpenseTotalCents` and `draftExpenseGstCents` both persist, so the net is their difference — the columns record what was *paid*, which is still true; what changed is that the inclusive figure is no longer what Foundry is billed and the GST inside it is no longer Foundry's to reclaim. Said so in the schema comment rather than re-migrating.
+
+`src/__tests__/contractor-expense-passthrough.test.ts` was renamed to `contractor-expense-recharge.test.ts` and its assertions rewritten rather than deleted — they encoded the old rule correctly and the same arithmetic needed pinning under the new one. Two other suites needed `bill.findFirst` added to their prisma mocks for the collision check; that check also had `hit !== null` loosened to `hit != null`, since a nullish result meant "no row" but was being read as a collision, which would have blocked invoicing outright.
+
+788 tests pass (74 files), typecheck clean, lint clean.
+
+**Still open, deliberately:** the treatment assumes a GST-registered contractor, true of everyone on the books today. An unregistered one cannot add GST at all and would need recharging at net with none. Flagged on the task above rather than guessed at.
+
+### TASK-519 — Receipt filenames identify who, what, which project and when
+**status:** done
+**depends on:** TASK-042b, TASK-046b
+
+**Ask (TT, 2026-10-23):** "for uploaded receipts, ensure the file naming convention in sharepoint indicates who, what, what project and when in the file name for identification, and unique identifier for each".
+
+The archive already named date, vendor, amount, initials and an 8-hex short id. **The project was the gap** — a receipt in `FY 26 - 27/Expenses/2026-08/` said nothing about which engagement it belonged to, so a rebill pack had to be assembled by opening files or cross-referencing the app.
+
+**Convention (now):**
+
+```
+YYYY-MM-DD - <PROJECT> - <vendor> - <category> - $<amount> - <INITIALS> - <UID>.<ext>
+2026-07-08 - IFM001 - Amazon Web Services - subscriptions - $89 - TT - EXP-A1B2C3D4.pdf
+```
+
+| Segment | Answers | Fallback |
+|---|---|---|
+| `YYYY-MM-DD` | when | — (always known) |
+| `<PROJECT>` | which project | `NOPROJECT` for overhead / uncoded |
+| `<vendor>` + `<category>` | what | `no-vendor` / `uncategorised` |
+| `<INITIALS>` | who | `??` |
+| `<UID>` | unique identifier | `EXP-`/`BILL-` + 8 uppercase hex |
+
+Date still leads so folders keep sorting chronologically, matching the invoice-PDF convention. The shape is always seven ` - ` segments; a missing fact gets a loud token rather than a collapsed segment, and a vendor containing `" - "` is collapsed to `-` so it cannot fake one.
+
+**acceptance:**
+- [x] `buildReceiptFilename` takes `projectCode`, `category` and `uid`; project code upper-cased, category lower-cased, each segment sanitised and length-capped.
+- [x] `newReceiptUid(kind)` mints `EXP-`/`BILL-` + 8 uppercase hex. Minted before upload (the row does not exist yet) and echoed back on `ReceiptUploadResult.uid`.
+- [x] All four callers pass the project: `/expenses/new` (project lookup now also selects `code`), `/bills/new` (new project lookup), `/bills/intake` (`null` — AP intake runs before coding, so `NOPROJECT` is honest), and the backfill script (`project.code`, uid derived from the row id so a re-run names the same file).
+- [x] Every caller records the uid on its `AuditEvent` delta — that is what ties a file in SharePoint back to its row.
+- [x] Tests: canonical shape, NOPROJECT / uncategorised fallbacks, seven-segment shape when everything is missing, `" - "` collapse, case normalisation, truncation caps, uid format + uniqueness.
+- [x] Typecheck green, 35 tests green in `sharepoint-receipts-helpers.test.ts`, lint clean on changed files.
+- [x] Commit: `feat(TASK-519): receipt filenames carry project, category and a unique id`
+
+**note:** no migration — the uid lives in the filename and the audit delta, not a column. Existing files keep their old names; SharePoint has no rename-on-convention-change step and renaming would break the stored `receiptSharepointUrl` pointers.
+
+---
+
+## Phase 9 — Resource planning: manager visibility, calendar availability, analyst supply
+
+**Ask (TT, 2026-10-23):** *"on the resource planning, ensure all managers have the same visibility as admin. Also, ensure there is a calendar style view with drag and drop features for availability — this ideally would be synced to each individual foundry outlooks, or the ability to input the hours per day if they don't have blocks. We also need to know what the total 'analyst hours' available each day and week."*
+
+Split by how much of each already existed:
+
+1. Manager visibility — `/resource-planning` already admitted `manager`; `/availability` did not, and that asymmetry was the whole gap (TASK-518).
+2. Calendar + drag-and-drop — new surface over the existing per-day `AvailabilityForecast` rows (TASK-520).
+3. Per-day hours entry — already shipped as the rotated grid. Kept as a view, not replaced (TASK-520).
+4. Analyst hours available per day and per week — new roll-up, nothing like it existed (TASK-521).
+5. Outlook sync — no Graph calendar integration exists, and it needs tenant consent plus three product calls (TASK-522, blocked).
+
+**numbering note (2026-10-23):** this phase was first written as TASK-518/519/520/521. A parallel session rewrote `TASKS.md` from a stale copy, dropped the phase and reused TASK-519 for receipt filenames, which it then committed. The calendar work is renumbered to TASK-520 and the rest shift with it; commit `d14234b` carries the old TASK-519 label and refers to the calendar, not to receipt filenames.
+
+### TASK-518 — Managers see availability the way admin does
+**status:** done
+
+**Gap.** `/resource-planning` had admitted `manager` since TT's 2026-07-20 call. `/availability` never followed: `isAdminGroup` (super_admin / admin) got a firm-wide person picker, while `manager` / `partner` fell into a led-projects branch that walked `Project.managerId` / `primaryPartnerId` and listed only that cohort. A manager resourcing across teams saw a picker with four names and concluded the firm had no bench. `associate_partner` was worse — present in the `/resource-planning` and nav role lists, missing from every on-behalf check in `/availability`, so an AP was offered a person by the page and refused by the action.
+
+- [x] One shared helper (`src/server/availability-access.ts`) decides on-behalf availability access; the page and both server actions call it rather than repeating a role array.
+- [x] `manager`, `partner` and `associate_partner` get the same firm-wide active-person picker admin gets.
+- [x] `associate_partner` added to the on-behalf role list in both server actions.
+- [x] Support_Staff stay out by band, matching the nav `denyBands` rule and the `/resource-planning` page-level defense.
+- [x] On-behalf edits still write an `AuditEvent` naming actor and target.
+- [x] Test: `src/__tests__/availability-access.test.ts`.
+- [x] Commit: `feat(TASK-518): managers get admin-level availability visibility` — `4fdc434`
+
+**note on completion:** the led-projects branch is gone entirely, not widened — every on-behalf role reads the same firm-wide list, which also drops a `Project` query from the page.
+
+### TASK-520 — Calendar view for availability, with drag to paint
+**status:** done
+**depends on:** TASK-518
+
+**Shape.** `AvailabilityForecast` is already one row per person per day (`hours`, optional `projectId`), so the calendar is a new view over existing data — no migration. The rotated grid is TT's "input the hours per day if they don't have blocks" and stays as a toggleable view.
+
+- [x] Calendar renders the 8-week horizon as dated day cells, hours and project shown as a block rather than a number in a box.
+- [x] Drag across a run of days paints the brush onto every day in the run.
+- [x] Drag an existing block onto another day moves it; the source clears.
+- [x] Brush is explicit — hours + project (or Erase) — so a drag is never ambiguous.
+- [x] View toggle between Calendar and Grid; both drive the same state and the same Save, so switching never loses an unsaved edit.
+- [x] Keyboard path survives: Grid keeps real number inputs, and a focused calendar day takes Enter / Space.
+- [x] Weekends de-emphasised but still paintable.
+- [x] Week notes editable from both views, so the calendar is not a lossy view of the same data.
+- [x] Commit: `feat(TASK-519): calendar availability view with drag-to-paint` — `d14234b` (old numbering, see the note above)
+
+**note on completion:** the two gestures are disambiguated by what the pointer goes down on — empty cell paints, block moves — and the block fills most of the cell, so a drag starting on a committed day moves it. That is the intent, and the grab cursor plus the tooltip say so, but it is the one thing that will surprise people on first use.
+
+The transforms live in `availability-brush.ts` as pure functions (`resolveBrush` / `rangeDateIsos` / `applyPaint` / `applyMove`) because the app can't boot in this checkout — no `ENTRA_CLIENT_ID`, stale DB creds — so a unit test is the only test that runs here. The gestures were verified by bundling the component with esbuild and driving real pointer drags against it in a browser: paint across Mon–Fri, move a block Mon → Sat, erase a two-day run. That shook out a double-commit bug — pointerup and pointercancel share a handler and React had not re-rendered between them, so a move cleared the source and then wrote the emptied value onto the target. `commit` now clears the drag ref synchronously, and both components read the cell maps through refs so a mid-drag re-render can't commit against a stale copy.
+
+**not verified here:** the page in situ. Tailwind token classes, the view toggle inside `/availability`, and the interaction with the prefill banner and the inactive-profile gate have not been seen rendered — only the component in isolation.
+
+### TASK-521 — Analyst hours available, per day and per week
+**status:** done
+
+**Gap.** `computeBandwidthHeatmap` aggregates to person × week. There is no band-level supply number and no daily granularity anywhere, so "how many analyst hours can I sell on Thursday" is currently unanswerable from the app.
+
+**Definition used (stated on the surface so nobody has to guess).** Three states per person-day, deliberately kept apart:
+
+- **allocated** — explicit forecast row tagged to a project. Committed, not counted as supply.
+- **declared free** — explicit forecast row with no project. The person has said they are free.
+- **assumed free** — no row, but a standing regular-days schedule says they normally work that day. Real planning signal, but an inference, so it renders as a separate `est` figure rather than being folded into the declared number.
+
+A person with neither a row nor a schedule contributes nothing and is counted as *silent*. Absence of a forecast is unknown capacity, not free capacity, and reading it as free is how a bench gets oversold — so the card says how many people the number is silent about.
+
+The fallback matches `computeBandwidthHeatmap` exactly (explicit row wins, else the standing schedule, regular-days hours always unallocated), so the two surfaces can never disagree about a given day.
+
+- [x] Server function returns, per day in the horizon: unallocated / allocated / total forecast hours, grouped by band.
+- [x] Same roll-up at week granularity.
+- [x] Analyst is the headline band but Consultant and Expert render alongside.
+- [x] Surfaced on `/resource-planning` above the heatmap, honouring the 4/6/8/12-week selector.
+- [x] Non-submitters counted and shown, so the figure is not read as complete.
+- [x] Contractors and partners excluded on the same basis `computeBandwidthHeatmap` excludes them.
+- [x] Test: fixture people across bands with mixed allocated / unallocated / absent forecasts produce the expected daily and weekly totals.
+- [x] Commit: `feat(TASK-521): analyst hours available per day and week`
+
+**note on completion:** `src/server/band-supply.ts` is a new module rather than another function inside `availability.ts`, which is already 500 lines and was being edited by a parallel session. The daily strip on the card covers the first fortnight — the window a staffing conversation actually happens in — while the weekly row spans the whole selected horizon; a week column is exactly the sum of its days because both read the same `addPersonDay` fold.
+
+Verified: 12 unit tests against a mocked Prisma, covering the allocated / declared / assumed split, the day→week roll-up, explicit rows overriding the standing schedule (including an explicit zero for a day off), silent-person counting, the band and employment filter sent to the DB, and bands rendering empty rather than disappearing. The card itself was rendered against fixture data in an isolated bundle to check layout; it has **not** been seen inside `/resource-planning` because the app can't boot in this checkout.
+
+### TASK-522 — Sync availability from each person's Outlook calendar
+**status:** blocked — needs TT + tenant consent
+**depends on:** TASK-520
+
+**Ask:** *"this ideally would be synced to each individual foundry outlooks"*.
+
+**Two blockers, both real.**
+
+*Consent.* There is no Graph calendar integration today. `src/server/graph.ts` holds an app-credentials client, so the code is cheap — `GET /users/{upn}/calendarView` — but the app permission `Calendars.Read` needs Global Admin consent, and per the Mail.Read precedent it must be narrowed with an Exchange `New-ApplicationAccessPolicy` rather than left tenant-wide. Until that is granted the integration can only be tested against mocks.
+
+*Product.* Three calls, none of which the specs answer:
+
+- [ ] **Q1 — which events reduce availability?** Every `busy` event, only `oof`, or only all-day events. Treating every busy block as unavailable means a 30-minute standup eats forecast hours and the numbers go to nonsense within a week. The usual answer is all-day plus `oof`, but it is TT's call.
+- [ ] **Q2 — does Outlook overwrite a manual forecast, or only fill blanks?** Overwriting means a person's typed figure silently changes after they saved it, which breaks the submission signal `/resource-planning` reads. Fill-blanks-only is safer and makes the sync additive.
+- [ ] **Q3 — one direction or two?** Reading from Outlook is read-only and low-risk. Writing Foundry allocations into people's calendars puts the app in everyone's personal calendar and is a much larger consent conversation.
+
+**acceptance (once answered):**
+- [ ] Graph calendar client behind a `FeatureFlag`, off by default, with the Exchange application access policy documented in `INTEGRATIONS.md`.
+- [ ] Sync never silently overwrites a human-entered forecast (subject to Q2).
+- [ ] Synced days visually distinguishable from typed days, and overridable by the person.
+- [ ] Graph failure degrades to the manual grid — never an empty calendar presented as "you are free".
+- [ ] Commit: `feat(TASK-522): Outlook calendar sync for availability`
 
 ---
 

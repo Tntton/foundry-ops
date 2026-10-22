@@ -12,6 +12,7 @@ import { getMyExpensesRecent } from './get-my-expenses-recent';
 import { listExpenseCategories } from './list-expense-categories';
 import { getActiveRateCardForRole } from './get-active-rate-card-for-role';
 import { prefillTimesheet } from './prefill-timesheet';
+import { prefillAvailability } from './prefill-availability';
 import { prefillExpense } from './prefill-expense';
 import { prefillBill } from './prefill-bill';
 import { prefillInvoice } from './prefill-invoice';
@@ -37,6 +38,7 @@ const ALL_TOOLS: readonly ToolDefinition[] = [
   // widget renders as a card; the form's existing action handles the
   // write. The assistant never bypasses form validation.
   prefillTimesheet,
+  prefillAvailability,
   prefillExpense,
   prefillBill,
   prefillInvoice,

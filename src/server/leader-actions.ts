@@ -27,6 +27,7 @@ export type LeaderPendingAction = {
     | 'expense_approval_queue'
     | 'invoice_approval_queue'
     | 'timesheet_approval_queue'
+    | 'timesheet_month_overdue'
     // Operational signals on projects I lead
     | 'project_stale'
     | 'project_missing_milestones'
@@ -137,7 +138,6 @@ export async function listLeaderPendingActions(
         stage: true,
         startDate: true,
         createdAt: true,
-        milestones: { select: { id: true } },
         timesheetEntries: {
           orderBy: { date: 'desc' as const },
           take: 1,
@@ -176,6 +176,47 @@ export async function listLeaderPendingActions(
         }>),
     listStaffPendingActions(personId),
   ]);
+
+  // Lodged months this viewer is holding up. Scoped the same way as the
+  // approval queue: admins see the firm, leads see their own projects.
+  const overdueMonths: Array<{ personName: string; ageDays: number }> = [];
+  if (isManager || isPartner || isAdmin) {
+    const CHASE_DAYS = 3;
+    const cutoff = new Date(Date.now() - CHASE_DAYS * 24 * 3600 * 1000);
+    const stuck = await prisma.timesheetPeriod.findMany({
+      where: {
+        state: 'lodged',
+        lodgedAt: { not: null, lte: cutoff },
+        person: isAdmin
+          ? undefined
+          : {
+              timesheetEntries: {
+                some: {
+                  status: 'submitted',
+                  project: {
+                    OR: [
+                      { managerId: session.person.id },
+                      { primaryPartnerId: session.person.id },
+                    ],
+                  },
+                },
+              },
+            },
+      },
+      select: {
+        lodgedAt: true,
+        person: { select: { id: true, firstName: true, lastName: true } },
+      },
+      take: 50,
+    });
+    for (const p of stuck) {
+      if (p.person.id === session.person.id) continue; // not your own sheet
+      overdueMonths.push({
+        personName: `${p.person.firstName} ${p.person.lastName}`,
+        ageDays: Math.floor((Date.now() - p.lodgedAt!.getTime()) / 86_400_000),
+      });
+    }
+  }
 
   // ── 1. Approval queues — bills / expenses / invoices ─────────
   if (canApproveBills && billCount > 0) {
@@ -223,10 +264,32 @@ export async function listLeaderPendingActions(
     });
   }
 
+  // ── 2b. Lodged months I'm holding up ─────────────────────────
+  // Sharper than the entry count above: a month blocks the
+  // contractor's INVOICE, not just their timesheet (D2 — a month
+  // closes only when every project in it is approved). Surfaced
+  // separately so an overdue payment doesn't hide inside a generic
+  // "N entries to approve" tally.
+  if (overdueMonths.length > 0) {
+    const names = Array.from(new Set(overdueMonths.map((m) => m.personName)));
+    const oldest = Math.max(...overdueMonths.map((m) => m.ageDays));
+    actions.push({
+      kind: 'timesheet_month_overdue',
+      title: `${overdueMonths.length} lodged ${overdueMonths.length === 1 ? 'month' : 'months'} waiting on you`,
+      detail:
+        `${names.slice(0, 3).join(', ')}${names.length > 3 ? ` +${names.length - 3} more` : ''}` +
+        ` · oldest ${oldest}d. Their invoice can't be raised until the whole month is approved.`,
+      href: '/timesheet/approve',
+      tone: oldest >= 7 ? 'red' : 'amber',
+      count: overdueMonths.length,
+    });
+  }
+
   // ── 3. Project ops gaps on projects I lead ───────────────────
   // Stale = no timesheet activity in 14d for an active project,
-  // and the project is >14d old (skip fresh ones). Missing
-  // milestones = kickoff stage > 14d old with zero milestones.
+  // and the project is >14d old (skip fresh ones). Milestones are
+  // no longer a requirement here — a kickoff project without
+  // milestones set is not a dashboard action to clear.
   const TWO_WEEKS_MS = 14 * 24 * 3600 * 1000;
   const now = Date.now();
   for (const p of projectsILead) {
@@ -248,41 +311,17 @@ export async function listLeaderPendingActions(
         tone: days >= 30 ? 'red' : 'amber',
       });
     }
-    // Missing milestones on kickoff stage.
-    if (p.stage === 'kickoff' && p.milestones.length === 0) {
-      actions.push({
-        kind: 'project_missing_milestones',
-        title: `${p.code} — no milestones set`,
-        detail: `${p.name} kicked off but hasn't been broken into deliverables yet.`,
-        href: `/projects/${p.code}?tab=milestones`,
-        tone: 'amber',
-      });
-    }
   }
 
   // ── 4. Invoice-to-draft suggestions (partner+) ───────────────
   // (suggestions list already fetched above — use the count for the tile badge.)
   const invoicesToDraft = (isAdmin || isPartner || isManager) ? suggestions.length : 0;
 
-  // ── 5. BD pipeline gaps (partner+) ───────────────────────────
-  // Open deals I own with no activity in 14d+ — partner needs to
-  // nudge the conversation along.
+  // ── 5. BD pipeline (partner+) ────────────────────────────────
+  // The open-deal count still feeds the BD quick-action tile, but
+  // stalling alerts are disabled for now — an open deal going quiet
+  // is not surfaced as a dashboard action to clear.
   const myBdDeals = (isPartner || isAdmin) ? myDeals.length : 0;
-  if (isPartner || isAdmin) {
-    for (const d of myDeals) {
-      const lastTouch = d.lastConversationAt ?? d.updatedAt;
-      const ageDays = Math.floor((now - lastTouch.getTime()) / (24 * 3600 * 1000));
-      if (ageDays >= 14) {
-        actions.push({
-          kind: 'deal_stale',
-          title: `${d.code} stalling at ${d.stage} (${ageDays}d quiet)`,
-          detail: `${d.name ?? d.prospectiveName ?? 'Unnamed deal'} — nudge or move stage.`,
-          href: `/bd/${d.id}`,
-          tone: ageDays >= 30 ? 'red' : 'amber',
-        });
-      }
-    }
-  }
 
   // ── 6. Self carry-through ────────────────────────────────────
   // Leaders submit timesheets and expenses too. Reuse the staff

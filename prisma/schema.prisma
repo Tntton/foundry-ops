@@ -190,7 +190,22 @@ enum TimesheetStatus {
   draft
   submitted
   approved
-  billed
+  // `billed` was removed 2026-09-01 (TASK-500). It meant "consumed by a
+  // contractor bill", but because previewInvoiceFromTimesheets filters
+  // status='approved', setting it silently and permanently excluded the
+  // hour from CLIENT invoicing. The two legs are economically
+  // independent — the same hour is a cost at Person.rate and revenue at
+  // Person.billRate — so each leg now carries its own nullable FK:
+  //   AP leg (contractor invoices Foundry) → TimesheetEntry.contractorBillId
+  //   AR leg (Foundry invoices the client) → TimesheetEntry.billedInvoiceId
+  // Never re-add a shared status marker for either.
+}
+
+enum TimesheetPeriodState {
+  open
+  lodged
+  approved
+  invoiced
 }
 
 enum ExpenseStatus {
@@ -490,6 +505,7 @@ model Person {
   managerOfProjects Project[]    @relation("ProjectManager")
   projectTeamMemberships ProjectTeam[]
   timesheetEntries TimesheetEntry[]
+  timesheetPeriods TimesheetPeriod[]
   contractorInvoices ContractorInvoice[]
   expenses         Expense[]
   approvalsRequested Approval[]  @relation("ApprovalRequestedBy")
@@ -873,12 +889,14 @@ model ProjectChecklistItem {
   order        Int      @default(0)
   doneAt       DateTime?
   doneById     String?
+  assigneeId   String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   checklist    ProjectChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
 
   @@index([checklistId])
+  @@index([assigneeId])
 }
 
 model ProjectTeam {
@@ -1018,13 +1036,23 @@ model TimesheetEntry {
   status           TimesheetStatus @default(draft)
   approvedById     String?
   approvedAt       DateTime?
+  /// AR leg — the client Invoice this hour was billed on. Set by
+  /// draftInvoiceFromTimesheets. Independent of `contractorBillId`.
   billedInvoiceId  String?
+  /// AP leg — the contractor Bill this hour was invoiced to Foundry on.
+  /// Set by generateDraftBillFromHours. Independent of
+  /// `billedInvoiceId`: a contractor hour is normally BOTH billed to the
+  /// client (at Person.billRate) and invoiced by the contractor (at
+  /// Person.rate), so neither FK may gate the other's candidate query.
+  /// Null for full-time staff, who are paid via pay runs, never bills.
+  contractorBillId String?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
   person           Person   @relation(fields: [personId], references: [id])
   project          Project  @relation(fields: [projectId], references: [id])
   billedInvoice    Invoice? @relation(fields: [billedInvoiceId], references: [id])
+  contractorBill   Bill?    @relation(fields: [contractorBillId], references: [id])
 
   // One entry per person × project × day. Every writer (web grid,
   // WhatsApp, CSV import, reconcile confirm) upserts on this key so a
@@ -1035,6 +1063,104 @@ model TimesheetEntry {
   @@unique([personId, projectId, date])
   @@index([personId, date])
   @@index([projectId, date])
+  @@index([contractorBillId])
+}
+
+/// A person's calendar month of time, as a single lodgeable unit.
+///
+/// Before TASK-501 "submitted" was only ever a property scattered across N
+/// TimesheetEntry rows, with no object representing the month itself. Every
+/// downstream stage therefore re-derived its own grouping and they all
+/// disagreed — the approval queue grouped by week, the contractor draft-bill
+/// swept all-time, and the client draft-invoice took an arbitrary date range.
+/// This is the missing unit: one row per person × calendar month, which can
+/// be lodged, approved, and invoiced as a whole.
+///
+/// Rows are created lazily on first read of a month (getOrCreateTimesheetPeriod)
+/// — there is no backfill of history. A month with no row is `open` by
+/// definition.
+///
+/// `state` advances open → lodged → approved → invoiced. It never skips
+/// backwards on its own: a send-back from the approval queue explicitly
+/// returns it to `open` (TASK-503).
+model TimesheetPeriod {
+  id               String               @id @default(cuid())
+  personId         String
+  /// Calendar year, e.g. 2026.
+  year             Int
+  /// 1-based month, 1 = January. Matches `monthNumber()` in lib/week.ts.
+  month            Int
+  state            TimesheetPeriodState @default(open)
+  lodgedAt         DateTime?
+  approvedAt       DateTime?
+  invoicedAt       DateTime?
+  /// The contractor Bill raised for this period, once the contractor has
+  /// confirmed it (TASK-504). Null for full-time staff, who are paid via pay
+  /// runs and never invoice, and null until the contractor submits.
+  contractorBillId String?
+
+  // ── Invoice draft snapshot (TASK-504) ─────────────────────────────────
+  // Taken the moment the period closes, NOT when the contractor opens the
+  // confirm screen. Foundry does not issue this invoice — the contractor
+  // does (D1, TT 2026-08-31) — but the numbers they are asked to confirm
+  // must be the ones the approvals actually produced. Without a snapshot,
+  // editing Person.rate between close and confirm would silently reprice a
+  // month that was already signed off.
+  //
+  // Only the rate is frozen. Line grouping is recomputed from the period's
+  // entries at confirm time, which is safe because a closed period's entries
+  // are all `approved` and can no longer move.
+  /// Person.rate in AUD cents at the moment the period closed.
+  draftRateCents        Int?
+  draftHours            Decimal?  @db.Decimal(8, 2)
+  /// hours × rate, ex GST, in AUD cents.
+  draftAmountExGstCents Int?
+  // Expenses passed through on the same invoice (TASK-509). Frozen with the
+  // rate for the same reason: editing an expense between close and confirm
+  // must not reprice a month that was already signed off.
+  //
+  // SUPERSEDED BY D8 (TT 2026-10-23). The columns are unchanged and needed
+  // no migration, but what they MEAN downstream has moved.
+  //
+  // D3/D4 (2026-09-10) were pass-through: the contractor invoiced the full
+  // GST-inclusive amount they paid, added no GST of their own, and Foundry
+  // claimed the input credit. D8 replaced that with a RECHARGE — the
+  // contractor reclaims that GST themselves and bills Foundry the net plus
+  // 10% of their own (see `rechargeExpenseTotals`). D7 also moved expenses
+  // onto their own invoice, separate from the fee invoice.
+  //
+  // The two columns below still record exactly what they always did: what
+  // was PAID, GST-inclusive, and the GST component inside it. The net is
+  // their difference, which is why no migration was needed. What changed is
+  // that the inclusive figure is no longer what Foundry is billed, and the
+  // GST inside it is no longer Foundry's to reclaim.
+  /// Sum of Expense.amount (GST-inclusive) in AUD cents.
+  draftExpenseTotalCents Int?
+  /// GST component contained within draftExpenseTotalCents, in AUD cents.
+  draftExpenseGstCents   Int?
+  draftExpenseCount      Int?
+  draftPreparedAt       DateTime?
+
+  // ── Chase tracking (TASK-506) ─────────────────────────────────────────
+  // D2 closes a month only when every project is approved, which means one
+  // unresponsive approver blocks a contractor's invoice and therefore their
+  // payment. These stamp the nudges so a daily cron chases on an interval
+  // rather than emitting a feed row every single day.
+  /// Last time the owing approvers were nudged about this lodged month.
+  lastChasedAt          DateTime?
+  /// Set once when the chase escalates to the admin tier. Escalation fires
+  /// at most once per lodgement; re-lodging clears it.
+  escalatedAt           DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  person           Person @relation(fields: [personId], references: [id])
+  contractorBill   Bill?  @relation(fields: [contractorBillId], references: [id])
+
+  @@unique([personId, year, month])
+  @@index([state])
+  @@index([year, month])
+  @@index([state, lodgedAt])
 }
 
 /// Historical aggregated contractor cost. Ingested from the FY26
@@ -1115,12 +1241,31 @@ model Expense {
   // tallies. No FK so we don't have to migrate the InvoiceLine model
   // schema in the same step.
   rebilledOnInvoiceId   String?
+  /// AP leg — the contractor Bill this expense was invoiced to Foundry on
+  /// (TASK-509). Set when a contractor confirms their monthly invoice and
+  /// the cost is passed through on it.
+  ///
+  /// Independent of `rebilledOnInvoiceId` (the AR leg), exactly as
+  /// TimesheetEntry's two legs are under TASK-500: a contractor's flight can
+  /// be recharged to Foundry AND rebilled to the client, and neither may
+  /// gate the other.
+  ///
+  /// Once set, the expense LEAVES the reimbursement float — it is being paid
+  /// through the invoice instead, so `/reimbursables` and the pay run must
+  /// both skip it or the same cost goes out twice.
+  ///
+  /// Always null for full-time staff, who are reimbursed via pay runs and
+  /// never invoice.
+  contractorBillId      String?
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
 
   person                Person   @relation(fields: [personId], references: [id])
   project               Project? @relation(fields: [projectId], references: [id])
   parsedByAgentRun      AgentRun? @relation(fields: [parsedByAgentRunId], references: [id])
+  contractorBill        Bill?    @relation(fields: [contractorBillId], references: [id])
+
+  @@index([contractorBillId])
 }
 
 // ============================================================================
@@ -1155,6 +1300,15 @@ model Invoice {
   // detail page and a chip on the listings so partners can see at a
   // glance which approved invoices still need to be issued.
   taxInvoiceFinalisedAt  DateTime?
+  // SharePoint pointer for the archived tax-invoice PDF (TASK-068).
+  // Populated the first time the invoice is finalised while Graph is
+  // configured; the app never stores binary content (A3). Paired
+  // driveItemId lets a future inline-preview proxy stream the PDF, and
+  // taxInvoiceSharepointUrl is the browser-openable webUrl surfaced as
+  // "View in SharePoint". Null for invoices finalised before this wiring
+  // landed, or while Graph was unreachable (retried on next finalise).
+  taxInvoiceSharepointUrl String?
+  taxInvoiceDriveItemId  String?
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
 
@@ -1188,6 +1342,12 @@ model Bill {
   supplierName             String?    // for organisations without a Person row
   supplierInvoiceNumber    String?
   receivedVia              String     // email / upload / manual
+  // Free-text description carried on the document itself (TASK-511, D5).
+  // For a contractor's own invoice this is the personal identifier they
+  // choose to add — their PO, a client ref, an engagement nickname — so it
+  // survives into the AP queue and Xero instead of living only in the audit
+  // trail, which is where `notes` used to stop.
+  description              String?
   originalEmailId          String?    // Graph message ID if parsed by agent
   attachmentSharepointUrl  String?
   // Graph DriveItem id for the vendor-invoice PDF/image uploaded to
@@ -1226,6 +1386,12 @@ model Bill {
   payRun                   PayRun?    @relation(fields: [abaBatchId], references: [id])
   supplier                 Supplier?  @relation(fields: [supplierId], references: [id])
   attributedTo             Person?    @relation("BillAttributedTo", fields: [attributedToPersonId], references: [id])
+  // Hours this bill invoices Foundry for (contractor self-bill path).
+  timesheetEntries         TimesheetEntry[]
+  // The lodgement period(s) this bill was generated from (TASK-501).
+  timesheetPeriods         TimesheetPeriod[]
+  // Pass-through costs invoiced to Foundry on this bill (TASK-509).
+  contractorExpenses       Expense[]
 }
 
 // ============================================================================
@@ -1620,6 +1786,28 @@ model UserPreference {
   updatedAt   DateTime @updatedAt
 }
 
+// Forecast sandbox scenarios (TASK-072). A saved what-if over the firm's
+// book of business — never touches real project data. `adjustments` is a
+// JSON array of per-project overrides:
+//   [{ projectId, included, contractValueCents }]
+// ownerId is a plain Person.id (no FK relation kept intentionally — a
+// scenario is a personal scratchpad, not a referential entity).
+model Scenario {
+  id          String   @id @default(cuid())
+  name        String
+  ownerId     String
+  note        String?
+  adjustments Json     @default("[]")
+  // Hypothetical (not-yet-real) projects added to the scenario (TASK-072b):
+  //   [{ id, name, contractValueCents, marginPct }]
+  // Modelled in the projection but never materialised as real Project rows.
+  hypotheticals Json   @default("[]")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([ownerId, updatedAt])
+}
+
 model FeatureFlag {
   key         String   @id
   enabled     Boolean  @default(false)
@@ -1963,4 +2151,26 @@ model WhatsAppPrefillDispatch {
 
   @@index([completedAt, expiresAt])
   @@index([personId, completedAt])
+}
+
+/// Dry-run cache for the two-step bulk-import flow (parse → preview →
+/// Commit). The parsed+validated preview is stashed here under a random
+/// token bound to the uploader, then re-read on the preview render and on
+/// Commit so the commit never re-trusts the raw CSV.
+///
+/// This replaces a per-process in-memory Map, which silently failed on
+/// Vercel: parse and Commit are separate serverless invocations that can
+/// land on different instances, so the Commit couldn't find the stash and
+/// the user saw "preview expired". A shared table fixes that for every
+/// import surface (personnel, timesheets, bills, expenses). Rows are
+/// short-lived (10-min TTL) and GC'd opportunistically on each write.
+model ImportDryRun {
+  token     String   @id
+  userId    String // Person.id of the uploader — reads are bound to this
+  kind      String // 'personnel' | 'timesheets' | 'bills' | 'expenses'
+  data      Json // the serialised *Preview object (JSON-safe by construction)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
 }

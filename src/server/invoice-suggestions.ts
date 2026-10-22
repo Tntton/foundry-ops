@@ -1,5 +1,6 @@
 import type { ProjectStage } from '@prisma/client';
 import { prisma } from '@/server/db';
+import { isClientProject } from '@/lib/project-kind';
 import { hasAnyRole } from '@/server/roles';
 import type { Session } from '@/server/session';
 
@@ -27,6 +28,10 @@ import type { Session } from '@/server/session';
  * project can surface twice if it has both a delivered milestone AND
  * an overdue one (rare but possible). Caller can dedupe by projectId
  * if they want a one-row-per-project view.
+ *
+ * Scope: client engagements only. Internal FHP projects and expense
+ * buckets never carry a paying client, so they're excluded entirely —
+ * they can't be invoiced (see project-kind.ts).
  *
  * Visibility:
  *   - super_admin / admin: every active project, firm-wide
@@ -152,6 +157,15 @@ export async function listInvoiceSuggestions(
   const suggestions: InvoiceSuggestion[] = [];
 
   for (const p of projects) {
+    // ── 0. Client-project gate ───────────────────────────────────
+    // Internal Foundry Health projects (FHP series) and expense
+    // buckets (FHB000/FHO000/FHX000) have no paying client → no
+    // invoicing (see project-kind.ts). They can still be in an active
+    // stage with no invoice on file, so without this gate an internal
+    // project like FHP004 wrongly surfaces a "no invoice on file yet"
+    // suggestion. Skip anything that isn't a real client engagement.
+    if (!isClientProject(p.code)) continue;
+
     // ── 1+2. Milestone-driven signals ────────────────────────────
     for (const m of p.milestones) {
       if (m.invoiceId) continue; // already invoiced

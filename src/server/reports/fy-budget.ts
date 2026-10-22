@@ -113,7 +113,7 @@ export async function computeFyBudgetActuals(yearEnding: number): Promise<FyBudg
     prisma.timesheetEntry.findMany({
       where: {
         date: { gte: from, lt: to },
-        status: { in: ['approved', 'billed'] },
+        status: 'approved',
       },
       select: {
         hours: true,

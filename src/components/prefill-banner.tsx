@@ -25,8 +25,9 @@ export function PrefillBanner({
   cleanUrl: string;
   /** Optional list of entries that couldn't be applied (e.g. wrong
    *  week, unknown code). Surfaces inline so the user knows the
-   *  prefill was partial. */
-  ignored?: ReadonlyArray<{ projectCode: string; dateIso: string; reason: string }>;
+   *  prefill was partial. `projectCode` is omitted for surfaces with no
+   *  project (e.g. availability). */
+  ignored?: ReadonlyArray<{ projectCode?: string; dateIso: string; reason: string }>;
 }) {
   const [dismissed, setDismissed] = useState(false);
   if (dismissed) return null;
@@ -65,14 +66,17 @@ export function PrefillBanner({
         <ul className="ml-5 list-disc text-[11px] text-status-amber">
           {ignored.map((i, idx) => (
             <li key={idx}>
-              Skipped <code>{i.projectCode}</code> {i.dateIso} —{' '}
+              Skipped {i.projectCode ? <code>{i.projectCode}</code> : null}{' '}
+              {i.dateIso} —{' '}
               {i.reason === 'unknown_project'
                 ? 'unknown project code'
                 : i.reason === 'outside_visible_range'
                   ? 'date outside the visible week'
-                  : i.reason === 'locked_row'
-                    ? 'row already approved / billed'
-                    : i.reason}
+                  : i.reason === 'outside_horizon'
+                    ? 'date outside the 8-week horizon'
+                    : i.reason === 'locked_row'
+                      ? 'row already approved / billed'
+                      : i.reason}
             </li>
           ))}
         </ul>

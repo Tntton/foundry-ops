@@ -27,7 +27,12 @@
     /* Brand — muted green (healthcare consultancy feel) */
     --brand: #688b71;
     --brand-2: #7a9e84;
-    --brand-ink: #48695a;
+    /* Text/icon colour for content sitting ON the brand green. White,
+       not a darker green — dark-green-on-green failed contrast and made
+       button labels ("Submit feedback" etc.) hard to read. Every
+       `text-brand-ink` usage is paired with `bg-brand`, so white is
+       always the on-brand foreground. */
+    --brand-ink: #ffffff;
     --brand-soft: #e3ece5;
 
     /* Gold accent */

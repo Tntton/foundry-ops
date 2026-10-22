@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { prisma } from '@/server/db';
+import { tryDecryptText } from '@/server/crypto';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -129,7 +130,7 @@ export default async function MyProfilePage() {
   const lifetimeBillableAgg = await prisma.timesheetEntry.aggregate({
     where: {
       personId: me.id,
-      status: { in: ['approved', 'billed'] },
+      status: 'approved',
       billedInvoiceId: { not: null },
     },
     _sum: { hours: true },
@@ -163,7 +164,7 @@ export default async function MyProfilePage() {
     if (!wk) continue;
     const hours = Number(e.hours);
     wk.hoursTotal += hours;
-    if (e.status === 'approved' || e.status === 'billed') {
+    if (e.status === 'approved') {
       wk.hoursBillable += hours;
     }
   }
@@ -601,10 +602,13 @@ export default async function MyProfilePage() {
               bankCountry: me.bankCountry,
               bankAccountName: me.bankAccountName,
               bankName: me.bankName,
-              bankBsb: me.bankBsb,
-              bankAcc: me.bankAcc,
-              bankSwift: me.bankSwift,
-              bankIban: me.bankIban,
+              // Bank identifiers are stored encrypted — decrypt for the
+              // owner's own prefill (tryDecryptText passes through any
+              // legacy plaintext row unchanged during the migration window).
+              bankBsb: tryDecryptText(me.bankBsb),
+              bankAcc: tryDecryptText(me.bankAcc),
+              bankSwift: tryDecryptText(me.bankSwift),
+              bankIban: tryDecryptText(me.bankIban),
             }}
           />
         </CardContent>

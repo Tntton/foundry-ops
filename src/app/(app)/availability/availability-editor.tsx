@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import {
   submitAvailabilityForecast,
   type AvailabilityFormState,
 } from './availability-action';
 import { Button } from '@/components/ui/button';
+import { AvailabilityCalendar } from './availability-calendar';
+import { applyMove, applyPaint, type Brush } from './availability-brush';
 
 export type AvailabilityDayInput = {
   dateIso: string; // YYYY-MM-DD
@@ -104,6 +106,10 @@ export function AvailabilityEditor({
   const [state, setState] = useState<AvailabilityFormState>({ status: 'idle' });
   // Bulk-fill project selection (the one-shot "fill all weeks" control).
   const [bulkProjectCode, setBulkProjectCode] = useState<string>('');
+  // Calendar is the default view (per TT, 2026-10-23). Grid keeps the
+  // real number inputs — both drive this same state and the one Save,
+  // so switching views never drops an unsaved edit.
+  const [view, setView] = useState<'calendar' | 'grid'>('calendar');
 
   const dailyCapacityPlaceholder =
     weeklyCapacityHours > 0 ? Math.round(weeklyCapacityHours / 5) : 0;
@@ -158,6 +164,47 @@ export function AvailabilityEditor({
   function setCellProject(dateIso: string, code: string) {
     touch();
     setCellProjectCode((prev) => ({ ...prev, [dateIso]: code }));
+  }
+
+  // Live mirrors of the two cell maps. A drag commits from a window
+  // listener that may have been registered several renders ago, so the
+  // paint and move transforms read the refs rather than the closed-over
+  // state — otherwise a mid-drag re-render makes the commit overwrite
+  // edits that landed after the drag began.
+  const hoursRef = useRef(hours);
+  hoursRef.current = hours;
+  const projectsRef = useRef(cellProjectCode);
+  projectsRef.current = cellProjectCode;
+
+  /**
+   * Calendar drag-to-paint. Writes the same hours + project the grid
+   * writes, across a run of days in one gesture. The transform itself
+   * lives in `availability-brush` so it can be tested without a DOM.
+   */
+  function paintDays(dateIsos: string[], brush: Brush) {
+    if (dateIsos.length === 0) return;
+    touch();
+    const next = applyPaint(
+      { hours: hoursRef.current, projects: projectsRef.current },
+      dateIsos,
+      brush,
+    );
+    setHours(next.hours);
+    setCellProjectCode(next.projects);
+  }
+
+  /** Calendar drag-to-move: the target day takes the source day's
+   *  hours and project, and the source clears. */
+  function moveDay(fromIso: string, toIso: string) {
+    if (fromIso === toIso) return;
+    touch();
+    const next = applyMove(
+      { hours: hoursRef.current, projects: projectsRef.current },
+      fromIso,
+      toIso,
+    );
+    setHours(next.hours);
+    setCellProjectCode(next.projects);
   }
 
   /**
@@ -387,12 +434,24 @@ export function AvailabilityEditor({
               : `${targetFirstName}'s availability · next ${weeks.length} weeks`}
           </h3>
           <p className="text-[11px] text-ink-3">
-            Hours you expect to work each day, or type a weekly total
+            {view === 'calendar' ? (
+              <>
+                Set the brush to the hours and project you want, then drag
+                across the days that match. Drag an existing block onto
+                another day to move it. Switch to{' '}
+                <span className="font-medium text-ink-2">Grid</span> to type
+                hours per day or fan out a weekly total.
+              </>
+            ) : (
+              <>
+                Hours you expect to work each day, or type a weekly total
             in the right-hand column and we&apos;ll fan it out across
             Mon-Fri. Under each day, tag the hours to a specific project
             code or leave them as <span className="font-medium text-ink-2">Free</span> so
             resource planning can see spare bandwidth to allocate. One
-            short week note for context (OOO, onsite, conference, etc).
+                short week note for context (OOO, onsite, conference, etc).
+              </>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -422,6 +481,23 @@ export function AvailabilityEditor({
               </Button>
             </div>
           )}
+          <div className="flex items-center rounded-md border border-line bg-surface-elev p-0.5">
+            {(['calendar', 'grid'] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setView(v)}
+                aria-pressed={view === v}
+                className={`h-6 rounded px-2 text-[11px] capitalize ${
+                  view === v
+                    ? 'bg-brand-soft font-medium text-brand'
+                    : 'text-ink-3 hover:text-ink-2'
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
           <Button type="button" size="sm" variant="ghost" onClick={clearAll}>
             Clear
           </Button>
@@ -431,6 +507,21 @@ export function AvailabilityEditor({
         </div>
       </div>
 
+      {view === 'calendar' ? (
+        <AvailabilityCalendar
+          cells={initialCells}
+          weeks={weeks}
+          hours={hours}
+          projectCodes={cellProjectCode}
+          allocatableProjects={allocatableProjects}
+          dailyCapacityPlaceholder={dailyCapacityPlaceholder}
+          todayIso={todayIso}
+          weekNotes={weekNotes}
+          onWeekNote={setWeekNote}
+          onPaint={paintDays}
+          onMove={moveDay}
+        />
+      ) : (
       <div className="overflow-x-auto">
         <table className="w-full min-w-[860px] border-collapse text-sm">
           <thead>
@@ -607,6 +698,7 @@ export function AvailabilityEditor({
           </tbody>
         </table>
       </div>
+      )}
 
       <div className="flex flex-wrap items-center justify-end gap-2">
         {state.status === 'error' && (

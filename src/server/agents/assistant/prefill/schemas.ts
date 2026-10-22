@@ -25,6 +25,28 @@ export const TimesheetPrefillSchema = z.object({
 
 export type TimesheetPrefillPayload = z.infer<typeof TimesheetPrefillSchema>;
 
+// Availability forecast prefill. Mirrors the timesheet shape minus the
+// project code — availability hours are "spare bandwidth" the resource-
+// planning team allocates later, so a prefill just declares per-day
+// expected hours. The AvailabilityForecast.hours column is an integer,
+// so hours are whole numbers (0 = explicitly off/available-but-nothing).
+// Up to 56 rows (8 editable weeks × 7 days).
+export const AvailabilityPrefillSchema = z.object({
+  entries: z
+    .array(
+      z.object({
+        dateIso: isoDate,
+        hours: z.coerce.number().int().min(0).max(24),
+      }),
+    )
+    .min(1)
+    .max(56),
+});
+
+export type AvailabilityPrefillPayload = z.infer<
+  typeof AvailabilityPrefillSchema
+>;
+
 export const ExpensePrefillSchema = z.object({
   dateIso: isoDate,
   amountDollars: z.coerce.number().positive().max(999_999.99),

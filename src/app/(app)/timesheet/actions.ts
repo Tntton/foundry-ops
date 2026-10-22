@@ -9,8 +9,27 @@ import { requireCapability } from '@/server/capabilities';
 import { hasAnyRole } from '@/server/roles';
 import { writeAudit, computeDelta } from '@/server/audit';
 import { emitUserUpdateMany } from '@/server/user-updates';
-import { addDays, parseIsoDate, startOfWeek, todayInFirmTz } from '@/lib/week';
+import {
+  addDays,
+  daysInMonth,
+  formatMonthLabel,
+  monthStartFrom,
+  parseIsoDate,
+  startOfWeek,
+  todayInFirmTz,
+} from '@/lib/week';
 import { revalidateScheduleSurfaces } from '@/server/revalidate-schedule';
+import {
+  isBilledEitherLeg,
+  monthKeysFor,
+  partitionDecisionBatch,
+  preflightLodgeMonth,
+  reconcileTimesheetPeriodStates,
+  resolveAutoApproveProjectIds,
+  type ClosedPeriod,
+  type LodgeWarning,
+  type MonthKey,
+} from '@/server/timesheet';
 
 // Snap hours to the nearest 0.5 — the granularity the timesheet grid uses.
 // Users typing odd values (e.g. 0.65) get auto-rounded; legacy 0.25-step
@@ -78,7 +97,9 @@ export async function saveTimesheet(
   // are all blocked uniformly.
   const targetState = await prisma.person.findUnique({
     where: { id: targetPersonId },
-    select: { inactiveAt: true, endDate: true },
+    // firstName / lastName come along for the ride so the approval
+    // notice below can name the submitter without a second read.
+    select: { inactiveAt: true, endDate: true, firstName: true, lastName: true },
   });
   if (!targetState) {
     return { status: 'error', message: 'Person not found' };
@@ -175,7 +196,18 @@ export async function saveTimesheet(
             projectId: { in: projectIdsInScope },
             date: { gte: rangeStart, lt: rangeEndDate },
           },
-          select: { id: true, projectId: true, date: true, status: true },
+          select: {
+            id: true,
+            projectId: true,
+            date: true,
+            status: true,
+            // Both billing legs — the delete guard below must refuse to
+            // remove an hour that is already on a client invoice or a
+            // contractor bill. Pre-TASK-500 this read status==='billed',
+            // which only ever covered the contractor leg.
+            billedInvoiceId: true,
+            contractorBillId: true,
+          },
         }),
     // Project leadership lookup — needed to (a) gate non-admin on-behalf
     // saves to projects the manager actually leads, and (b) decide which
@@ -228,35 +260,44 @@ export async function saveTimesheet(
   // (TT 2026-06-16) — late hours on a wrapped engagement should never
   // skip the queue, even for super-admin self-saves. The project is
   // closed; the manager needs a chance to challenge the entry.
-  const autoApproveProjectIds = new Set<string>();
-  const nonArchivedProjects = projectManagers.filter((p) => p.stage !== 'archived');
-  if (isSuperAdmin) {
-    for (const p of nonArchivedProjects) autoApproveProjectIds.add(p.id);
-  } else if (actingOnBehalf) {
-    for (const p of nonArchivedProjects) {
-      if (
-        isAdminGroup ||
-        p.managerId === session.person.id ||
-        p.primaryPartnerId === session.person.id
-      ) {
-        autoApproveProjectIds.add(p.id);
-      }
-    }
-  }
+  const autoApproveProjectIds = resolveAutoApproveProjectIds({
+    isSuperAdmin,
+    isAdminGroup,
+    actingOnBehalf,
+    actorPersonId: session.person.id,
+    projects: projectManagers,
+  });
   const autoApproveStamp = new Date();
   const autoApprovedEntryRefs: string[] = [];
+  // What this save actually parks in the approval queue. Only rows that
+  // land as `submitted` count — auto-approved rows skip the queue, and
+  // locked (approved / billed) rows never re-enter it. Drives the
+  // approver notification at the end of the function: no submitted
+  // rows, no ping.
+  const pendingApproval = {
+    entryCount: 0,
+    hours: 0,
+    projectIds: new Set<string>(),
+  };
   const teamProjectIds = new Set(existingTeamRows.map((r) => r.projectId));
   // Map keyed by `${projectId}|YYYY-MM-DD` so the loop below is O(1).
   const existingByKey = new Map<
     string,
     {
       id: string;
-      status: 'draft' | 'submitted' | 'approved' | 'billed';
+      status: 'draft' | 'submitted' | 'approved';
+      billedInvoiceId: string | null;
+      contractorBillId: string | null;
     }
   >();
   for (const e of existingEntries) {
     const dayKey = e.date.toISOString().slice(0, 10);
-    existingByKey.set(`${e.projectId}|${dayKey}`, { id: e.id, status: e.status });
+    existingByKey.set(`${e.projectId}|${dayKey}`, {
+      id: e.id,
+      status: e.status,
+      billedInvoiceId: e.billedInvoiceId,
+      contractorBillId: e.contractorBillId,
+    });
   }
   const autoAddedProjects: string[] = [];
   const overriddenLockedEntries: string[] = [];
@@ -305,16 +346,19 @@ export async function saveTimesheet(
           ops.push(
             prisma.timesheetEntry.delete({ where: { id: existing.id } }),
           );
-        } else if (existing && isSuperAdmin && existing.status !== 'billed') {
-          // Super-admin clearing a non-billed approved entry — convert to a
-          // 0-hour deletion so it stops counting in P&L.
+        } else if (existing && isSuperAdmin && !isBilledEitherLeg(existing)) {
+          // Super-admin clearing an approved-but-unbilled entry — convert to
+          // a 0-hour deletion so it stops counting in P&L. Guarding on both
+          // legs is wider than the old status!=='billed' check, which missed
+          // hours already on a CLIENT invoice (that leg never touched status).
           ops.push(
             prisma.timesheetEntry.delete({ where: { id: existing.id } }),
           );
           overriddenLockedEntries.push(existing.id);
         }
         // Billed entries with 0 hours are left alone — they're historical
-        // record + already invoiced. Editing those needs a manual void.
+        // record + already invoiced on one or both legs. Editing those needs
+        // a manual void of the invoice / bill first.
         continue;
       }
 
@@ -322,16 +366,22 @@ export async function saveTimesheet(
       const willAutoApprove = autoApproveProjectIds.has(row.projectId);
       const nextStatus = willAutoApprove ? 'approved' : baseStatus;
       if (existing) {
-        const isLocked =
-          existing.status === 'approved' || existing.status === 'billed';
+        // Billed hours are always `approved` (billing never changes status
+        // post-TASK-500), so the approved check covers both.
+        const isLocked = existing.status === 'approved';
         if (isLocked && !isSuperAdmin) continue;
         // Status decisions on existing rows:
-        //   - billed → preserve (super-admin override edits hours only)
-        //   - approved → preserve (don't replace the original approver/time)
+        //   - approved (incl. billed) → preserve (don't replace the original
+        //     approver / timestamp; a super-admin override edits hours only)
         //   - draft / submitted → promote to nextStatus (which is 'approved'
         //     when auto-approve is on, else baseStatus)
         const statusToSet = isLocked ? existing.status : nextStatus;
         if (isLocked) overriddenLockedEntries.push(existing.id);
+        if (statusToSet === 'submitted') {
+          pendingApproval.entryCount += 1;
+          pendingApproval.hours += hours;
+          pendingApproval.projectIds.add(row.projectId);
+        }
         const wasNotYetApproved =
           existing.status === 'draft' || existing.status === 'submitted';
         const stampApproval = willAutoApprove && wasNotYetApproved;
@@ -354,6 +404,11 @@ export async function saveTimesheet(
         );
       } else {
         const stampApproval = willAutoApprove;
+        if (nextStatus === 'submitted') {
+          pendingApproval.entryCount += 1;
+          pendingApproval.hours += hours;
+          pendingApproval.projectIds.add(row.projectId);
+        }
         if (stampApproval) {
           autoApprovedEntryRefs.push(
             `${row.projectId}|${date.toISOString().slice(0, 10)}`,
@@ -462,6 +517,64 @@ export async function saveTimesheet(
   // interactive form.
   void writeAudit;
 
+  // ── Tell the approvers there's something to approve ──────────────────
+  // Submitting used to be silent: the rows landed in `submitted` and sat
+  // there until someone happened to open /timesheet/approve. Resolve the
+  // approver pool now (a read, before the tx) and write the feed rows
+  // inside the same batch so the notice can't get out of sync with the
+  // submission. The WhatsApp DM fires after the commit.
+  const submitterName = `${targetState.firstName} ${targetState.lastName}`;
+  const weekLabel = rangeStart.toLocaleDateString('en-AU');
+  const approverIds: string[] = [];
+  if (intent === 'submit' && pendingApproval.entryCount > 0) {
+    // Who can decide these rows: the admin pool sees every submission
+    // (mirrors listPendingTimesheetEntriesForApprover), plus the manager
+    // / primary partner of each project the hours landed on.
+    const leadIds = new Set<string>();
+    for (const projectId of pendingApproval.projectIds) {
+      const meta = projectMetaById.get(projectId);
+      if (meta?.managerId) leadIds.add(meta.managerId);
+      if (meta?.primaryPartnerId) leadIds.add(meta.primaryPartnerId);
+    }
+    const pool = await prisma.person.findMany({
+      where: {
+        endDate: null,
+        inactiveAt: null,
+        OR: [
+          { roles: { hasSome: ['super_admin', 'admin'] } },
+          { id: { in: Array.from(leadIds) } },
+        ],
+      },
+      select: { id: true },
+    });
+    for (const p of pool) {
+      // Never ping the submitter about their own submission, and never
+      // ping the actor for an on-behalf save — they just did it.
+      if (p.id === targetPersonId || p.id === session.person.id) continue;
+      approverIds.push(p.id);
+    }
+    if (approverIds.length > 0) {
+      const entryLabel = `${pendingApproval.entryCount} ${
+        pendingApproval.entryCount === 1 ? 'entry' : 'entries'
+      }`;
+      ops.push(
+        prisma.userUpdate.createMany({
+          data: approverIds.map((personId) => ({
+            personId,
+            kind: 'approval_requested' as const,
+            title: `Timesheet awaiting your approval (${pendingApproval.hours.toFixed(1)}h)`,
+            body:
+              `${submitterName} submitted ${entryLabel} · ` +
+              `${pendingApproval.hours.toFixed(1)}h for the week of ${weekLabel}.`,
+            href: '/timesheet/approve',
+            entityType: 'timesheet_entry',
+            entityId: null,
+          })),
+        }),
+      );
+    }
+  }
+
   try {
     await prisma.$transaction(ops);
   } catch (err) {
@@ -482,7 +595,32 @@ export async function saveTimesheet(
   // dynamic rendering; the firm-wide and person-level paths are the
   // ones currently held by the user's router cache.
   revalidatePath('/timesheet/approve');
+  revalidatePath('/updates');
   revalidateScheduleSurfaces({ personId: targetPersonId });
+
+  // WhatsApp side-channel to the approvers — best-effort, never awaited,
+  // never allowed to fail the save. Deduped 18h on identical body inside
+  // sendTimesheetApprovalQueueNotice, so re-submitting the same week
+  // doesn't re-ping.
+  if (approverIds.length > 0) {
+    void (async () => {
+      try {
+        const { sendTimesheetApprovalQueueNotice } = await import(
+          '@/server/integrations/whatsapp-prompts'
+        );
+        await sendTimesheetApprovalQueueNotice({
+          approverIds,
+          submitterName,
+          entryCount: pendingApproval.entryCount,
+          totalHours: pendingApproval.hours,
+          weekLabel,
+        });
+      } catch (err) {
+        console.error('[timesheet.save] approver whatsapp notice failed:', err);
+      }
+    })();
+  }
+
   const parts: string[] = [];
   if (autoApprovedEntryRefs.length > 0) {
     parts.push(
@@ -698,7 +836,7 @@ export async function recallSubmittedTimesheet(
     select: { id: true, status: true },
   });
   const submittedIds = inScope.filter((e) => e.status === 'submitted').map((e) => e.id);
-  const blocked = inScope.filter((e) => e.status === 'approved' || e.status === 'billed');
+  const blocked = inScope.filter((e) => e.status === 'approved');
 
   if (submittedIds.length === 0) {
     if (blocked.length > 0) {
@@ -710,11 +848,35 @@ export async function recallSubmittedTimesheet(
     return { status: 'error', message: 'Nothing to recall — no submitted entries here.' };
   }
 
+  // Recalling hours out of a lodged month un-lodges that month: the period
+  // no longer represents a complete submission, and leaving it `lodged`
+  // would let TASK-504 raise an invoice over hours that are back in draft.
+  // A recall can straddle two months (the range is caller-supplied), so
+  // reopen every month it touches, not just the range's first.
+  const touchedMonths = new Map<string, { year: number; month: number }>();
+  for (let i = 0; i < dayCount; i += 1) {
+    const d = addDays(rangeStart, i);
+    const year = d.getUTCFullYear();
+    const month = d.getUTCMonth() + 1;
+    touchedMonths.set(`${year}-${month}`, { year, month });
+  }
+
   try {
     await prisma.$transaction(async (tx) => {
       await tx.timesheetEntry.updateMany({
         where: { id: { in: submittedIds } },
         data: { status: 'draft', approvedById: null, approvedAt: null },
+      });
+      // Only reopen a month that is actually `lodged` — an `approved` or
+      // `invoiced` period can't contain submitted entries in the first
+      // place, and must never be silently reopened by a recall.
+      await tx.timesheetPeriod.updateMany({
+        where: {
+          personId: targetPersonId,
+          state: 'lodged',
+          OR: Array.from(touchedMonths.values()),
+        },
+        data: { state: 'open', lodgedAt: null },
       });
       await writeAudit(tx, {
         actor: { type: 'person', id: session.person.id },
@@ -728,6 +890,9 @@ export async function recallSubmittedTimesheet(
             entryIds: submittedIds,
             byPersonId: targetPersonId,
             actingOnBehalf: targetPersonId !== session.person.id,
+            reopenedPeriods: Array.from(touchedMonths.values()).map(
+              (m) => `${m.year}-${String(m.month).padStart(2, '0')}`,
+            ),
           },
         },
         source: 'web',
@@ -778,20 +943,72 @@ export async function decideTimesheetEntries(
     return { status: 'error', message: 'Note required on reject' };
   }
 
-  const entries = await prisma.timesheetEntry.findMany({
-    where: { id: { in: parsed.data.entryIds }, status: 'submitted' },
-    include: { project: { select: { managerId: true } } },
+  // Load the requested rows WITHOUT a status filter so we can tell
+  // "already decided" apart from "doesn't exist". The old code required
+  // an exact status:'submitted' match on every id and bailed out of the
+  // whole batch otherwise — which is what left decided entries visibly
+  // stuck in the queue: any stale id (recalled by the submitter, or
+  // approved from the person's own sheet / another tab) failed the
+  // entire decision, so nothing moved and the card stayed put.
+  const requested = await prisma.timesheetEntry.findMany({
+    where: { id: { in: parsed.data.entryIds } },
+    include: { project: { select: { code: true, managerId: true } } },
   });
-  if (entries.length !== parsed.data.entryIds.length) {
-    return { status: 'error', message: 'Some entries already decided or missing.' };
-  }
-  const canDecideAll = session.person.roles.includes('super_admin') || session.person.roles.includes('admin');
+  const {
+    decidable: entries,
+    alreadyDecided,
+    missingCount,
+  } = partitionDecisionBatch(parsed.data.entryIds, requested);
+
+  const canDecideAll =
+    session.person.roles.includes('super_admin') || session.person.roles.includes('admin');
   if (!canDecideAll) {
     const unauthorised = entries.some((e) => e.project.managerId !== session.person.id);
     if (unauthorised) return { status: 'error', message: 'Not the manager for some of these.' };
   }
 
   const { decision, note } = parsed.data;
+
+  // Nothing left to decide — the queue the user was looking at was
+  // stale. Revalidate so the rows disappear instead of hanging around,
+  // and say so plainly rather than throwing an error at them.
+  if (entries.length === 0) {
+    revalidateAfterTimesheetDecision(
+      Array.from(new Set(alreadyDecided.map((e) => e.personId))),
+    );
+    return {
+      status: 'success',
+      message:
+        alreadyDecided.length > 0
+          ? `Already decided — ${alreadyDecided.length} ${
+              alreadyDecided.length === 1 ? 'entry was' : 'entries were'
+            } actioned elsewhere. Queue refreshed.`
+          : 'Those entries no longer exist. Queue refreshed.',
+    };
+  }
+
+  // Per-person roll-up for the feed + WhatsApp notices, computed before
+  // the tx so the notifier doesn't have to re-read.
+  const byPerson = new Map<string, { count: number; hours: number }>();
+  for (const e of entries) {
+    const cur = byPerson.get(e.personId) ?? { count: 0, hours: 0 };
+    cur.count += 1;
+    cur.hours += Number(e.hours);
+    byPerson.set(e.personId, cur);
+  }
+  const approverName = `${session.person.firstName} ${session.person.lastName}`;
+
+  // Which person-months this decision touches, so the period roll-up can be
+  // re-derived from the entries afterwards rather than guessed at from the
+  // decision itself.
+  const monthsByPerson = new Map<string, MonthKey[]>();
+  for (const e of entries) {
+    const existing = monthsByPerson.get(e.personId) ?? [];
+    monthsByPerson.set(e.personId, [...existing, ...monthKeysFor([e.date])]);
+  }
+
+  const decidedAt = new Date();
+  const closedPeriods: ClosedPeriod[] = [];
   try {
     await prisma.$transaction(async (tx) => {
       for (const entry of entries) {
@@ -802,7 +1019,7 @@ export async function decideTimesheetEntries(
               ? {
                   status: 'approved',
                   approvedById: session.person.id,
-                  approvedAt: new Date(),
+                  approvedAt: decidedAt,
                 }
               : {
                   status: 'draft',
@@ -823,24 +1040,72 @@ export async function decideTimesheetEntries(
         });
       }
 
+      // Roll the period up from the entries now in the month. A month only
+      // closes when EVERY entry in it is approved (D2) — one manager
+      // clearing their slice of a three-project month leaves it lodged.
+      for (const [personId, months] of monthsByPerson) {
+        const justClosed = await reconcileTimesheetPeriodStates(tx, personId, monthKeysFor(
+          months.map((m) => monthStartFrom(m.year, m.month)),
+        ), decidedAt);
+        closedPeriods.push(...justClosed);
+      }
+
+      // A closed month is the contractor's cue to invoice. Foundry doesn't
+      // issue it for them (D1) — this tells them a pre-filled draft is
+      // waiting at /me/invoices for them to check and submit.
+      for (const closed of closedPeriods) {
+        if (!closed.draft) continue; // full-time, or no rate / hours on file
+        await emitUserUpdateMany(tx, [closed.personId], {
+          kind: 'timesheet_approved',
+          title: `${closed.monthLabel} approved — your invoice is ready to confirm`,
+          body:
+            `All ${closed.draft.hours.toFixed(1)}h approved. We've pre-filled an invoice for ` +
+            `$${(closed.draft.amountExGstCents / 100).toFixed(2)} ex GST at ` +
+            `$${(closed.draft.rateCents / 100).toFixed(2)}/h. Add your invoice number and submit it.`,
+          href: '/me/invoices',
+          entityType: 'timesheet_period',
+          entityId: null,
+        });
+        await writeAudit(tx, {
+          actor: { type: 'person', id: session.person.id },
+          action: 'invoice_draft_prepared',
+          entity: {
+            type: 'timesheet_period',
+            id: `${closed.personId}:${closed.year}-${String(closed.month).padStart(2, '0')}`,
+            after: {
+              rateCents: closed.draft.rateCents,
+              hours: closed.draft.hours,
+              amountExGstCents: closed.draft.amountExGstCents,
+              awaitingContractorConfirmation: true,
+            },
+          },
+          source: 'web',
+        });
+      }
+
       // Per-person feed: notify the submitters that their timesheet
       // entries were approved / rejected. We collapse multi-entry
       // decisions into a single feed item per person — managers
       // typically approve a whole week at once and it'd be noisy to
-      // emit 7 rows.
-      const byPerson = new Map<string, number>();
-      for (const e of entries) {
-        if (e.personId === session.person.id) continue; // skip self
-        byPerson.set(e.personId, (byPerson.get(e.personId) ?? 0) + 1);
-      }
-      for (const [personId, count] of byPerson) {
+      // emit 7 rows. Body names the approver + the hours so the
+      // submitter can reconcile it against their own sheet without
+      // opening anything.
+      for (const [personId, roll] of byPerson) {
+        if (personId === session.person.id) continue; // skip self
+        const entryLabel = `${roll.count} ${roll.count === 1 ? 'entry' : 'entries'}`;
+        const bodyParts = [
+          decision === 'approved'
+            ? `Approved by ${approverName} · ${entryLabel} · ${roll.hours.toFixed(1)}h now posted to project P&L.`
+            : `Sent back by ${approverName} · ${entryLabel} · ${roll.hours.toFixed(1)}h returned to draft for you to fix and resubmit.`,
+        ];
+        if (note) bodyParts.push(decision === 'approved' ? `Note: ${note}` : `Reason: ${note}`);
         await emitUserUpdateMany(tx, [personId], {
           kind: decision === 'approved' ? 'timesheet_approved' : 'timesheet_rejected',
           title:
             decision === 'approved'
-              ? `Your timesheet was approved (${count} ${count === 1 ? 'entry' : 'entries'})`
-              : `Your timesheet was sent back (${count} ${count === 1 ? 'entry' : 'entries'})`,
-          body: note ?? null,
+              ? `Your timesheet was approved (${roll.hours.toFixed(1)}h)`
+              : `Your timesheet was sent back (${roll.hours.toFixed(1)}h)`,
+          body: bodyParts.join(' '),
           href: '/timesheet',
           entityType: 'timesheet_entry',
           entityId: null,
@@ -852,9 +1117,541 @@ export async function decideTimesheetEntries(
     return { status: 'error', message: 'Decision failed — try again.' };
   }
 
-  revalidatePath('/timesheet/approve');
+  // Every surface that counts pending / approved hours has to move, not
+  // just the queue page: the dashboard leader-action strip ("N timesheet
+  // entries to approve"), the submitter's own /timesheet, utilisation,
+  // resource planning and the person profile. Missing these is why an
+  // approved entry appeared to hang around after the decision landed.
+  revalidateAfterTimesheetDecision(Array.from(byPerson.keys()));
+
+  // WhatsApp side-channel to the submitters — best-effort, fired after
+  // the tx commits and deliberately not awaited. The in-app feed item
+  // above is the source of truth; a Meta outage must never surface as
+  // a failed approval.
+  // Contractors whose month just closed get a second, different nudge: not
+  // "your hours were approved" but "your invoice is waiting". Best-effort,
+  // never awaited — a Meta outage must not fail an approval.
+  if (closedPeriods.some((c) => c.draft)) {
+    void (async () => {
+      const { sendContractorInvoiceReadyNotice } = await import(
+        '@/server/integrations/whatsapp-prompts'
+      );
+      for (const closed of closedPeriods) {
+        if (!closed.draft) continue;
+        try {
+          await sendContractorInvoiceReadyNotice({
+            personId: closed.personId,
+            monthLabel: closed.monthLabel,
+            hours: closed.draft.hours,
+            amountExGstCents: closed.draft.amountExGstCents,
+          });
+        } catch (err) {
+          console.error('[timesheet.decide] invoice-ready notice failed:', err);
+        }
+      }
+    })();
+  }
+
+  void (async () => {
+    const { sendTimesheetDecisionNotice } = await import(
+      '@/server/integrations/whatsapp-prompts'
+    );
+    for (const [personId, roll] of byPerson) {
+      if (personId === session.person.id) continue;
+      try {
+        await sendTimesheetDecisionNotice({
+          personId,
+          decision,
+          entryCount: roll.count,
+          totalHours: roll.hours,
+          approverName,
+          note,
+        });
+      } catch (err) {
+        console.error('[timesheet.decide] whatsapp notice failed for', personId, err);
+      }
+    }
+  })();
+
+  const skipped = alreadyDecided.length + missingCount;
+  const verb = decision === 'approved' ? 'Approved' : 'Sent back';
   return {
     status: 'success',
-    message: `${decision === 'approved' ? 'Approved' : 'Sent back'} ${entries.length} entries.`,
+    message:
+      skipped > 0
+        ? `${verb} ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}. ` +
+          `Skipped ${skipped} already decided elsewhere.`
+        : `${verb} ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}.`,
+  };
+}
+
+/**
+ * Fan out revalidation after a timesheet decision. Kept as one helper so
+ * the "nothing left to decide" early return and the happy path can't
+ * drift apart.
+ */
+function revalidateAfterTimesheetDecision(personIds: string[]): void {
+  revalidatePath('/timesheet/approve');
+  revalidatePath('/updates');
+  if (personIds.length === 0) {
+    revalidateScheduleSurfaces();
+    return;
+  }
+  for (const personId of personIds) {
+    revalidateScheduleSurfaces({ personId });
+  }
+}
+
+// ─── Lodge the month ────────────────────────────────────────────────────────
+
+const LodgeSchema = z.object({
+  targetPersonId: z.string().min(1),
+  year: z.coerce.number().int().min(2000).max(2100),
+  month: z.coerce.number().int().min(1).max(12),
+  /** Set once the lodger has seen and accepted the preflight warnings. */
+  acknowledge: z.boolean(),
+});
+
+export type TimesheetLodgeState =
+  | { status: 'idle' }
+  | { status: 'error'; message: string }
+  /** Preflight found things worth a second look — resubmit with acknowledge. */
+  | { status: 'warn'; message: string; warnings: LodgeWarning[] }
+  | { status: 'success'; message: string };
+
+/**
+ * Lodge a person's whole calendar month for approval.
+ *
+ * One action, one period, one transaction: every `draft` entry in the month
+ * becomes `submitted` (or `approved`, where the shared auto-approve rules
+ * say this writer skips the queue), the TimesheetPeriod moves to `lodged`,
+ * and the approvers are told once about the month rather than once per week.
+ *
+ * Idempotent by design: re-lodging an already-lodged month picks up whatever
+ * was added since and does not re-notify identical content (the 18h dedupe in
+ * sendTimesheetApprovalQueueNotice covers the WhatsApp side).
+ */
+export async function lodgeMonth(
+  _prev: TimesheetLodgeState,
+  formData: FormData,
+): Promise<TimesheetLodgeState> {
+  const session = await getSession();
+  try {
+    requireCapability(session, 'timesheet.submit');
+  } catch {
+    return { status: 'error', message: 'Not signed in' };
+  }
+
+  const parsed = LodgeSchema.safeParse({
+    targetPersonId: formData.get('targetPersonId'),
+    year: formData.get('year'),
+    month: formData.get('month'),
+    acknowledge: formData.get('acknowledge') === 'true',
+  });
+  if (!parsed.success) return { status: 'error', message: 'Invalid input' };
+
+  const { targetPersonId, year, month, acknowledge } = parsed.data;
+  const isSuperAdmin = hasAnyRole(session, ['super_admin']);
+  const isAdminGroup = hasAnyRole(session, ['super_admin', 'admin']);
+  const isManagerOrLead = hasAnyRole(session, ['manager', 'partner']);
+  const actingOnBehalf = targetPersonId !== session!.person.id;
+  if (actingOnBehalf && !isAdminGroup && !isManagerOrLead) {
+    return {
+      status: 'error',
+      message: 'Only super admins, admins, or project leads can lodge for someone else.',
+    };
+  }
+
+  const target = await prisma.person.findUnique({
+    where: { id: targetPersonId },
+    select: { firstName: true, lastName: true, endDate: true, inactiveAt: true },
+  });
+  if (!target) return { status: 'error', message: 'Person not found' };
+  if (target.endDate !== null) {
+    return { status: 'error', message: 'Person is no longer active.' };
+  }
+  if (target.inactiveAt !== null) {
+    return { status: 'error', message: 'Profile is marked inactive — reactivate it first.' };
+  }
+
+  const monthStart = monthStartFrom(year, month);
+  const preflight = await preflightLodgeMonth(
+    targetPersonId,
+    monthStart,
+    todayInFirmTz(),
+  );
+  if (preflight.blocker) {
+    return { status: 'error', message: preflight.blocker };
+  }
+  if (preflight.warnings.length > 0 && !acknowledge) {
+    return {
+      status: 'warn',
+      message: `Lodge ${preflight.monthLabel} anyway?`,
+      warnings: preflight.warnings,
+    };
+  }
+
+  const dayCount = daysInMonth(year, month);
+  const monthEnd = addDays(monthStart, dayCount);
+
+  // Which of the month's projects skip the queue for THIS writer. Same
+  // helper the daily save uses, so the two can't drift on who is allowed to
+  // self-approve.
+  const monthProjects = await prisma.project.findMany({
+    where: {
+      timesheetEntries: {
+        some: { personId: targetPersonId, date: { gte: monthStart, lt: monthEnd } },
+      },
+    },
+    select: { id: true, code: true, stage: true, managerId: true, primaryPartnerId: true },
+  });
+  const autoApproveProjectIds = resolveAutoApproveProjectIds({
+    isSuperAdmin,
+    isAdminGroup,
+    actingOnBehalf,
+    actorPersonId: session!.person.id,
+    projects: monthProjects,
+  });
+
+  // Only `draft` rows move. Already-submitted rows are in the queue, and
+  // already-approved rows must keep their original approver + timestamp.
+  const draftEntries = await prisma.timesheetEntry.findMany({
+    where: {
+      personId: targetPersonId,
+      date: { gte: monthStart, lt: monthEnd },
+      status: 'draft',
+    },
+    select: { id: true, hours: true, projectId: true },
+  });
+
+  const toApprove: string[] = [];
+  const toSubmit: string[] = [];
+  const queuedProjectIds = new Set<string>();
+  let queuedHours = 0;
+  for (const e of draftEntries) {
+    if (autoApproveProjectIds.has(e.projectId)) {
+      toApprove.push(e.id);
+    } else {
+      toSubmit.push(e.id);
+      queuedProjectIds.add(e.projectId);
+      queuedHours += Number(e.hours);
+    }
+  }
+
+  // Anything already sitting in `submitted` still needs approvers pinged on
+  // a re-lodge — it's part of the month being lodged even if this call
+  // didn't move it.
+  const alreadySubmitted = await prisma.timesheetEntry.findMany({
+    where: {
+      personId: targetPersonId,
+      date: { gte: monthStart, lt: monthEnd },
+      status: 'submitted',
+    },
+    select: { hours: true, projectId: true },
+  });
+  for (const e of alreadySubmitted) {
+    queuedProjectIds.add(e.projectId);
+    queuedHours += Number(e.hours);
+  }
+
+  // Approver pool: the admin tier sees every submission (mirrors
+  // listPendingTimesheetEntriesForApprover), plus each affected project's
+  // manager and primary partner.
+  const submitterName = `${target.firstName} ${target.lastName}`;
+  let approverIds: string[] = [];
+  if (queuedProjectIds.size > 0) {
+    const leadIds = new Set<string>();
+    for (const p of monthProjects) {
+      if (!queuedProjectIds.has(p.id)) continue;
+      if (p.managerId) leadIds.add(p.managerId);
+      if (p.primaryPartnerId) leadIds.add(p.primaryPartnerId);
+    }
+    const pool = await prisma.person.findMany({
+      where: {
+        endDate: null,
+        inactiveAt: null,
+        OR: [
+          { roles: { hasSome: ['super_admin', 'admin'] } },
+          { id: { in: Array.from(leadIds) } },
+        ],
+      },
+      select: { id: true },
+    });
+    approverIds = pool
+      .map((p) => p.id)
+      .filter((id) => id !== targetPersonId && id !== session!.person.id);
+  }
+
+  const stamp = new Date();
+  try {
+    await prisma.$transaction(async (tx) => {
+      if (toApprove.length > 0) {
+        await tx.timesheetEntry.updateMany({
+          where: { id: { in: toApprove } },
+          data: { status: 'approved', approvedById: session!.person.id, approvedAt: stamp },
+        });
+      }
+      if (toSubmit.length > 0) {
+        await tx.timesheetEntry.updateMany({
+          where: { id: { in: toSubmit } },
+          data: { status: 'submitted' },
+        });
+      }
+
+      // The period row is created here rather than on page read, so merely
+      // browsing a month never writes.
+      await tx.timesheetPeriod.upsert({
+        where: { personId_year_month: { personId: targetPersonId, year, month } },
+        create: { personId: targetPersonId, year, month, state: 'lodged', lodgedAt: stamp },
+        update: { state: 'lodged', lodgedAt: stamp },
+      });
+
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session!.person.id },
+        action: 'lodged',
+        entity: {
+          type: 'timesheet_period',
+          id: `${targetPersonId}:${year}-${String(month).padStart(2, '0')}`,
+          after: {
+            targetPersonId,
+            year,
+            month,
+            actingOnBehalf,
+            totalHours: preflight.totalHours,
+            submittedEntryIds: toSubmit,
+            autoApprovedEntryIds: toApprove,
+            acknowledgedWarnings: preflight.warnings.map((w) => w.code),
+          },
+        },
+        source: 'web',
+      });
+
+      if (approverIds.length > 0) {
+        await emitUserUpdateMany(tx, approverIds, {
+          kind: 'approval_requested',
+          title: `${preflight.monthLabel} timesheet to approve (${queuedHours.toFixed(1)}h)`,
+          body:
+            `${submitterName} lodged ${preflight.monthLabel} — ${queuedHours.toFixed(1)}h ` +
+            `across ${queuedProjectIds.size} ${queuedProjectIds.size === 1 ? 'project' : 'projects'}.`,
+          href: '/timesheet/approve',
+          entityType: 'timesheet_entry',
+          entityId: null,
+        });
+      }
+    });
+  } catch (err) {
+    console.error('[timesheet.lodge] failed:', err);
+    return { status: 'error', message: 'Lodge failed — try again.' };
+  }
+
+  revalidatePath('/timesheet');
+  revalidatePath('/timesheet/approve');
+  revalidatePath('/updates');
+  revalidateScheduleSurfaces({ personId: targetPersonId });
+
+  if (approverIds.length > 0) {
+    void (async () => {
+      try {
+        const { sendTimesheetApprovalQueueNotice } = await import(
+          '@/server/integrations/whatsapp-prompts'
+        );
+        await sendTimesheetApprovalQueueNotice({
+          approverIds,
+          submitterName,
+          entryCount: toSubmit.length + alreadySubmitted.length,
+          totalHours: queuedHours,
+          weekLabel: preflight.monthLabel,
+        });
+      } catch (err) {
+        console.error('[timesheet.lodge] whatsapp notice failed:', err);
+      }
+    })();
+  }
+
+  const parts = [`${preflight.monthLabel} lodged — ${preflight.totalHours.toFixed(1)}h.`];
+  if (toApprove.length > 0) {
+    parts.push(
+      `${toApprove.length} ${toApprove.length === 1 ? 'entry' : 'entries'} auto-approved.`,
+    );
+  }
+  if (toSubmit.length > 0) {
+    parts.push(`${toSubmit.length} sent for approval.`);
+  }
+  if (toSubmit.length === 0 && toApprove.length === 0) {
+    parts.push('Nothing new to submit — already with the approvers.');
+  }
+  return { status: 'success', message: parts.join(' ') };
+}
+
+// ─── Admin force-close ──────────────────────────────────────────────────────
+
+const ForceCloseSchema = z.object({
+  targetPersonId: z.string().min(1),
+  year: z.coerce.number().int().min(2000).max(2100),
+  month: z.coerce.number().int().min(1).max(12),
+  /** Mandatory. Force-closing bypasses named approvers; the record has to say why. */
+  reason: z.string().trim().min(10).max(1000),
+});
+
+/**
+ * Close a lodged month over the top of outstanding approvals.
+ *
+ * The escape hatch for D2's known cost: a month closes only when every
+ * project is approved, so one unresponsive lead can block a contractor's
+ * payment indefinitely. The chase (TASK-506) nudges and escalates; this is
+ * what an admin does when that hasn't worked.
+ *
+ * Deliberately NOT silent. It approves the outstanding entries in the
+ * admin's name, records exactly which projects were bypassed and who owed
+ * them, and tells both the contractor and every bypassed approver. An
+ * approval that nobody can see afterwards is worse than a late one.
+ */
+export async function forceCloseTimesheetPeriod(
+  _prev: TimesheetLodgeState,
+  formData: FormData,
+): Promise<TimesheetLodgeState> {
+  const session = await getSession();
+  if (!session || !hasAnyRole(session, ['super_admin', 'admin'])) {
+    return { status: 'error', message: 'Only super admins and admins can force-close a month.' };
+  }
+
+  const parsed = ForceCloseSchema.safeParse({
+    targetPersonId: formData.get('targetPersonId'),
+    year: formData.get('year'),
+    month: formData.get('month'),
+    reason: formData.get('reason'),
+  });
+  if (!parsed.success) {
+    return {
+      status: 'error',
+      message:
+        'A reason of at least 10 characters is required — this bypasses named approvers.',
+    };
+  }
+
+  const { targetPersonId, year, month, reason } = parsed.data;
+  const monthLabel = formatMonthLabel(monthStartFrom(year, month));
+
+  const period = await prisma.timesheetPeriod.findUnique({
+    where: { personId_year_month: { personId: targetPersonId, year, month } },
+    select: { id: true, state: true },
+  });
+  if (!period) return { status: 'error', message: `No lodged ${monthLabel} to close.` };
+  if (period.state !== 'lodged') {
+    return {
+      status: 'error',
+      message: `${monthLabel} is ${period.state}, not awaiting approval — nothing to force.`,
+    };
+  }
+
+  const monthStart = monthStartFrom(year, month);
+  const monthEnd = addDays(monthStart, daysInMonth(year, month));
+  const outstanding = await prisma.timesheetEntry.findMany({
+    where: {
+      personId: targetPersonId,
+      date: { gte: monthStart, lt: monthEnd },
+      status: 'submitted',
+    },
+    select: {
+      id: true,
+      hours: true,
+      project: {
+        select: { id: true, code: true, managerId: true, primaryPartnerId: true },
+      },
+    },
+  });
+  if (outstanding.length === 0) {
+    return { status: 'error', message: `Nothing outstanding in ${monthLabel}.` };
+  }
+
+  const bypassed = new Map<string, { code: string; hours: number; owed: string[] }>();
+  const bypassedApproverIds = new Set<string>();
+  for (const e of outstanding) {
+    const cur = bypassed.get(e.project.id) ?? { code: e.project.code, hours: 0, owed: [] };
+    cur.hours += Number(e.hours);
+    for (const id of [e.project.managerId, e.project.primaryPartnerId]) {
+      if (id && !cur.owed.includes(id)) cur.owed.push(id);
+      if (id && id !== session.person.id) bypassedApproverIds.add(id);
+    }
+    bypassed.set(e.project.id, cur);
+  }
+  const bypassedList = Array.from(bypassed.values());
+  const forcedHours = bypassedList.reduce((s, b) => s + b.hours, 0);
+  const closedAt = new Date();
+
+  let closedPeriods: ClosedPeriod[] = [];
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.timesheetEntry.updateMany({
+        where: { id: { in: outstanding.map((e) => e.id) } },
+        data: { status: 'approved', approvedById: session.person.id, approvedAt: closedAt },
+      });
+
+      // Reuse the normal roll-up so a force-close produces exactly the same
+      // period state — and the same frozen invoice draft — as a month that
+      // closed the ordinary way.
+      closedPeriods = await reconcileTimesheetPeriodStates(
+        tx,
+        targetPersonId,
+        [{ year, month }],
+        closedAt,
+      );
+
+      await writeAudit(tx, {
+        actor: { type: 'person', id: session.person.id },
+        action: 'force_closed',
+        entity: {
+          type: 'timesheet_period',
+          id: `${targetPersonId}:${year}-${String(month).padStart(2, '0')}`,
+          before: { state: 'lodged' },
+          after: {
+            state: 'approved',
+            reason,
+            forcedEntryIds: outstanding.map((e) => e.id),
+            forcedHours,
+            bypassedProjects: bypassedList.map((b) => ({
+              projectCode: b.code,
+              hours: b.hours,
+              owedByPersonIds: b.owed,
+            })),
+          },
+        },
+        source: 'web',
+      });
+
+      const notify = [targetPersonId, ...bypassedApproverIds].filter(
+        (id) => id !== session.person.id,
+      );
+      if (notify.length > 0) {
+        await emitUserUpdateMany(tx, notify, {
+          kind: 'approval_requested',
+          title: `${monthLabel} was closed by an admin`,
+          body:
+            `${session.person.firstName} ${session.person.lastName} approved the outstanding ` +
+            `${forcedHours.toFixed(1)}h on ${bypassedList.map((b) => b.code).join(', ')} ` +
+            `so the month could close. Reason: ${reason}`,
+          href: '/timesheet/approve',
+          entityType: 'timesheet_period',
+          entityId: null,
+        });
+      }
+    });
+  } catch (err) {
+    console.error('[timesheet.forceClose] failed:', err);
+    return { status: 'error', message: 'Force-close failed — try again.' };
+  }
+
+  revalidatePath('/timesheet/approve');
+  revalidatePath('/me/invoices');
+  revalidatePath('/updates');
+  revalidateScheduleSurfaces({ personId: targetPersonId });
+
+  const invoiced = closedPeriods.some((c) => c.draft);
+  return {
+    status: 'success',
+    message:
+      `${monthLabel} closed — ${forcedHours.toFixed(1)}h approved over ` +
+      `${bypassedList.length} outstanding ${bypassedList.length === 1 ? 'project' : 'projects'}.` +
+      (invoiced ? ' The contractor can now submit their invoice.' : ''),
   };
 }

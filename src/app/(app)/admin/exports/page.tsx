@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { RunExportNowButton } from './run-export-button';
+import { RunWorkbooksNowButton } from './run-workbooks-button';
 
 /**
  * Admin business-continuity exports page. Shows:
@@ -33,11 +34,27 @@ export default async function ExportsPage() {
   // so the operator can see the full trail in one place.
   const recent = await prisma.auditEvent.findMany({
     where: {
-      entityType: 'integration',
-      entityId: 'sharepoint-backup',
-      action: {
-        in: ['data_export_generated', 'data_export_upload_failed'],
-      },
+      OR: [
+        {
+          entityType: 'integration',
+          entityId: 'sharepoint-backup',
+          action: { in: ['data_export_generated', 'data_export_upload_failed'] },
+        },
+        // Report-workbook + master-ledger backups (Phase 1F / TASK-069c)
+        // so the last-snapshot list covers every 365 backup, not just the
+        // continuity ZIP.
+        {
+          entityType: 'report',
+          action: {
+            in: [
+              'report_workbook_generated',
+              'report_workbook_failed',
+              'ledger_backup_generated',
+              'ledger_backup_upload_failed',
+            ],
+          },
+        },
+      ],
     },
     orderBy: { at: 'desc' },
     take: 30,
@@ -209,6 +226,22 @@ export default async function ExportsPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle>Regenerate report workbooks</CardTitle>
+          <p className="text-xs text-ink-3">
+            Rebuilds the themed reporting workbooks (Finance — P&amp;L,
+            Cash, AR &amp; AP aging — and more as they ship) and publishes
+            each to the SharePoint Reports folder, overwriting the previous
+            copy. Runs automatically every night; use this for an on-demand
+            refresh.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <RunWorkbooksNowButton />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Schedule + status</CardTitle>
         </CardHeader>
         <CardContent className="space-y-1 text-sm">
@@ -306,7 +339,16 @@ export default async function ExportsPage() {
                         error?: string;
                       }
                     | null;
-                  const isFailure = r.action === 'data_export_upload_failed';
+                  const isFailure = r.action.endsWith('_failed');
+                  // Derive a filename for the report/ledger backups (which
+                  // audit by entityId rather than carrying a `filename`).
+                  const fileLabel =
+                    after?.filename ??
+                    (r.entityId.startsWith('workbook:')
+                      ? `${r.entityId.slice('workbook:'.length)}.xlsx`
+                      : r.entityId === 'ledger_backup'
+                        ? 'Master-Ledger.xlsx'
+                        : null);
                   const actorLabel =
                     r.actor
                       ? `${r.actor.firstName} ${r.actor.lastName}`
@@ -332,7 +374,7 @@ export default async function ExportsPage() {
                         </span>
                       </td>
                       <td className="px-3 py-2 font-mono text-[11px] text-ink-2">
-                        {after?.filename ?? '—'}
+                        {fileLabel ?? '—'}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-ink-3">
                         {after?.sizeBytes

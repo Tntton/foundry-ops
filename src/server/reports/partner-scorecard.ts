@@ -148,7 +148,7 @@ export async function computePartnerScoreboard(): Promise<PartnerScoreboard> {
       by: ['personId'],
       where: {
         personId: { in: partnerIds },
-        status: { in: ['approved', 'billed'] },
+        status: 'approved',
       },
       _sum: { hours: true },
     }),
@@ -261,7 +261,7 @@ export async function computePartnerScoreboard(): Promise<PartnerScoreboard> {
       prisma.timesheetEntry.findMany({
         where: {
           projectId: { in: projectIdsAll },
-          status: { in: ['approved', 'billed'] },
+          status: 'approved',
         },
         select: {
           projectId: true,

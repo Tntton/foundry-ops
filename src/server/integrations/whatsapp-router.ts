@@ -16,7 +16,12 @@ import {
   WHATSAPP_PREFILL_TTL_SECONDS,
 } from '@/server/agents/assistant/prefill/token';
 import { createPrefillDispatch } from '@/server/whatsapp-prefill-dispatch';
-import { startOfWeek, formatIsoDate } from '@/lib/week';
+import {
+  startOfWeek,
+  formatIsoDate,
+  todayInFirmTz,
+  weekAnchorDay,
+} from '@/lib/week';
 import { optionalEnv } from '@/server/env';
 import { downloadWhatsAppMedia, sendWhatsAppText } from './whatsapp';
 
@@ -204,86 +209,155 @@ async function handleTimesheet(
   message: IncomingMessage,
 ): Promise<void> {
   const text = message.text ?? '';
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // Anchor on the firm's calendar day (Australia/Sydney), not raw UTC —
+  // otherwise "today"/"this week" slip a day every morning until ~10am
+  // AEST when the server clock is still on yesterday's UTC date.
+  const today = todayInFirmTz();
+  const todayIso = formatIsoDate(today);
   const result = await parseTimesheetText(text, todayIso);
   if (!result.ok) {
     await reply(conversation.id, message.fromPhone, result.error);
     return;
   }
-  const parsed = result.data;
-  // Resolve the project by code.
-  const project = await prisma.project.findUnique({
-    where: { code: parsed.projectCode.toUpperCase() },
-    select: { id: true, code: true, name: true, stage: true },
-  });
-  if (!project) {
-    await reply(
-      conversation.id,
-      message.fromPhone,
-      `I don't see a project with code *${parsed.projectCode}*. Try the project's exact code.`,
-    );
-    return;
+
+  // A single message may carry several entries ("PRP003 4h, FHB 2h,
+  // FHP002 2h today"). Resolve each project independently: keep the ones
+  // that resolve, collect the rest as skip notes, and only bail if
+  // NOTHING resolves. This way a stray bad code never sinks the batch.
+  //
+  // A whole-week entry (scope='week', e.g. "5h this week on PRP") has no
+  // day, but the timesheet is day-based end to end (DB, form, prefill).
+  // We park the total on a single anchor day — the Monday of that week,
+  // or today if today falls inside it — tag it as a week total, and let
+  // the user redistribute on the form. Nothing week-shaped leaves here;
+  // every resolved entry carries a concrete date.
+  type ResolvedEntry = {
+    project: { id: string; code: string; name: string };
+    hours: number;
+    dateIso: string;
+    description: string | null;
+    isWeek: boolean;
+    date: Date;
+  };
+  const resolved: ResolvedEntry[] = [];
+  const skipped: string[] = [];
+  for (const entry of result.data.entries) {
+    const project = await prisma.project.findUnique({
+      where: { code: entry.projectCode.toUpperCase() },
+      select: { id: true, code: true, name: true, stage: true },
+    });
+    if (!project) {
+      skipped.push(`*${entry.projectCode}* — no project with that code`);
+      continue;
+    }
+    if (project.stage === 'archived') {
+      skipped.push(`*${project.code}* — archived, can't log time`);
+      continue;
+    }
+
+    const isWeek = entry.scope === 'week';
+    let dateIso = entry.dateIso;
+    let description = entry.description ?? null;
+    if (isWeek) {
+      const anchor = weekAnchorDay(
+        new Date(`${entry.dateIso}T00:00:00.000Z`),
+        today,
+      );
+      dateIso = formatIsoDate(anchor);
+      description = description
+        ? `Whole-week total — ${description}`
+        : 'Whole-week total';
+    }
+
+    resolved.push({
+      project: { id: project.id, code: project.code, name: project.name },
+      hours: entry.hours,
+      dateIso,
+      description,
+      isWeek,
+      date: new Date(`${dateIso}T00:00:00.000Z`),
+    });
   }
-  if (project.stage === 'archived') {
+
+  if (resolved.length === 0) {
     await reply(
       conversation.id,
       message.fromPhone,
-      `*${project.code}* is archived — can't log time against it.`,
+      `Couldn't log anything:\n${skipped.map((s) => `• ${s}`).join('\n')}`,
     );
     return;
   }
 
-  const date = new Date(`${parsed.dateIso}T00:00:00.000Z`);
+  const summaryLines = resolved
+    .map((r) => {
+      const when = r.isWeek
+        ? `week of ${formatIsoDate(startOfWeek(r.date))}`
+        : r.dateIso;
+      return `• *${r.hours}h* on *${r.project.code}* (${when})`;
+    })
+    .join('\n');
+  const hasWeek = resolved.some((r) => r.isWeek);
+  const weekNote = hasWeek
+    ? '\n_Week totals are parked on one day — drag to redistribute if you like._'
+    : '';
+  const skippedNote = skipped.length
+    ? `\n\nSkipped:\n${skipped.map((s) => `• ${s}`).join('\n')}`
+    : '';
 
   if (legacyAutoDraftEnabled()) {
-    // ─── Legacy path — auto-write the draft entry (pre-302c) ──────
-    const created = await prisma.$transaction(async (tx) => {
-      const entry = await tx.timesheetEntry.create({
-        data: {
-          personId: person.id,
-          projectId: project.id,
-          date,
-          hours: new Prisma.Decimal(parsed.hours),
-          description: parsed.description ?? null,
-          status: 'draft',
-        },
-        select: { id: true },
-      });
-      await writeAudit(tx, {
-        actor: { type: 'person', id: person.id },
-        action: 'created',
-        entity: {
-          type: 'timesheet_entry',
-          id: entry.id,
-          after: {
-            via: 'whatsapp',
-            projectCode: project.code,
-            hours: parsed.hours,
-            dateIso: parsed.dateIso,
+    // ─── Legacy path — auto-write the draft entries (pre-302c) ──────
+    const createdIds = await prisma.$transaction(async (tx) => {
+      const ids: string[] = [];
+      for (const r of resolved) {
+        const entry = await tx.timesheetEntry.create({
+          data: {
+            personId: person.id,
+            projectId: r.project.id,
+            date: r.date,
+            hours: new Prisma.Decimal(r.hours),
+            description: r.description,
+            status: 'draft',
           },
-        },
-        source: 'agent',
-      });
-      return entry;
+          select: { id: true },
+        });
+        await writeAudit(tx, {
+          actor: { type: 'person', id: person.id },
+          action: 'created',
+          entity: {
+            type: 'timesheet_entry',
+            id: entry.id,
+            after: {
+              via: 'whatsapp',
+              projectCode: r.project.code,
+              hours: r.hours,
+              dateIso: r.dateIso,
+              scope: r.isWeek ? 'week' : 'day',
+            },
+          },
+          source: 'agent',
+        });
+        ids.push(entry.id);
+      }
+      return ids;
     });
     await setFlow(conversation.id, 'idle', null);
     await reply(
       conversation.id,
       message.fromPhone,
-      `✅ Logged *${parsed.hours}h* on *${project.code}* for ${parsed.dateIso} (draft). Review and submit on the web when ready.`,
+      `✅ Logged ${resolved.length} draft ${resolved.length === 1 ? 'entry' : 'entries'}:\n${summaryLines}${weekNote}\nReview and submit on the web when ready.${skippedNote}`,
       'timesheet_entry',
-      created.id,
+      createdIds[0] ?? null,
     );
     return;
   }
 
   // ─── Prefill path (default after TASK-302c) ──────────────────────
-  // Build a signed prefill token + reply with a deep-link to the
-  // form. The user taps the link, lands on /timesheet with the row
-  // populated and the "Prefilled by Assistant" banner, and submits
-  // via the form's normal flow. No timesheet row is written here — only
-  // a dispatch-tracking row (below) so the reminder cron can nudge them
-  // to finish (TASK-128).
+  // Build one signed prefill token carrying EVERY resolved entry + reply
+  // with a deep-link to the form. The user taps the link, lands on
+  // /timesheet with every row populated and the "Prefilled by Assistant"
+  // banner, and submits via the form's normal flow. No timesheet rows are
+  // written here — only a dispatch-tracking row (below) so the reminder
+  // cron can nudge them to finish (TASK-128).
   const prefillJti = newPrefillJti();
   const prefillSentMs = Date.now();
   const token = signPrefillToken({
@@ -292,17 +366,17 @@ async function handleTimesheet(
     ttlSeconds: WHATSAPP_PREFILL_TTL_SECONDS,
     jti: prefillJti,
     payload: {
-      entries: [
-        {
-          projectCode: project.code,
-          dateIso: parsed.dateIso,
-          hours: parsed.hours,
-          notes: parsed.description ?? null,
-        },
-      ],
+      entries: resolved.map((r) => ({
+        projectCode: r.project.code,
+        dateIso: r.dateIso,
+        hours: r.hours,
+        notes: r.description,
+      })),
     },
   });
-  const weekIso = formatIsoDate(startOfWeek(date));
+  // Land on the week of the earliest entry so the prefilled rows are in view.
+  const earliest = resolved.reduce((a, b) => (a.date <= b.date ? a : b));
+  const weekIso = formatIsoDate(startOfWeek(earliest.date));
   const url = `${publicAppUrl()}/timesheet?week=${weekIso}&prefill=${encodeURIComponent(token)}`;
 
   await prisma.$transaction(async (tx) => {
@@ -311,18 +385,25 @@ async function handleTimesheet(
       action: 'minted',
       entity: {
         type: 'assistant_prefill',
-        id: `${person.id}:whatsapp-timesheet:${parsed.dateIso}`,
+        id: `${person.id}:whatsapp-timesheet:${prefillJti}`,
         after: {
           channel: 'whatsapp',
           kind: 'timesheet',
-          projectCode: project.code,
-          hours: parsed.hours,
-          dateIso: parsed.dateIso,
+          entries: resolved.map((r) => ({
+            projectCode: r.project.code,
+            hours: r.hours,
+            dateIso: r.dateIso,
+            scope: r.isWeek ? 'week' : 'day',
+          })),
         },
       },
       source: 'agent',
     });
   });
+  // One dispatch row tracks the whole batch. The reminder completion-check
+  // is deliberately loose (a matching entry on the same person+date is
+  // "done enough"), so the first resolved entry stands in for the batch.
+  const lead = resolved[0]!;
   await createPrefillDispatch({
     personId: person.id,
     whatsappNumber: message.fromPhone,
@@ -330,15 +411,16 @@ async function handleTimesheet(
     linkUrl: url,
     jti: prefillJti,
     expiresAt: new Date(prefillSentMs + WHATSAPP_PREFILL_TTL_SECONDS * 1000),
-    projectCode: project.code,
-    entryDateIso: parsed.dateIso,
-    hours: parsed.hours,
+    projectCode: lead.project.code,
+    entryDateIso: lead.dateIso,
+    hours: lead.hours,
   });
   await setFlow(conversation.id, 'idle', null);
   await reply(
     conversation.id,
     message.fromPhone,
-    `📝 Prepped *${parsed.hours}h* on *${project.code}* for ${parsed.dateIso}.
+    `📝 Prepped ${resolved.length} ${resolved.length === 1 ? 'entry' : 'entries'}:
+${summaryLines}${weekNote}${skippedNote}
 Tap to review + submit (link valid 24h):
 ${url}`,
     'assistant_prefill',
@@ -647,6 +729,66 @@ async function handleStatusCheck(
   );
 }
 
+// ─── Unknown sender ───────────────────────────────────────────────────
+
+/**
+ * Copy sent back to a sender we can't match to an active Person.
+ * Deliberately generic: it must not confirm or deny who is registered
+ * (the number could be a wrong-number stranger, not a teammate), while
+ * still telling a real teammate what to do. Kept as a pure function so
+ * it's unit-testable without the DB.
+ */
+export function unknownSenderReply(): string {
+  return `👋 Thanks for messaging Foundry Ops. I don't recognise this number, so I can't action anything yet.
+If you're on the team, ask an admin to add your WhatsApp number (in *+61…* format) to your profile in the Directory — then message me again.`;
+}
+
+/**
+ * Handle an inbound from a phone that matches no active Person. These
+ * used to be dropped in total silence — no reply, no log — which to a
+ * sender looked like the agent was broken (and gave admins no trail of
+ * who tried). Now we:
+ *   1. record the attempt as a *system* AuditEvent (actorId is a Person
+ *      FK, so an unknown sender can't be the actor) keyed on the wamid so
+ *      Meta re-deliveries don't double-log, and
+ *   2. send one generic bounce-back. We're allowed to reply because the
+ *      sender messaged us first (inside Meta's 24h service window).
+ */
+async function handleUnknownSender(message: IncomingMessage): Promise<void> {
+  // Dedupe Meta re-deliveries of the same wamid so a retried delivery
+  // doesn't double-audit or double-reply. Uses the
+  // (entityType, entityId) index on AuditEvent.
+  if (message.providerId) {
+    const seen = await prisma.auditEvent.findFirst({
+      where: { entityType: 'whatsapp_inbound', entityId: message.providerId },
+      select: { id: true },
+    });
+    if (seen) return;
+  }
+  await prisma.$transaction(async (tx) => {
+    await writeAudit(tx, {
+      actor: { type: 'system' },
+      action: 'rejected',
+      entity: {
+        type: 'whatsapp_inbound',
+        id: message.providerId || message.fromPhone,
+        after: {
+          reason: 'unknown_sender',
+          fromPhone: message.fromPhone,
+          hadMedia: message.mediaId !== null,
+          textPreview: message.text ? message.text.slice(0, 80) : null,
+        },
+      },
+      source: 'agent',
+    });
+  });
+  try {
+    await sendWhatsAppText(message.fromPhone, unknownSenderReply());
+  } catch (err) {
+    console.error('[whatsapp.unknownSender] bounce-back failed:', err);
+  }
+}
+
 // ─── Top-level dispatcher ─────────────────────────────────────────────
 
 export async function handleIncomingWhatsAppMessage(
@@ -654,6 +796,7 @@ export async function handleIncomingWhatsAppMessage(
 ): Promise<{ ok: boolean; reason?: string }> {
   const person = await resolvePerson(message.fromPhone);
   if (!person) {
+    await handleUnknownSender(message);
     return { ok: false, reason: 'unknown sender' };
   }
   if (person.endDate !== null) {
