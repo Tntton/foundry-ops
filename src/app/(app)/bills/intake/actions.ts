@@ -6,7 +6,7 @@ import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
-import { hasAnyRole } from '@/server/roles';
+import type { Session } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
 import { notifyApproversOfNewApproval } from '@/server/user-updates';
@@ -58,8 +58,8 @@ const PatchSchema = z.object({
   projectId: z.string().trim().max(40).nullable().optional(),
 });
 
-function ensureCanReview(roles: string[]): boolean {
-  return roles.some((r) => ['super_admin', 'admin', 'partner'].includes(r));
+function ensureCanReview(session: Session): boolean {
+  return hasCapability(session, 'bill.review');
 }
 
 /**
@@ -74,7 +74,7 @@ export async function patchIntakeBill(
 ): Promise<IntakeActionState> {
   const session = await getSession();
   if (!session) return { status: 'error', message: 'Not signed in' };
-  if (!ensureCanReview(session.person.roles))
+  if (!ensureCanReview(session))
     return { status: 'error', message: 'Not authorized' };
 
   const parsed = PatchSchema.safeParse({
@@ -203,6 +203,11 @@ export async function approveIntakeBill(
 
   const session = await getSession();
   if (!session) return { status: 'error', message: 'Not signed in' };
+  // `patchIntakeBill` above already refused a non-reviewer, so this is
+  // belt-and-braces — but the capability a handler needs belongs in the
+  // handler, not inherited from whatever it happens to call first.
+  if (!ensureCanReview(session))
+    return { status: 'error', message: 'Not authorized' };
 
   const bill = await prisma.bill.findUnique({
     where: { id: billId },
@@ -437,7 +442,10 @@ export async function createPlaceholderIntakeBill(
   formData: FormData,
 ): Promise<IntakeActionState> {
   const session = await getSession();
-  if (!session || !hasAnyRole(session, ['super_admin', 'admin', 'partner'])) {
+  // A placeholder exists to be filled in on the review pane, so the gate
+  // is `bill.review` rather than `bill.create` — raising one you can't
+  // then edit is a dead end.
+  if (!session || !ensureCanReview(session)) {
     return { status: 'error', message: 'Not authorized' };
   }
   const parsed = PlaceholderSchema.safeParse({

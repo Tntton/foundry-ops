@@ -3,7 +3,6 @@ import { notFound } from 'next/navigation';
 import type { ExpenseStatus } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
-import { hasAnyRole } from '@/server/roles';
 import { prisma } from '@/server/db';
 import { listExpenses } from '@/server/expenses';
 import { EXPENSE_CATEGORIES } from '@/lib/expense-categories';
@@ -105,7 +104,7 @@ export default async function ExpensesPage({
   // than bill.create (see `ensureCanReview` in bills/intake/actions.ts) —
   // the dropzone uses it to decide whether to navigate there after an
   // upload or stay put.
-  const canReviewBills = hasAnyRole(session, ['super_admin', 'admin', 'partner']);
+  const canReviewBills = hasCapability(session, 'bill.review');
 
   // Project scope for the dropzone's inline tag picker — mirrors what the
   // AP intake surface uses: every live project (so the FHB / FHO / FHX

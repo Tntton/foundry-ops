@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { getSession } from '@/server/session';
-import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
 import { listIntakeBills, getIntakeBill } from '@/server/intake';
@@ -36,7 +35,7 @@ export default async function BillIntakePage({
   if (!session || !hasCapability(session, 'expense.submit')) notFound();
   const canCreateBill = hasCapability(session, 'bill.create');
   // Only admins / partners review the AP bills queue.
-  const canReviewBills = hasAnyRole(session, ['super_admin', 'admin', 'partner']);
+  const canReviewBills = hasCapability(session, 'bill.review');
   // This page is the VENDOR side of intake — supplier invoices Foundry
   // pays. Personal receipts merged into /expenses, which now carries the
   // same dropzone above the submitted list, so there is one page per
