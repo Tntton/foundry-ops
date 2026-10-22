@@ -2075,7 +2075,7 @@ Fixed three pre-existing type errors surfaced on the way — see the commit. `ts
 - [ ] Tests: range spanning two months with one closed; partial month; range overlapping already-billed entries yields nothing; frozen vs current rate applied per entry; unapproved surfaced but never billed; expense-only range; FT staff refused; cross-person refused; number autogeneration increments per person; duplicate number rejected; personal identifier reaches `Bill.description`.
 - [ ] Commits: `chore(db): description on Bill` then `feat(TASK-511): date-range contractor invoice`
 
-### TASK-513 — Timesheet look-back: lock approved days, add month + quarter review
+### TASK-514 — Timesheet look-back: lock approved days, add month + quarter review
 **status:** done
 
 **Gap (TT, 2026-10-23):** stepping back through a timesheet was broken in two ways at once.
@@ -2096,9 +2096,48 @@ Fixed three pre-existing type errors surfaced on the way — see the commit. `ts
 - [x] Week / Month / Quarter toggle carries the anchor date across, so switching view keeps you in the same place in time rather than jumping to today. Prev/Next step by the view's own unit.
 - [x] Fixed three-letter month abbreviations in `lib/week.ts` — `Intl` en-AU `month: 'short'` returns "July", "Sept" and "June" next to "Aug", which makes a header row ragged.
 - [x] Tests: quarter boundary maths incl. year rollover and FY numbering; the per-day lock rule for each status × role; the quarter roll-up (grouping, mixed months, AR vs AP leg, empty quarter).
-- [x] Commit: `feat(TASK-513): per-day timesheet locks + quarter review view`
+- [x] Commit: `feat(TASK-514): per-day timesheet locks + quarter review view` — landed inside commit `67c07c1`, which another session wrote against its own TASK-513 while both of us had uncommitted work in the same checkout. The code is in; the commit message only describes the carry-forward change.
 
 **note on completion:** the server was already correct — no permission or save change was needed, and none was made. This closes the gap between what the grid offered and what the save would accept. Not yet exercised in a browser against real data: the local DB credentials are stale (see memory `foundry_local_db_unreachable`), so the grid and quarter table have been verified by typecheck, lint and unit tests only.
+
+### TASK-514 — Edit / delete a receipt or expense after submission
+**status:** todo
+**depends on:** TASK-512
+
+**Gap (TT, 2026-10-23):** a receipt goes up, Sonnet reads it, and whatever it got wrong is frozen. There is no way for the submitter to fix a misread supplier, amount, date or project tag, and no way to delete a duplicate or a receipt uploaded to the wrong account. The only route today is asking an admin.
+
+**acceptance:**
+- [ ] Submitter can edit their own expense while it is still `draft` or `submitted` — supplier, amount, GST, date, project tag, category, description.
+- [ ] Submitter can delete their own expense while it is still `draft` or `submitted`.
+- [ ] **Approved and beyond is not freely editable.** Once `approved` the expense is a number somebody signed off, and once `reimbursed` or linked to a `contractorBillId` it is money that has moved or is moving. Edit/delete there is admin-only and must re-open the approval rather than silently amending a signed-off figure.
+- [ ] **Never editable once consumed by a contractor bill** (`contractorBillId` set) — the expense is on an invoice that is in the AP queue or already paid. Amend the bill, not the line underneath it.
+- [ ] Admin override for every state, with the reason captured.
+- [ ] `AuditEvent` on every edit and delete with the before/after delta (A9) — this is a financial record, and "the amount changed" must always have an actor and a timestamp.
+- [ ] Re-running OCR after an edit must not clobber the human's correction.
+- [ ] Tests: self-edit allowed in draft/submitted; refused once approved; refused once `contractorBillId` is set; admin override audited; delete refused for someone else's expense.
+- [ ] Commit: `feat(TASK-514): edit + delete own expenses before approval`
+
+**overlap warning:** `/expenses` was restructured by TASK-512 in a parallel session on 2026-10-23. Build this on top of that page, not against the pre-merge layout.
+
+### TASK-515 — Expenses invoice separately from timesheet fees
+**status:** blocked — needs TT
+**depends on:** TASK-509, TASK-511
+
+**Ask (TT, 2026-10-23):** "the invoice/expenses needs to generate a separate invoice from timesheets" — expenses should produce their own invoice document rather than riding on the fee invoice.
+
+**BLOCKER — this reverses D3, and D3 is six weeks old and live.** D3 (TT, 2026-09-10, TASK-509) chose the opposite explicitly: *"one invoice, expenses as their own section… Matches standard practice: a contractor issues a single monthly tax invoice with a fees section and an expenses section. A separate expenses invoice is the minority pattern and is used where expenses run on a different approval or payment cycle."* That shipped in `58b5885` and is what `confirmContractorInvoice` does today.
+
+Reversing it is a legitimate call — the usual reason is exactly the one D3 names, expenses running on a different approval or payment cycle, which is true here since expense approval and timesheet approval are separate gates. But it is a reversal, not a gap, so it needs TT to say which before anything is built:
+
+- [ ] **Q1 — both paths or just the range path?** The month path (`confirmContractorInvoice`) and the range path (`generateRangeContractorInvoice`) both currently merge expenses into the fee bill. Changing one and not the other means a contractor's September invoice and their 15 Sep – 14 Oct invoice behave differently.
+- [ ] **Q2 — separate invoice, or separate Bill?** Today one invoice already becomes several `Bill` rows, one per project. "Separate invoice" could mean (a) a second invoice number for the expense lines, or (b) the same number with expense bills split out. (a) is a real second document the contractor numbers themselves; (b) is a presentation change inside Foundry.
+- [ ] **Q3 — does the GST treatment survive?** D4 pass-through (contractor adds no GST on expense lines, Foundry reclaims the input credit) was decided alongside D3. A standalone expenses invoice does not change the GST logic, but it does make the pass-through much more visible to the ATO, and the "receipt in the contractor's own name" concern already flagged on TASK-509 becomes harder to leave open.
+
+**acceptance (once answered):**
+- [ ] Expense lines raise their own Bill(s) with their own invoice number, independent of the fee bill.
+- [ ] `TimesheetPeriod` expense snapshot columns (`draftExpenseTotalCents` / `draftExpenseGstCents` / `draftExpenseCount`) either keep working or are migrated — they exist to stop an expense edit repricing a signed-off month.
+- [ ] Double-payment guard holds: `contractorBillId` still takes the expense out of the reimbursement float either way.
+- [ ] Commit: `feat(TASK-515): expenses invoice separately from fees`
 
 ---
 
