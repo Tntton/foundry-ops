@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
-import { hasAnyRole } from '@/server/roles';
 import { canActOnBehalfForAvailability } from '@/server/availability-access';
 import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';

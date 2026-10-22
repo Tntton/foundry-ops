@@ -3,7 +3,6 @@
 import { revalidateScheduleSurfaces } from '@/server/revalidate-schedule';
 import { z } from 'zod';
 import { getSession } from '@/server/session';
-import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { canActOnBehalfForAvailability } from '@/server/availability-access';
 import { upsertAvailabilityForPerson } from '@/server/availability';

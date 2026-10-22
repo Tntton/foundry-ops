@@ -4,7 +4,6 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
-import { hasAnyRole } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { canActOnBehalfForAvailability } from '@/server/availability-access';
 import { writeAudit } from '@/server/audit';
