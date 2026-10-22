@@ -25,6 +25,8 @@ export function ConfirmInvoiceForm({
   expenseGstCents,
   expenseCount,
   excludedExpenseCount,
+  suggestedNumber,
+  suggestedExpenseNumber,
 }: {
   personId: string;
   year: number;
@@ -40,19 +42,24 @@ export function ConfirmInvoiceForm({
   expenseCount: number;
   /** Untagged (OPEX) expenses that stay on the reimbursement path. */
   excludedExpenseCount: number;
+  suggestedNumber: string;
+  suggestedExpenseNumber: string;
 }) {
   const [state, action] = useFormState<ConfirmInvoiceState, FormData>(
     confirmContractorInvoice,
     { status: 'idle' },
   );
 
-  // GST is ADDED to fees (the contractor's own supply) but NOT to expenses,
-  // which are passed through at what they paid with the GST already inside
-  // (D3, TT 2026-09-10). Charging GST on top of those lines would bill it
-  // twice.
+  // Both legs now carry the contractor's OWN GST. Fees: 10% on hours × rate.
+  // Expenses: D8 (TT 2026-10-23) replaced the D4 pass-through with a
+  // recharge — the contractor reclaims the GST they paid and bills Foundry
+  // the net plus 10% of their own. On a GST-free cost there was nothing to
+  // reclaim, so that 10% is a real increase on what they paid.
   const feesGst = Math.round(amountExGstCents * 0.1);
-  const gst = feesGst + expenseGstCents;
-  const total = amountExGstCents + feesGst + expenseTotalCents;
+  const expensesExGst = expenseTotalCents - expenseGstCents;
+  const expensesGstAdded = Math.round(expensesExGst * 0.1);
+  const gst = feesGst + expensesGstAdded;
+  const total = amountExGstCents + feesGst + expensesExGst + expensesGstAdded;
   const money = (cents: number) =>
     new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(
       cents / 100,
@@ -82,16 +89,17 @@ export function ConfirmInvoiceForm({
         {expenseCount > 0 && (
           <div className="flex justify-between py-0.5">
             <span className="text-ink-3">
-              Expenses at cost · {expenseCount} {expenseCount === 1 ? 'item' : 'items'}
-              <span className="ml-1 text-ink-4">(inc {money(expenseGstCents)} GST)</span>
+              Expenses recharged · {expenseCount} {expenseCount === 1 ? 'item' : 'items'}
+              <span className="ml-1 text-ink-4">
+                (you paid {money(expenseTotalCents)} inc GST and reclaim that
+                GST yourself)
+              </span>
             </span>
-            <span className="tabular-nums text-ink">{money(expenseTotalCents)}</span>
+            <span className="tabular-nums text-ink">{money(expensesExGst)}</span>
           </div>
         )}
         <div className="flex justify-between py-0.5">
-          <span className="text-ink-3">
-            GST{expenseCount > 0 ? ' (10% on fees + GST within expenses)' : ' (10%)'}
-          </span>
+          <span className="text-ink-3">GST (10%)</span>
           <span className="tabular-nums text-ink">{money(gst)}</span>
         </div>
         <div className="mt-1 flex justify-between border-t border-line pt-1 font-semibold">
@@ -115,17 +123,38 @@ export function ConfirmInvoiceForm({
         </p>
       </div>
 
+      {expenseCount > 0 && (
+        <p className="rounded-md border border-line bg-surface-subtle px-3 py-2 text-[11px] text-ink-3">
+          Your expenses go out as a <strong>separate invoice</strong> with its
+          own number. You bill Foundry net of GST and add your own 10% on top;
+          the GST on the receipt is yours to reclaim.
+        </p>
+      )}
+
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-xs text-ink-3">
-          Your invoice number <span className="text-status-red">*</span>
+          Your time invoice number <span className="text-status-red">*</span>
           <Input
             name="contractorInvoiceNumber"
             required
             maxLength={80}
+            defaultValue={suggestedNumber}
             placeholder="e.g. JN-2026-08"
             className="h-8 font-mono text-xs"
           />
         </label>
+        {expenseCount > 0 && (
+          <label className="flex flex-col gap-1 text-xs text-ink-3">
+            Your expense invoice number <span className="text-status-red">*</span>
+            <Input
+              name="expenseInvoiceNumber"
+              required
+              maxLength={80}
+              defaultValue={suggestedExpenseNumber}
+              className="h-8 font-mono text-xs"
+            />
+          </label>
+        )}
         <label className="flex flex-col gap-1 text-xs text-ink-3">
           Your invoice PDF (optional)
           <Input

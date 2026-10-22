@@ -47,7 +47,9 @@ const { generateRangeContractorInvoice } = await import(
   '@/app/(app)/me/invoices/actions'
 );
 const { previewContractorRangeInvoice } = await import('@/server/timesheet');
-const { suggestContractorInvoiceNumber } = await import('@/server/contractor-bills');
+const { suggestContractorInvoiceNumber, suggestContractorInvoiceNumbers } = await import(
+  '@/server/contractor-bills'
+);
 
 const SEPT_RATE = 22_000; // $220/h, frozen when September closed
 const CURRENT_RATE = 25_000; // $250/h, today's rate
@@ -102,6 +104,8 @@ function form(overrides: Record<string, string> = {}): FormData {
   fd.set('start', '2026-09-15');
   fd.set('end', '2026-10-14');
   fd.set('contractorInvoiceNumber', 'JN-2026-004');
+  // D7: expenses are their own document, so their own number.
+  fd.set('expenseInvoiceNumber', 'JN-2026-005');
   fd.set('issueDate', '2026-10-15');
   fd.set('dueDate', '2026-10-29');
   for (const [k, v] of Object.entries(overrides)) fd.set(k, v);
@@ -316,6 +320,104 @@ describe('every field is the contractor’s (D5)', () => {
   });
 });
 
+describe('fees and expenses are two documents on the range path too (D6/D7)', () => {
+  const EXPENSE = {
+    id: 'x1',
+    amount: 11_000,
+    gst: 1_000,
+    projectId: 'proj1',
+    project: { code: 'CAC001' },
+  };
+
+  it('raises a separate expense bill under its own number', async () => {
+    db.expense.findMany.mockResolvedValue([EXPENSE]);
+    db.bill.create
+      .mockResolvedValueOnce({ id: 'bill-fees' })
+      .mockResolvedValueOnce({ id: 'bill-exp' });
+
+    await generateRangeContractorInvoice({ status: 'idle' }, form());
+
+    const bills = db.bill.create.mock.calls.map((c) => c[0].data);
+    expect(bills).toHaveLength(2);
+
+    const fees = bills.find((b) => b.category === 'Contractor — services')!;
+    const exp = bills.find((b) => b.category === 'Contractor — expenses')!;
+
+    // The fee bill is time only — no expense folded into it.
+    expect(fees.amountTotal).toBe(
+      10 * SEPT_RATE + 4 * CURRENT_RATE + Math.round((10 * SEPT_RATE + 4 * CURRENT_RATE) * 0.1),
+    );
+    expect(fees.supplierInvoiceNumber).toBe('JN-2026-004');
+
+    // Recharged net + the contractor's own GST.
+    expect(exp.amountTotal).toBe(10_000 + 1_000);
+    expect(exp.gst).toBe(1_000);
+    expect(exp.supplierInvoiceNumber).toBe('JN-2026-005');
+  });
+
+  it('takes the expense out of the reimbursement float, on the expense bill', async () => {
+    db.expense.findMany.mockResolvedValue([EXPENSE]);
+    db.bill.create
+      .mockResolvedValueOnce({ id: 'bill-fees' })
+      .mockResolvedValueOnce({ id: 'bill-exp' });
+
+    await generateRangeContractorInvoice({ status: 'idle' }, form());
+
+    expect(db.expense.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['x1'] } },
+      data: { contractorBillId: 'bill-exp' },
+    });
+  });
+
+  it('refuses expenses without their own number', async () => {
+    db.expense.findMany.mockResolvedValue([EXPENSE]);
+
+    const res = await generateRangeContractorInvoice(
+      { status: 'idle' },
+      form({ expenseInvoiceNumber: '' }),
+    );
+
+    expect(res).toMatchObject({ status: 'error' });
+    expect((res as { message: string }).message).toContain('expense invoice number');
+    expect(db.bill.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses the same number on both documents', async () => {
+    db.expense.findMany.mockResolvedValue([EXPENSE]);
+
+    const res = await generateRangeContractorInvoice(
+      { status: 'idle' },
+      form({ expenseInvoiceNumber: 'JN-2026-004' }),
+    );
+
+    expect(res).toMatchObject({ status: 'error' });
+    expect((res as { message: string }).message).toContain('different numbers');
+    expect(db.bill.create).not.toHaveBeenCalled();
+  });
+
+  it('raises only the expense invoice when the range holds no hours', async () => {
+    db.timesheetEntry.findMany.mockResolvedValue([]);
+    db.expense.findMany.mockResolvedValue([EXPENSE]);
+    db.bill.create.mockResolvedValueOnce({ id: 'bill-exp' });
+
+    const res = await generateRangeContractorInvoice({ status: 'idle' }, form());
+
+    expect(res).toMatchObject({ status: 'success' });
+    const bills = db.bill.create.mock.calls.map((c) => c[0].data);
+    expect(bills).toHaveLength(1);
+    expect(bills[0]!.category).toBe('Contractor — expenses');
+  });
+
+  it('suggests two different numbers so the documents cannot collide', async () => {
+    db.bill.findMany.mockResolvedValue([{ supplierInvoiceNumber: 'JN-2026-003' }]);
+
+    const [fee, expense] = await suggestContractorInvoiceNumbers('p1', 2, d('2026-10-23'));
+
+    expect(fee).toBe('JN-2026-004');
+    expect(expense).toBe('JN-2026-005');
+  });
+});
+
 describe('who may invoice', () => {
   it('refuses full-time staff — they are paid by pay run', async () => {
     db.person.findUnique.mockResolvedValue({
@@ -429,7 +531,7 @@ describe('the preview tells the contractor what is missing', () => {
     expect(preview.groups[0]!.expenseTotalCents).toBe(11_000);
   });
 
-  it('adds GST to fees but never on top of pass-through expenses (D3/D4)', async () => {
+  it('recharges expenses at net and adds the contractor’s own GST (D8)', async () => {
     db.timesheetEntry.findMany.mockResolvedValue([entry('te-sep', '2026-09-20', 10)]);
     db.expense.findMany.mockResolvedValue([
       {
@@ -449,10 +551,37 @@ describe('the preview tells the contractor what is missing', () => {
 
     const fees = 10 * SEPT_RATE;
     expect(preview.totals.feesExGstCents).toBe(fees);
-    // GST = 10% of fees + the GST already inside the expense, NOT 10% of both.
-    expect(preview.totals.feesGstCents + preview.totals.expenseGstCents).toBe(
-      Math.round(fees * 0.1) + 1_000,
+    // They paid 11,000 inc GST, reclaim the 1,000 themselves, and bill the
+    // 10,000 net plus 1,000 of their own.
+    expect(preview.totals.expensePaidIncGstCents).toBe(11_000);
+    expect(preview.totals.expensesExGstCents).toBe(10_000);
+    expect(preview.totals.expenseGstCents).toBe(1_000);
+    expect(preview.totals.amountTotalCents).toBe(
+      fees + Math.round(fees * 0.1) + 10_000 + 1_000,
     );
-    expect(preview.totals.amountTotalCents).toBe(fees + Math.round(fees * 0.1) + 11_000);
+  });
+
+  it('grosses up a GST-free expense — where recharge and pass-through diverge', async () => {
+    db.timesheetEntry.findMany.mockResolvedValue([entry('te-sep', '2026-09-20', 10)]);
+    db.expense.findMany.mockResolvedValue([
+      {
+        id: 'x3',
+        amount: 44_000, // overseas flight: no GST inside it
+        gst: 0,
+        projectId: 'proj1',
+        project: { id: 'proj1', code: 'CAC001', name: 'Galileo' },
+      },
+    ]);
+
+    const preview = await previewContractorRangeInvoice(
+      'p1',
+      d('2026-09-15'),
+      d('2026-10-14'),
+    );
+
+    // Nothing was reclaimable, so the net is the whole amount and the 10%
+    // on top is a real increase on what the contractor paid.
+    expect(preview.totals.expensesExGstCents).toBe(44_000);
+    expect(preview.totals.expenseGstCents).toBe(4_400);
   });
 });

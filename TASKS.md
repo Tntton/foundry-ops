@@ -2143,7 +2143,7 @@ Unapproved time in the range is listed with the approver's name rather than hidd
 **overlap warning:** `/expenses` was restructured by TASK-512 in a parallel session on 2026-10-23. Build this on top of that page, not against the pre-merge layout.
 
 ### TASK-517 — Expenses invoice separately from timesheet fees
-**status:** todo
+**status:** done
 **depends on:** TASK-509, TASK-511
 
 **Ask (TT, 2026-10-23):** expenses should produce their own invoice rather than riding on the fee invoice.
@@ -2159,22 +2159,34 @@ Unapproved time in the range is listed with the approver's name rather than hidd
 **What D8 actually changes.** Under pass-through, an expense line carried the GST-inclusive amount the contractor paid and they added no GST; Foundry reclaimed the input credit. Under recharge, the contractor claims that credit themselves, bills Foundry the **net** amount, and adds 10% of their own on top. For a standard-rated expense the total is unchanged (A$110 inc GST → A$100 net + A$10 GST). The difference bites on **GST-free** purchases — overseas flights, basic food — where the net is the full amount and 10% is now added on top of it. That is correct for a recharge: the supply from contractor to Foundry is their taxable supply of services, regardless of how the underlying item was taxed.
 
 **acceptance:**
-- [ ] Expense lines raise their own `Bill` rows, separate from the fee bills, with `category = 'Contractor — expenses'` so AP can tell the two apart without inspecting line items.
-- [ ] The expense invoice carries its **own contractor-supplied number**, independent of the fee invoice's. Required whenever there are expenses in scope, autosuggested on the same `{INITIALS}-{YYYY}-{NNN}` sequence, editable, and collision-checked exactly as the fee number is (D1 applies to both documents equally — each is the contractor's own).
-- [ ] Still one Bill per project per invoice, so each lands on the right engagement.
-- [ ] **Recharge arithmetic (D8):** expense bill ex-GST = Σ(`Expense.amount` − `Expense.gst`); GST = 10% of that; total = ex-GST + GST. GST is no longer "the component already inside the figure".
-- [ ] Applied to **both** `confirmContractorInvoice` and `generateRangeContractorInvoice` (D6).
-- [ ] Both UIs updated: the fee and expense sections total separately, each with its own number field, and the copy no longer claims GST is not added to expenses.
-- [ ] `TimesheetPeriod` snapshot columns need **no migration** — `draftExpenseTotalCents` and `draftExpenseGstCents` are both stored, so the net is derivable as the difference. Reinterpret rather than re-migrate, and say so in the column comments.
-- [ ] Double-payment guard holds unchanged: `contractorBillId` still takes the expense out of the reimbursement float, whichever bill it lands on.
-- [ ] A range or month containing expenses but **no** hours raises only the expense invoice, and vice versa — neither document is mandatory.
-- [ ] Update the D3/D4 comments through `actions.ts`, `timesheet.ts` and `schema.prisma` so the code stops asserting a rule that no longer holds.
-- [ ] Tests: existing TASK-509 pass-through assertions **rewritten, not deleted** — they encode the old spec and must now encode the new one; GST added on net; GST-free expense correctly grossed up; separate numbers on separate bills; duplicate expense number rejected; expense-only and fee-only cases; both paths covered.
-- [ ] Commit: `feat(TASK-517): expenses invoice separately from fees, on recharge GST`
+- [x] Expense lines raise their own `Bill` rows, separate from the fee bills, with `category = 'Contractor — expenses'` so AP can tell the two apart without inspecting line items.
+- [x] The expense invoice carries its **own contractor-supplied number**, independent of the fee invoice's. Required whenever there are expenses in scope, autosuggested on the same `{INITIALS}-{YYYY}-{NNN}` sequence, editable, and collision-checked exactly as the fee number is (D1 applies to both documents equally — each is the contractor's own).
+- [x] Still one Bill per project per invoice, so each lands on the right engagement.
+- [x] **Recharge arithmetic (D8):** expense bill ex-GST = Σ(`Expense.amount` − `Expense.gst`); GST = 10% of that; total = ex-GST + GST. GST is no longer "the component already inside the figure".
+- [x] Applied to **both** `confirmContractorInvoice` and `generateRangeContractorInvoice` (D6).
+- [x] Both UIs updated: the fee and expense sections total separately, each with its own number field, and the copy no longer claims GST is not added to expenses.
+- [x] `TimesheetPeriod` snapshot columns need **no migration** — `draftExpenseTotalCents` and `draftExpenseGstCents` are both stored, so the net is derivable as the difference. Reinterpret rather than re-migrate, and say so in the column comments.
+- [x] Double-payment guard holds unchanged: `contractorBillId` still takes the expense out of the reimbursement float, whichever bill it lands on.
+- [x] A range or month containing expenses but **no** hours raises only the expense invoice, and vice versa — neither document is mandatory.
+- [x] Update the D3/D4 comments through `actions.ts`, `timesheet.ts` and `schema.prisma` so the code stops asserting a rule that no longer holds.
+- [x] Tests: existing TASK-509 pass-through assertions **rewritten, not deleted** — they encode the old spec and must now encode the new one; GST added on net; GST-free expense correctly grossed up; separate numbers on separate bills; duplicate expense number rejected; expense-only and fee-only cases; both paths covered.
+- [x] Commit: `feat(TASK-517): expenses invoice separately from fees, on recharge GST`
 
 **Flagged for the accountant, not blocking:** D8 is the treatment TASK-509 predicted, but it does change what Foundry can reclaim. Under pass-through Foundry claimed the input credit on the original receipt; under recharge the contractor claims it and Foundry claims on the contractor's invoice instead. Net position is the same where the contractor is GST-registered, and worse for Foundry where they are not — a non-registered contractor cannot add GST at all, so their expenses should recharge at net with no GST. **Not handled in this task** — the code assumes a registered contractor, which is true of everyone on the books today. Raise it as its own task if an unregistered contractor is ever onboarded.
 
 ---
+
+**note on completion:** D6/D7/D8 all landed. Fees and expenses are now two documents on **both** paths — `confirmContractorInvoice` (month) and `generateRangeContractorInvoice` (range) — each raising its own `Bill` rows under `Contractor — services` and `Contractor — expenses`, each carrying its own contractor-supplied number. `suggestContractorInvoiceNumbers(personId, 2)` hands out two consecutive numbers in one pass, because two independent calls would both have returned the same "next" value and collided on submit.
+
+The D8 recharge is a four-line arithmetic change (`rechargeExpenseTotals`) with a much larger behavioural tail, and the tests are built around the one case that can actually detect it: for a standard-rated cost, recharge and pass-through produce the identical total, so only a **GST-free** expense distinguishes them. A$440 with no GST inside it now bills Foundry A$484 — the contractor had nothing to reclaim, so the 10% is a real increase. Both paths have that test; without it the suite would pass under either treatment and tell us nothing.
+
+No migration was needed for the `TimesheetPeriod` snapshot. `draftExpenseTotalCents` and `draftExpenseGstCents` both persist, so the net is their difference — the columns record what was *paid*, which is still true; what changed is that the inclusive figure is no longer what Foundry is billed and the GST inside it is no longer Foundry's to reclaim. Said so in the schema comment rather than re-migrating.
+
+`src/__tests__/contractor-expense-passthrough.test.ts` was renamed to `contractor-expense-recharge.test.ts` and its assertions rewritten rather than deleted — they encoded the old rule correctly and the same arithmetic needed pinning under the new one. Two other suites needed `bill.findFirst` added to their prisma mocks for the collision check; that check also had `hit !== null` loosened to `hit != null`, since a nullish result meant "no row" but was being read as a collision, which would have blocked invoicing outright.
+
+788 tests pass (74 files), typecheck clean, lint clean.
+
+**Still open, deliberately:** the treatment assumes a GST-registered contractor, true of everyone on the books today. An unregistered one cannot add GST at all and would need recharging at net with none. Flagged on the task above rather than guessed at.
 
 ### TASK-519 — Receipt filenames identify who, what, which project and when
 **status:** done

@@ -230,11 +230,27 @@ export async function suggestContractorInvoiceNumber(
   personId: string,
   now = new Date(),
 ): Promise<string | null> {
+  const [first] = await suggestContractorInvoiceNumbers(personId, 1, now);
+  return first ?? null;
+}
+
+/**
+ * Suggest `count` consecutive numbers in one pass.
+ *
+ * Fees and expenses are separate documents (D7), so a contractor raising
+ * both at once needs two numbers that don't collide with each other — not
+ * two independent calls that would each return the same "next" value.
+ */
+export async function suggestContractorInvoiceNumbers(
+  personId: string,
+  count: number,
+  now = new Date(),
+): Promise<string[]> {
   const person = await prisma.person.findUnique({
     where: { id: personId },
     select: { initials: true, firstName: true, lastName: true },
   });
-  if (!person) return null;
+  if (!person) return [];
 
   const prefix = `${initialsFor(person)}-${now.getUTCFullYear()}-`;
   const existing = await prisma.bill.findMany({
@@ -252,7 +268,9 @@ export async function suggestContractorInvoiceNumber(
     const n = Number(m[3]);
     if (Number.isFinite(n) && n > max) max = n;
   }
-  return `${prefix}${String(max + 1).padStart(3, '0')}`;
+  return Array.from({ length: Math.max(0, count) }, (_, i) =>
+    `${prefix}${String(max + 1 + i).padStart(3, '0')}`,
+  );
 }
 
 /**
@@ -279,5 +297,48 @@ export async function contractorInvoiceNumberTaken(
     },
     select: { id: true },
   });
-  return hit !== null;
+  // Loose on purpose: Prisma returns null, but anything nullish means "no
+  // row found", and treating an undefined as a collision would block a
+  // contractor from invoicing at all.
+  return hit != null;
+}
+
+// ─── Fee vs expense invoices (TASK-517, D7/D8) ──────────────────────────
+
+/** Fee bills — the contractor's time. GST is ADDED to hours × rate. */
+export const CONTRACTOR_FEE_CATEGORY = 'Contractor — services';
+/** Expense bills — costs recharged to Foundry, on their own invoice (D7). */
+export const CONTRACTOR_EXPENSE_CATEGORY = 'Contractor — expenses';
+
+/**
+ * Recharge arithmetic for a contractor's expense lines (D8, TT 2026-10-23).
+ *
+ * This REVERSES D4. Under the old pass-through treatment the contractor
+ * billed the GST-inclusive amount they paid, added no GST of their own, and
+ * Foundry reclaimed the input credit on the original receipt. Under recharge
+ * the contractor claims that credit themselves, bills Foundry the NET, and
+ * adds 10% of their own on top — because the supply from contractor to
+ * Foundry is their taxable supply of services, not a bare forwarding of
+ * someone else's invoice.
+ *
+ * For a standard-rated cost the total is unchanged: A$110 inc GST becomes
+ * A$100 net + A$10 GST. The difference bites on GST-FREE purchases —
+ * overseas flights, basic food — where the net is the whole amount and 10%
+ * is now genuinely added on top of it. That is the correct outcome for a
+ * recharge, and it is the single most likely thing to surprise someone
+ * reading a total, so it is worth knowing it is deliberate.
+ *
+ * Assumes a GST-registered contractor, which is everyone on the books
+ * today. An unregistered contractor cannot add GST at all and would need
+ * their expenses recharged at net with none — see the note on TASK-517.
+ */
+export function rechargeExpenseTotals(
+  expenses: ReadonlyArray<{ amount: number; gst: number }>,
+): { exGstCents: number; gstCents: number; totalCents: number } {
+  // `amount` is what they paid, GST inclusive; `gst` is the component inside
+  // it. The net is the difference, and is the whole amount for a GST-free
+  // cost, where `gst` is 0.
+  const exGstCents = expenses.reduce((sum, x) => sum + (x.amount - x.gst), 0);
+  const gstCents = Math.round(exGstCents * 0.1);
+  return { exGstCents, gstCents, totalCents: exGstCents + gstCents };
 }
