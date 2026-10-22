@@ -1333,6 +1333,12 @@ model Bill {
   supplierName             String?    // for organisations without a Person row
   supplierInvoiceNumber    String?
   receivedVia              String     // email / upload / manual
+  // Free-text description carried on the document itself (TASK-511, D5).
+  // For a contractor's own invoice this is the personal identifier they
+  // choose to add — their PO, a client ref, an engagement nickname — so it
+  // survives into the AP queue and Xero instead of living only in the audit
+  // trail, which is where `notes` used to stop.
+  description              String?
   originalEmailId          String?    // Graph message ID if parsed by agent
   attachmentSharepointUrl  String?
   // Graph DriveItem id for the vendor-invoice PDF/image uploaded to

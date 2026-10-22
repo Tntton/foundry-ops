@@ -1,0 +1,16 @@
+-- Contractor-supplied description on a Bill (TASK-511, D5).
+--
+-- `Bill` has carried no description/notes column. `confirmContractorInvoice`
+-- accepted a `notes` field and wrote it into the AuditEvent only, so nothing
+-- the contractor typed ever reached the document itself — it was invisible in
+-- the AP queue, on the bill detail, and in anything pushed to Xero.
+--
+-- D5 (TT 2026-10-23) asks for an optional personal identifier the contractor
+-- adds to the invoice description — their own PO number, a client reference,
+-- an engagement nickname. That is reconciliation metadata whose whole purpose
+-- is to be read later by someone else, so it belongs on the row, not in the
+-- audit trail.
+--
+-- Nullable with no default: bills raised before this, and every bill from the
+-- agent/email intake path, simply have none.
+ALTER TABLE "Bill" ADD COLUMN "description" TEXT;
