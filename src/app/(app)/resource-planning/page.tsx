@@ -10,10 +10,12 @@ import {
 } from '@/server/availability';
 import { computeFirmUtilisation } from '@/server/reports/utilisation';
 import { computePoolStatus } from '@/server/pool-status';
+import { computeBandSupply } from '@/server/band-supply';
 import type { PoolStatus } from '@prisma/client';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PoolChip } from './pool-chip';
+import { BandSupplyCard } from './band-supply-card';
 
 /**
  * Resource planning — bandwidth heatmap is the headline (per TT,
@@ -401,6 +403,11 @@ export default async function ResourcePlanningPage({
   // the bigger queries above.
   const utilisation = await computeFirmUtilisation();
 
+  // Band-level supply — how many hours of each delivery band are going
+  // spare per day and per week (TT, 2026-10-23). Sequential like the
+  // rest, to stay inside the pgbouncer pool.
+  const supply = await computeBandSupply(weeksAhead);
+
   return (
     <div className="space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -430,6 +437,9 @@ export default async function ResourcePlanningPage({
           </div>
         </div>
       </header>
+
+      {/* ── Band supply — what is left to sell, per day and week ──── */}
+      <BandSupplyCard supply={supply} weeksAhead={weeksAhead} />
 
       {/* ── Bandwidth heatmap (top of page per TT) ─────────────────── */}
       <BandwidthHeatmapCard

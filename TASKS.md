@@ -2278,20 +2278,32 @@ The transforms live in `availability-brush.ts` as pure functions (`resolveBrush`
 **not verified here:** the page in situ. Tailwind token classes, the view toggle inside `/availability`, and the interaction with the prefill banner and the inactive-profile gate have not been seen rendered — only the component in isolation.
 
 ### TASK-521 — Analyst hours available, per day and per week
-**status:** todo
+**status:** done
 
 **Gap.** `computeBandwidthHeatmap` aggregates to person × week. There is no band-level supply number and no daily granularity anywhere, so "how many analyst hours can I sell on Thursday" is currently unanswerable from the app.
 
-**Definition used (stated on the surface so nobody has to guess):** available = forecast hours with no `projectId` attached. Hours tagged to a project are committed; a day with no forecast row at all is unknown, not free — a person who has not submitted contributes zero to supply, and the surface says how many people that is so the number is read with the right scepticism.
+**Definition used (stated on the surface so nobody has to guess).** Three states per person-day, deliberately kept apart:
 
-- [ ] Server function returns, per day in the horizon: unallocated / allocated / total forecast hours, grouped by band.
-- [ ] Same roll-up at week granularity.
-- [ ] Analyst is the headline band but Consultant and Expert render alongside.
-- [ ] Surfaced on `/resource-planning` above the heatmap, honouring the 4/6/8/12-week selector.
-- [ ] Non-submitters counted and shown, so the figure is not read as complete.
-- [ ] Contractors and partners excluded on the same basis `computeBandwidthHeatmap` excludes them.
-- [ ] Test: fixture people across bands with mixed allocated / unallocated / absent forecasts produce the expected daily and weekly totals.
-- [ ] Commit: `feat(TASK-521): analyst hours available per day and week`
+- **allocated** — explicit forecast row tagged to a project. Committed, not counted as supply.
+- **declared free** — explicit forecast row with no project. The person has said they are free.
+- **assumed free** — no row, but a standing regular-days schedule says they normally work that day. Real planning signal, but an inference, so it renders as a separate `est` figure rather than being folded into the declared number.
+
+A person with neither a row nor a schedule contributes nothing and is counted as *silent*. Absence of a forecast is unknown capacity, not free capacity, and reading it as free is how a bench gets oversold — so the card says how many people the number is silent about.
+
+The fallback matches `computeBandwidthHeatmap` exactly (explicit row wins, else the standing schedule, regular-days hours always unallocated), so the two surfaces can never disagree about a given day.
+
+- [x] Server function returns, per day in the horizon: unallocated / allocated / total forecast hours, grouped by band.
+- [x] Same roll-up at week granularity.
+- [x] Analyst is the headline band but Consultant and Expert render alongside.
+- [x] Surfaced on `/resource-planning` above the heatmap, honouring the 4/6/8/12-week selector.
+- [x] Non-submitters counted and shown, so the figure is not read as complete.
+- [x] Contractors and partners excluded on the same basis `computeBandwidthHeatmap` excludes them.
+- [x] Test: fixture people across bands with mixed allocated / unallocated / absent forecasts produce the expected daily and weekly totals.
+- [x] Commit: `feat(TASK-521): analyst hours available per day and week`
+
+**note on completion:** `src/server/band-supply.ts` is a new module rather than another function inside `availability.ts`, which is already 500 lines and was being edited by a parallel session. The daily strip on the card covers the first fortnight — the window a staffing conversation actually happens in — while the weekly row spans the whole selected horizon; a week column is exactly the sum of its days because both read the same `addPersonDay` fold.
+
+Verified: 12 unit tests against a mocked Prisma, covering the allocated / declared / assumed split, the day→week roll-up, explicit rows overriding the standing schedule (including an explicit zero for a day off), silent-person counting, the band and employment filter sent to the DB, and bands rendering empty rather than disappearing. The card itself was rendered against fixture data in an isolated bundle to check layout; it has **not** been seen inside `/resource-planning` because the app can't boot in this checkout.
 
 ### TASK-522 — Sync availability from each person's Outlook calendar
 **status:** blocked — needs TT + tenant consent
