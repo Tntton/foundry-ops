@@ -71,7 +71,7 @@ export default async function IntegrationsIndexPage() {
         <IntegrationCard
           href="/admin/integrations/navan"
           title="Navan"
-          blurb="Pulls travel bookings + receipts from Foundry's Navan account, lands them as Expense rows in /bills/intake."
+          blurb="Pulls travel bookings + receipts from Foundry's Navan account, lands them as Expense rows on /expenses."
           status={
             navanConnected
               ? {

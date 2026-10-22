@@ -197,11 +197,11 @@ function slidesFor(role: Role): OnboardingSlide[] {
         },
         {
           title: 'Expenses go through the receipt agent.',
-          body: 'Take a photo, upload it, or forward the receipt to finance@foundry.health. The extraction fills in the fields, you check them, and it routes to your manager. WhatsApp works too, same address book.',
-          spotlight: '[data-tour="nav-/bills/intake"]',
+          body: 'Take a photo, upload it, or forward the receipt to finance@foundry.health. The extraction fills in the fields, you check them, and it routes to your manager. WhatsApp works too, same address book. Upload and status live on the one page.',
+          spotlight: '[data-tour="nav-/expenses"]',
           links: [
-            { label: 'File expense', href: '/expenses/new' },
-            { label: 'My expenses', href: '/expenses' },
+            { label: 'Expenses', href: '/expenses' },
+            { label: 'Key one in manually', href: '/expenses/new' },
           ],
         },
       ];

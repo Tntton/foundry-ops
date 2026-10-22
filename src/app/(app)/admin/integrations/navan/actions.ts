@@ -167,6 +167,7 @@ export async function runNavanSyncAction(
     revalidatePath('/admin/integrations');
     revalidatePath('/admin/integrations/navan');
     revalidatePath('/bills/intake');
+    revalidatePath('/expenses');
     return {
       status: 'success',
       imported: result.imported,
@@ -228,6 +229,7 @@ export async function importNavanCsvAction(
     });
     revalidatePath('/admin/integrations/navan');
     revalidatePath('/bills/intake');
+    revalidatePath('/expenses');
     revalidatePath('/approvals');
     return {
       status: 'success',

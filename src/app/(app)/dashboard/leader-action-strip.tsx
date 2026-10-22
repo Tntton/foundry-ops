@@ -117,7 +117,7 @@ export function LeaderActionStrip({
           without scrolling. Same target URLs as the staff strip. */}
       <div className="flex flex-wrap gap-2 text-xs">
         <SecondaryAction href="/timesheet?view=week" icon="🕒" label="Log my hours" />
-        <SecondaryAction href="/bills/intake" icon="🧾" label="Upload receipt" />
+        <SecondaryAction href="/expenses" icon="🧾" label="Upload receipt" />
         <SecondaryAction href="/availability" icon="📅" label="Set availability" />
       </div>
 

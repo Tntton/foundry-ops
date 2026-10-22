@@ -24,6 +24,7 @@ import {
   Database,
   Upload,
   ListChecks,
+  ReceiptText,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -232,9 +233,11 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   {
     // Day-to-day input surfaces every staff member uses — log time, drop a
     // receipt, track the resulting reimbursement. Visible to all signed-in
-    // people. Receipt Upload double-routes to vendor bills for admins, but
-    // the page handles that in-context with the per-row kind toggle, so
-    // there's no second nav entry needed for them.
+    // people. Expenses carries the receipt dropzone AND the submitted list:
+    // two nav entries for one errand ("Receipt Upload" vs "Submitted
+    // Expenses") read as two different things and sent people to the wrong
+    // one. Vendor AP intake stays separate under Company Inputs — that is a
+    // different question (who gets paid), not a different step.
     id: 'inputs-individual',
     label: 'Individual Inputs',
     items: [
@@ -258,17 +261,27 @@ export const NAV_GROUPS: readonly NavGroup[] = [
         denyBands: ['Support_Staff'],
       },
       {
-        label: 'Receipt Upload',
-        href: '/bills/intake',
-        icon: Inbox,
-        // Open to every staff member — `expense.submit` (any role) is the
-        // gate enforced server-side. Vendor-bill uploads still require
-        // bill.create, but the page renders an expense-only mode for
-        // others.
+        // The contractor's own invoicing surface. Shipped in TASK-505 but
+        // lived only in the avatar dropdown until TASK-510 — which meant a
+        // contractor scanning the sidebar for "how do I get paid" found
+        // Timesheet, Receipts and Expenses and concluded there was no
+        // self-invoicing at all. Sits directly under Timesheet because that
+        // is what feeds it.
+        //
+        // Deliberately NOT gated on employment: the shell doesn't know
+        // contractor vs full-time, and the page already renders a "you're on
+        // payroll" explainer rather than 404ing, so threading `employment`
+        // through the shell would buy nothing.
+        label: 'My invoices',
+        href: '/me/invoices',
+        icon: ReceiptText,
         roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'],
       },
       {
-        label: 'Submitted Expenses',
+        // Upload + submitted list on one page. `expense.submit` (any role)
+        // is the gate enforced server-side; the per-row vendor-bill toggle
+        // on the dropzone still requires bill.create.
+        label: 'Expenses',
         href: '/expenses',
         icon: Receipt,
         roles: ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'],

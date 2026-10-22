@@ -3,8 +3,12 @@ import { notFound } from 'next/navigation';
 import type { ExpenseStatus } from '@prisma/client';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
+import { hasAnyRole } from '@/server/roles';
+import { prisma } from '@/server/db';
 import { listExpenses } from '@/server/expenses';
 import { EXPENSE_CATEGORIES } from '@/lib/expense-categories';
+import { startOfCurrentAuFy } from '@/lib/au-fy';
+import { IntakeDropzone } from '../bills/intake/dropzone';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -93,6 +97,41 @@ export default async function ExpensesPage({
     ...(q ? { search: q } : {}),
   });
   const canSubmit = hasCapability(session, 'expense.submit');
+  // Admins / partners can also route an uploaded row to vendor AP. The
+  // dropzone renders the per-row kind toggle off this; everyone else gets
+  // expense-only. Server-side gate stays in bills/intake/actions.ts.
+  const canCreateBill = hasCapability(session, 'bill.create');
+  // Who can follow a vendor bill through to the AP review pane. Narrower
+  // than bill.create (see `ensureCanReview` in bills/intake/actions.ts) —
+  // the dropzone uses it to decide whether to navigate there after an
+  // upload or stay put.
+  const canReviewBills = hasAnyRole(session, ['super_admin', 'admin', 'partner']);
+
+  // Project scope for the dropzone's inline tag picker — mirrors what the
+  // AP intake surface uses: every live project (so the FHB / FHO / FHX
+  // overhead buckets and standing internal work all appear), plus archived
+  // projects that closed inside the current AU FY so a late receipt can
+  // still be coded to the job it belongs to.
+  const LIVE_STAGES = ['kickoff', 'delivery', 'closing', 'standing'] as const;
+  const fyStart = startOfCurrentAuFy();
+  const uploadProjects = canSubmit
+    ? await prisma.project.findMany({
+        where: {
+          OR: [
+            { stage: { in: [...LIVE_STAGES] } },
+            {
+              stage: 'archived',
+              OR: [
+                { actualEndDate: { gte: fyStart } },
+                { AND: [{ actualEndDate: null }, { endDate: { gte: fyStart } }] },
+              ],
+            },
+          ],
+        },
+        orderBy: [{ stage: 'asc' }, { code: 'asc' }],
+        select: { id: true, code: true, name: true },
+      })
+    : [];
 
   // Pivot helper for the "By project" view: groups rows by project code
   // (OPEX = no project) with running subtotals. Sort buckets so OPEX lands
@@ -139,15 +178,12 @@ export default async function ExpensesPage({
 
   return (
     <div className="space-y-6">
-      <header className="flex items-center justify-between">
+      <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-ink">Submitted Expenses</h1>
+          <h1 className="text-xl font-semibold text-ink">Expenses</h1>
           <p className="text-sm text-ink-3">
-            {scope === 'all'
-              ? 'All expenses in scope.'
-              : view === 'by-project'
-                ? 'Your spend grouped by project code.'
-                : 'Your submitted expenses.'}
+            Upload a receipt or key one in by hand, then track it through
+            approval and reimbursement.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -164,12 +200,7 @@ export default async function ExpensesPage({
           </a>
           {canSubmit && (
             <Button asChild variant="outline">
-              <Link href="/bills/intake">Drop a receipt (OCR) →</Link>
-            </Button>
-          )}
-          {canSubmit && (
-            <Button asChild>
-              <Link href="/expenses/new">+ New expense</Link>
+              <Link href="/expenses/new">Enter one manually →</Link>
             </Button>
           )}
         </div>
@@ -189,6 +220,47 @@ export default async function ExpensesPage({
           </Link>
         </div>
       )}
+
+      {canSubmit && (
+        <section aria-labelledby="upload-heading" className="space-y-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2
+              id="upload-heading"
+              className="text-sm font-semibold uppercase tracking-wide text-ink-3"
+            >
+              1 · Upload a receipt
+            </h2>
+            <p className="text-xs text-ink-3">
+              OCR reads supplier, amount, date and GST — you check the fields
+              before it submits.{' '}
+              {canCreateBill && (
+                <Link href="/bills/intake" className="text-brand hover:underline">
+                  Supplier invoices → AP intake
+                </Link>
+              )}
+            </p>
+          </div>
+          <IntakeDropzone
+            defaultKind="expense"
+            canCreateBill={canCreateBill}
+            canReviewBills={canReviewBills}
+            projectOptions={uploadProjects}
+          />
+        </section>
+      )}
+
+      <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-line pt-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-3">
+          {canSubmit ? '2 · Submitted' : 'Submitted'}
+        </h2>
+        <p className="text-xs text-ink-3">
+          {scope === 'all'
+            ? 'All expenses in scope.'
+            : view === 'by-project'
+              ? 'Your spend grouped by project code.'
+              : 'Everything you have submitted, newest first.'}
+        </p>
+      </div>
 
       <div
         role="tablist"
@@ -395,11 +467,14 @@ export default async function ExpensesPage({
               </>
             ) : (
               <>
-                No expenses yet.{' '}
+                Nothing submitted yet.{' '}
                 {canSubmit && (
-                  <Link href="/expenses/new" className="text-brand hover:underline">
-                    Submit one →
-                  </Link>
+                  <>
+                    Drop a receipt above, or{' '}
+                    <Link href="/expenses/new" className="text-brand hover:underline">
+                      key one in manually →
+                    </Link>
+                  </>
                 )}
               </>
             )}

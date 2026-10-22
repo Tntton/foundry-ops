@@ -37,14 +37,14 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     path: '/expenses',
-    label: 'My expenses',
-    blurb: 'List your submitted expenses and their approval status.',
+    label: 'Expenses',
+    blurb: 'Upload a receipt (OCR fills the fields) and track your submitted expenses through approval.',
     capability: 'expense.submit',
   },
   {
     path: '/bills/intake',
-    label: 'Bills intake',
-    blurb: 'Upload a supplier invoice or receipt; OCR fills the fields.',
+    label: 'AP intake',
+    blurb: 'Upload a supplier invoice Foundry pays; OCR fills the fields, then review and post to the AP queue.',
     capability: 'bill.create',
   },
   {

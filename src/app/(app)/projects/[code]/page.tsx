@@ -1162,10 +1162,7 @@ function ProjectExpensesTab({
         <div className="flex items-center gap-3 text-sm">
           {canLogExpense && (
             <>
-              <Link
-                href={`/bills/intake`}
-                className="text-brand hover:underline"
-              >
+              <Link href="/expenses" className="text-brand hover:underline">
                 + Drop receipt (OCR)
               </Link>
               <span className="text-ink-4">·</span>
@@ -1186,8 +1183,8 @@ function ProjectExpensesTab({
             {canLogExpense && (
               <>
                 Drop a receipt on{' '}
-                <Link href="/bills/intake" className="text-brand hover:underline">
-                  intake
+                <Link href="/expenses" className="text-brand hover:underline">
+                  Expenses
                 </Link>{' '}
                 or{' '}
                 <Link
