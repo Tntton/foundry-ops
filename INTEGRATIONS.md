@@ -367,65 +367,30 @@ Saving in the editor always writes `source: 'human'`, so painting over a synced 
 
 The reason a day dropped (the event subjects) goes into the sync's `AuditEvent` delta, **not** into `AvailabilityForecast.notes` — the editor treats the Monday row's `notes` as the whole week's note, so writing there would surface a calendar subject as a week note and get wiped on the next save.
 
-### Required permissions — and why this needs its own app registration
+### Required permissions — and why this uses its own app registration
 
-`Calendars.Read` (Application).
+`Calendars.Read` (Application), on a **second app registration**, `Foundry Ops Calendar Sync`, holding that permission and nothing else. Credentials reach the code as `CALENDAR_ENTRA_CLIENT_ID` / `CALENDAR_ENTRA_CLIENT_SECRET`; absent those it falls back to the shared `Foundry Ops` credentials, which is convenient in a tenant with no mail policy but is not the production setup.
 
-**An Exchange `ApplicationAccessPolicy` is scoped per app registration and governs Mail, Calendars and Contacts together.** The `Foundry Ops` registration already carries a `RestrictAccess` policy pinning `Mail.Read` to `foundry-ops-mail-intake@` (section 7). Adding `Calendars.Read` to that same registration forces a choice between two bad outcomes: the calendar sync can read only those two mailboxes, or the mail group is widened to every staff mailbox and `Mail.Read` goes with it, which breaks A6.
+**Scope it with RBAC for Applications, not `New-ApplicationAccessPolicy`.** The AAP cmdlet used in section 7 is deprecated — Microsoft's own reference says not to create new policies and that existing ones will need migrating. No retirement date has been announced and the section 7 mail policy keeps working, but nothing new should be built on it.
 
-So the calendar sync gets a **second app registration**, `Foundry Ops Calendar Sync`, holding `Calendars.Read` and nothing else, with its own policy scoped to a staff group. Verify this at setup — do not assume it.
+Two things follow from that, and they pull in opposite directions:
 
-### One-time setup (TT / Super Admin)
+- Under the **legacy** AAP mechanism a policy is scoped per *app registration* and governs Mail, Calendars and Contacts together. On that mechanism, adding `Calendars.Read` to `Foundry Ops` would force a choice between the sync reading only the two AP-intake mailboxes or widening mail access to every staff mailbox.
+- Under **App RBAC** that is not true: `Calendars.Read` can be scoped independently of `Mail.Read` on one registration, via separate role assignments with separate resource scopes.
 
-**Step 1 — new app registration.** Entra ID → App registrations → New registration, name `Foundry Ops Calendar Sync`, single tenant. Add **API permissions → Microsoft Graph → Application permissions → `Calendars.Read`**, then **Grant admin consent for foundry.health**. Create a client secret and put the values in env:
+So the separate registration is a practical call, not a forced one. The AP-intake mail scoping is live and working on a legacy policy; reusing that registration would mean migrating that policy to App RBAC first, which is a change to a working integration with its own verification. A separate registration leaves it alone. Consolidating later is a reasonable piece of housekeeping, not a prerequisite.
 
-```
-CALENDAR_ENTRA_CLIENT_ID=…
-CALENDAR_ENTRA_CLIENT_SECRET=…
-```
+### Setup
 
-`ENTRA_TENANT_ID` is shared with the main app. If these two are absent the code falls back to the shared `Foundry Ops` credentials — convenient in a tenant with no mail policy, but not the intended production setup.
+Step-by-step, with checks and a rollback: **[`docs/runbooks/outlook-calendar-sync-setup.md`](docs/runbooks/outlook-calendar-sync-setup.md)**.
 
-**Step 2 — scope it to staff mailboxes.**
+In outline: register `Foundry Ops Calendar Sync` → grant and consent `Calendars.Read` → create `foundry-ops-calendar-sync@foundry.health` and put the opted-in mailboxes in it → `New-ServicePrincipal` / `New-ManagementScope` / `New-ManagementRoleAssignment -Role "Application Calendars.Read" -CustomResourceScope …` → verify with `Test-ServicePrincipalAuthorization` (allow 30 minutes to propagate) → apply the `AvailabilityForecast.source` migration → set the env vars and flip the flag on staging before prod.
 
-```powershell
-New-DistributionGroup -Name "Foundry Ops Calendar Sync" `
-  -Alias "foundry-ops-calendar-sync" `
-  -Type "Security" `
-  -PrimarySmtpAddress "foundry-ops-calendar-sync@foundry.health" `
-  -Members @("trung@foundry.health", "michael@foundry.health")
-```
-
-```powershell
-New-ApplicationAccessPolicy `
-  -AppId "{CALENDAR_ENTRA_CLIENT_ID}" `
-  -PolicyScopeGroupId "foundry-ops-calendar-sync@foundry.health" `
-  -AccessRight "RestrictAccess" `
-  -Description "Foundry Ops calendar sync — Calendars.Read limited to staff who opted in"
-```
-
-Verify before enabling the flag — the policy can take up to **30 minutes** to propagate:
-
-```powershell
-Test-ApplicationAccessPolicy -Identity trung@foundry.health -AppId "{CALENDAR_ENTRA_CLIENT_ID}"   # AccessAllowed
-Test-ApplicationAccessPolicy -Identity {someone-not-in-group}@foundry.health -AppId "{CALENDAR_ENTRA_CLIENT_ID}"  # AccessDenied
-```
-
-Also confirm the **mail** policy still behaves — the two registrations are independent, but this is exactly the interaction worth re-checking:
-
-```powershell
-Test-ApplicationAccessPolicy -Identity finance@foundry.health -AppId "{ENTRA_CLIENT_ID}"  # AccessAllowed
-```
-
-**Step 3 — enable.** Set the `outlook_availability_sync` row in `FeatureFlag` to `enabled = true`. Until then the cron returns `{ skipped }` and writes nothing.
+Who gets synced is the distribution group, not the app: adding someone turns the sync on for them, removing them turns it off. Reading a colleague's calendar is a consent question, and the group is where that consent is recorded.
 
 ### Failure behaviour
 
 A person whose calendar can't be read (no mailbox, outside the access policy, Graph down) is recorded in the run's `failures[]` and skipped; their grid keeps whatever they last saved. A total failure writes nothing at all. The rule this protects: **an unread calendar must never render as "you are free"**, which is the single way this integration could do real damage.
-
-### Membership is opt-in by group
-
-Who gets synced is the distribution group, not the app. Adding someone to `foundry-ops-calendar-sync@` turns the sync on for them; removing them turns it off and their existing `outlook` rows stop being refreshed. That is deliberate — reading a colleague's calendar is a consent question, and the group is where that consent is recorded.
 
 ## Integration health dashboard
 

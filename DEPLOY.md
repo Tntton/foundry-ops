@@ -21,6 +21,8 @@ explicitly want it in Preview too).
 | `ENTRA_TENANT_ID`           | From Entra app registration                                      |
 | `ENTRA_CLIENT_ID`           | From Entra app registration                                      |
 | `ENTRA_CLIENT_SECRET`       | Secret **Value** (not Secret ID)                                 |
+| `CALENDAR_ENTRA_CLIENT_ID`  | Optional. Second registration for the Outlook availability sync — see `docs/runbooks/outlook-calendar-sync-setup.md`. Unset = falls back to `ENTRA_CLIENT_ID` |
+| `CALENDAR_ENTRA_CLIENT_SECRET` | Optional. Secret **Value** for the above                      |
 | `RESEND_API_KEY`            | Rotated; paste without the `re_` prefix stripped                 |
 | `EMAIL_FROM`                | `auth@foundry.health` (or verified domain address)               |
 

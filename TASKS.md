@@ -2335,10 +2335,13 @@ Verified: 12 unit tests against a mocked Prisma, covering the allocated / declar
 
 **not verified here:** anything that touches Graph. `fetchCalendarView` and `runOutlookAvailabilitySync` have never run against a real tenant — `Calendars.Read` is not granted, the second registration does not exist, and the app can't boot in this checkout. Everything tested is the pure layer: event classification, per-day folding, and the write/refresh/delete/skip plan. **The migration has not been applied either** — nothing auto-runs `migrate deploy`, so `AvailabilityForecast.source` is missing in prod until the SQL is run by hand, and `/availability` will throw P2021-style errors on the new column before then.
 
-**still open for TT:**
+**still open for TT** — runbook with checks and rollback: `docs/runbooks/outlook-calendar-sync-setup.md`:
 - [ ] Create the `Foundry Ops Calendar Sync` app registration, grant `Calendars.Read`, consent, and set the two env vars.
 - [ ] Create `foundry-ops-calendar-sync@foundry.health` and decide who goes in it — that group *is* the opt-in list.
+- [ ] Scope it with RBAC for Applications (`New-ServicePrincipal` / `New-ManagementScope` / `New-ManagementRoleAssignment`), **not** `New-ApplicationAccessPolicy`, which Microsoft has deprecated.
 - [ ] Apply the migration SQL, then flip `outlook_availability_sync` on in staging before prod.
+
+**correction to the note above (2026-10-23).** The claim that a second app registration is *forced* was specific to the legacy `ApplicationAccessPolicy` mechanism, which does bundle Mail, Calendars and Contacts per app. Under RBAC for Applications — the supported replacement — `Calendars.Read` can be scoped independently of `Mail.Read` on one registration. The second registration is still the right move here, for a weaker reason: it avoids migrating the live AP-intake mail policy off AAP as a precondition. `getCalendarToken()` falling back to the shared credentials means consolidating later costs nothing in code.
 
 ---
 
