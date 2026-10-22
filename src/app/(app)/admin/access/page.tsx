@@ -108,6 +108,8 @@ function labelForCapability(cap: Capability): string {
     'invoice.approve.under_20k': 'Approve invoices up to $20k',
     'expense.approve.over_2k': 'Approve expenses over $2k',
     'expense.approve.under_2k': 'Approve expenses up to $2k',
+    'expense.edit.any': "Edit anyone's expense, incl. after approval",
+    'expense.delete.any': "Delete anyone's expense, incl. after approval",
     'partner.scorecard.view': 'View partner scorecard',
     'integration.manage': 'Manage integrations',
     'auditlog.view': 'View audit log',

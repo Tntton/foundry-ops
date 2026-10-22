@@ -20,6 +20,14 @@ export type Capability =
   | 'expense.approve.over_2k'
   | 'expense.approve.under_2k'
   | 'expense.submit'
+  // TASK-516 — reach past the submitter's own pre-approval window: edit
+  // or delete an expense that belongs to someone else, or one that has
+  // already been approved / reimbursed. Always an override, always with
+  // a reason recorded on the AuditEvent. The submitter needs NEITHER of
+  // these to fix their own draft / submitted row — that right comes from
+  // owning it, not from a capability.
+  | 'expense.edit.any'
+  | 'expense.delete.any'
   | 'bill.approve'
   | 'bill.create'
   | 'bill.delete_draft'
@@ -93,6 +101,12 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   // manager / AP: restricted to own project at the handler level
   'expense.approve.under_2k': ['super_admin', 'admin', 'associate_partner', 'manager'],
   'expense.submit': ['super_admin', 'admin', 'partner', 'associate_partner', 'manager', 'staff'],
+  // Override tier only (see the Capability comment). Deliberately NOT
+  // extended to partner / AP / manager: approving an expense and
+  // rewriting the figure on one somebody already approved are different
+  // powers, and only the admin tier audits PII-grade financial records.
+  'expense.edit.any': ['super_admin', 'admin'],
+  'expense.delete.any': ['super_admin', 'admin'],
 
   // Bills (AP) — bill approval still super_admin only; bill creation
   // opened to AP since they manage projects that incur vendor bills.

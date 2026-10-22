@@ -31,7 +31,14 @@ export async function tagExpenseProject(
 
   const expense = await prisma.expense.findUnique({
     where: { id: expenseId },
-    select: { id: true, personId: true, projectId: true, status: true, amount: true },
+    select: {
+      id: true,
+      personId: true,
+      projectId: true,
+      status: true,
+      amount: true,
+      contractorBillId: true,
+    },
   });
   if (!expense) return { status: 'error', message: 'Expense not found' };
 
@@ -41,6 +48,18 @@ export async function tagExpenseProject(
   // a misfile during review. Once it lands in `approved` / `rejected`
   // / `reimbursed` the project is locked here; admin-side overrides
   // happen via the approval-decision flow.
+  // TASK-516: once the cost is on a contractor's invoice it is frozen
+  // here for everyone, admins included — re-tagging the project would
+  // move the cost to a different P&L than the bill says it hit. Checked
+  // on this path too, not just the edit panel, so the quick re-tag can't
+  // be used as a way around the gate.
+  if (expense.contractorBillId !== null) {
+    return {
+      status: 'error',
+      message:
+        "This expense is on a contractor invoice — re-tag the bill's project instead.",
+    };
+  }
   if (expense.status !== 'draft' && expense.status !== 'submitted') {
     return {
       status: 'error',
