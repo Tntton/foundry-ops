@@ -12,6 +12,7 @@ import {
   markPeriodsInvoicedIfFullyBilled,
   monthsInRange,
 } from '@/server/timesheet';
+import { contractorInvoiceNumberTaken } from '@/server/contractor-bills';
 
 const GST_RATE = 0.1;
 const CONTRACTOR_PAYMENT_TERM_DAYS = 14;
@@ -639,12 +640,22 @@ export async function generateRangeContractorInvoice(
       }
 
       for (const g of groups.values()) {
-        // Fees: GST ADDED on top of hours × rate (the contractor's supply).
-        const feesGstCents = Math.round(g.feesExGstCents * GST_RATE);
+        // D5: the fee line is editable. Where the contractor changed it the
+        // override IS the invoice; the derived figure is kept for the audit
+        // row so the difference is explainable rather than mysterious.
+        const derivedFeesExGstCents = g.feesExGstCents;
+        const override = feeOverrides.get(g.projectId);
+        const feesExGstCents =
+          override !== undefined ? override : derivedFeesExGstCents;
+        const feeWasOverridden =
+          override !== undefined && override !== derivedFeesExGstCents;
+
+        // Fees: GST ADDED on top of the fee amount (the contractor's supply).
+        const feesGstCents = Math.round(feesExGstCents * GST_RATE);
         // Expenses: GST already inside the figure, never charged again (D3).
         const gstCents = feesGstCents + g.expenseGstCents;
         const amountTotalCents =
-          g.feesExGstCents + feesGstCents + g.expenseTotalCents;
+          feesExGstCents + feesGstCents + g.expenseTotalCents;
         totalIncGst += amountTotalCents;
 
         const bill = await tx.bill.create({
@@ -653,6 +664,7 @@ export async function generateRangeContractorInvoice(
             supplierName: `${person.firstName} ${person.lastName}`,
             supplierInvoiceNumber: contractorInvoiceNumber,
             receivedVia: 'manual',
+            description,
             attachmentSharepointUrl: parsed.data.attachmentSharepointUrl,
             issueDate,
             dueDate,
@@ -696,7 +708,11 @@ export async function generateRangeContractorInvoice(
               // mix a frozen period rate with the current one, so a single
               // "rate" field would misrepresent the amount.
               hoursByRateCents: g.rateBreakdown,
-              feesExGstCents: g.feesExGstCents,
+              feesExGstCents,
+              // Present so an amount that doesn't reconcile to hours × rate
+              // explains itself without anyone re-deriving it by hand.
+              derivedFeesExGstCents,
+              feeWasOverridden,
               feesGstCents,
               expenseIds: g.expenseIds,
               expenseTotalCentsIncGst: g.expenseTotalCents,
@@ -705,6 +721,9 @@ export async function generateRangeContractorInvoice(
               gstCents,
               amountTotalCents,
               contractorInvoiceNumber,
+              invoiceDescription: description,
+              issueDate: parsed.data.issueDate,
+              dueDate: parsed.data.dueDate,
               timesheetEntryIds: g.entryIds,
               issuedByContractor: true,
               onBehalfByAdmin: personId !== session!.person.id,
