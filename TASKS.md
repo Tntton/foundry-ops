@@ -1986,6 +1986,120 @@ A project with expenses but no hours now gets its own bill, which the hours-only
 
 Tests: 9 new, verified to fail (3 of 9) when GST is wrongly added on top of the pass-through lines. 4 existing suites needed their prisma mocks extended with the new `expense` dependency and their exact-payload assertions widened for the 3 snapshot columns. Typecheck clean, lint clean, 695 tests pass (69 files).
 
+### TASK-512 — Merge Receipt Upload and Submitted Expenses into one page
+**status:** done
+**depends on:** —
+
+**Gap (TT, 2026-10-23):** Individual Inputs carried two entries, `Receipt Upload` (`/bills/intake`) and `Submitted Expenses` (`/expenses`), for one errand. Both opened a drop target, neither showed the whole flow, and the names describe a step rather than a question — so people guessed. `/bills/intake` compounded it by rendering two unrelated pages off one route: an AP vendor-bill review surface for admins, and a bare dropzone plus a 5-row "your recent uploads" echo for everyone else, which was a worse version of `/expenses`.
+
+**acceptance:**
+- [x] `/expenses` is the single personal surface: `1 · Upload a receipt` (the `IntakeDropzone`) above `2 · Submitted` (the existing filters / list / by-project views). H1 is now `Expenses`.
+- [x] `/bills/intake` keeps only the vendor-AP job — retitled `AP Intake`, staff-mode branch and the recent-uploads card deleted, non-reviewers redirected to `/expenses`. The split is now by question (who gets paid), not by step (upload vs track).
+- [x] One nav entry, `Expenses`. `Receipt Upload` removed; AP intake stays reachable from `/bills` and from a cross-link on `/expenses` for `bill.create` holders.
+- [x] Every other entry point repointed: both dashboard action strips, the project cost card, Navan integration copy, assistant `SURFACES` blurbs, onboarding spotlight (`nav-/bills/intake` → `nav-/expenses`).
+- [x] `revalidatePath('/expenses')` added to the Navan sync actions — they write `Expense` rows, which now render on the merged page.
+- [x] Typecheck + lint clean on every file touched; 695 tests pass.
+- [x] Commit: `feat(TASK-512): merge receipt upload into the expenses page`
+
+**Flagged, not fixed — `bill.create` and `ensureCanReview` disagree.** `bill.create` is `super_admin / admin / associate_partner`; `ensureCanReview` in `bills/intake/actions.ts` is `super_admin / admin / partner`. An associate_partner can therefore raise a vendor bill and has no surface on which to review it, and a partner can review bills they cannot raise. Pre-existing; surfaced by this merge because an AP would now be bounced to `/expenses` by the new redirect. Worked around rather than resolved: `IntakeDropzone` takes a `canReviewBills` prop and only navigates to the review pane for people who have one — the bill queues for an admin either way. **Resolving it is a product decision (TT): should an associate_partner review AP bills, or lose `bill.create`?**
+
+**note on completion:** the dropzone component stays at `bills/intake/dropzone.tsx` and is imported by both pages rather than copied — one upload path, two framings. `/expenses` passes `defaultKind="expense"`, `/bills/intake` passes `"bill"`, so each page defaults to its own answer while the per-row toggle still rescues an upload that landed on the wrong one.
+
+### TASK-510 — Make contractor invoicing reachable: sidebar entry + timesheet call-to-action
+**status:** todo
+**depends on:** TASK-505
+
+**Gap (TT, 2026-10-23):** `/me/invoices` has shipped since TASK-505 but is reachable only from the avatar dropdown — `nav-config.ts` had no entry for it. A contractor looking at the sidebar saw Timesheet / Availability / Receipts / Expenses under Individual Inputs and concluded the firm had no self-invoicing. The feature existing and the feature being findable are not the same thing, and for a surface whose entire job is "get paid", the second one is the product.
+
+**acceptance:**
+- [x] `My invoices` nav item under **Individual Inputs**, directly under Timesheet (it is the thing the timesheet feeds). Visible to every signed-in role — the page already explains itself to full-time staff rather than 404ing, so gating the nav entry on employment would need `employment` threaded into the shell for no benefit.
+- [x] Icon distinct from both `FileText` (Invoices (Receivables)) and `Receipt` (Expenses) so the three don't read as the same surface — `ReceiptText`.
+- [ ] Explicit **Generate invoice** call-to-action on `/timesheet`, present in week view as well as month view — the month view is not where a contractor starts.
+- [ ] The CTA states the actual gate ("approved hours") rather than being a bare link, so the contractor learns the rule from the button instead of from a dead end.
+- [ ] Full-time staff never see the CTA — they do not invoice, and an invoice button on a payroll employee's timesheet is a support ticket.
+- [ ] Acting-on-behalf (admin viewing someone else's timesheet) carries `personId` through, matching the existing `/availability` link.
+- [ ] Test: nav visibility for each role; CTA hidden for `ft`, shown for `contractor`.
+- [ ] Commit: `feat(TASK-510): generate-invoice CTA on the timesheet`
+
+**note (2026-10-23):** the nav half of this shipped inside another session's commit `85897a7 feat(TASK-512)`, which swept the working tree while three sessions were editing the same checkout. The entry is correct and in place; only the timesheet CTA remains.
+
+### TASK-513 — Open a new timesheet on last period's projects, not every allocation
+**status:** done
+**depends on:** TASK-501
+
+**Gap (TT, 2026-10-23):** the grid opened with every non-archived `ProjectTeam` allocation the person held. Allocation is a poor proxy for what someone is actually working on — people sit on project teams for months without touching them — so every sheet arrived carrying rows that had to be deleted by hand before it could be filled in. The complaint was specifically about having to *remove* projects, which is work the app created.
+
+**acceptance:**
+- [x] `getRangeForPerson` takes an optional `carryForward: { start, end }`. When set, rows come from the projects with entries in THAT window rather than from allocations.
+- [x] `getWeekForPerson` carries the previous 7 days; `getMonthForPerson` carries the previous **calendar** month (a fixed 31-day lookback would start inside February and miss its first days).
+- [x] Self-cleaning by construction: a zero-hour row leaves no `TimesheetEntry` (saveTimesheet deletes it), so a project drops off the sheet the period after you stop logging to it. No new "remove this row" affordance needed.
+- [x] Anything with hours in the CURRENT period always shows, whatever its stage or allocation — hiding a row holding real hours would lose data.
+- [x] Archived projects are never carried forward. Logging to a wrapped engagement stays a deliberate act via the add-row picker, which still offers every project.
+- [x] Fallback: when nothing was logged last period (new starter, back from leave) the sheet falls back to allocations rather than opening empty and making them hunt through the picker for their own projects.
+- [x] The "Copy last week" lookup opts out (`carryForwardPrevious: false`) — it wants last week's hours, and carrying forward would make its row list reflect the week before that.
+- [x] Tests: 9 new covering both views, the calendar-month boundary, the year roll-over, the archived exclusion, the current-period override, the empty-period fallback, and the copy-last-week opt-out.
+- [x] Typecheck + lint clean; 718 tests pass (71 files).
+- [x] Commit: `feat(TASK-513): open the timesheet on last period's projects`
+
+**note on completion:** deliberately keyed off entries rather than adding a "pinned rows" table. Pinning would need its own management UI and would drift from reality the same way allocation did; derived state can't go stale.
+
+Fixed three pre-existing type errors surfaced on the way — see the commit. `tsc` runs with `"incremental": true` and a stale `tsconfig.tsbuildinfo` was skipping files, so several earlier "typecheck clean" claims in this phase were made against a cache rather than a full check. **Worth a follow-up:** make `pnpm typecheck` delete the buildinfo first, or drop `incremental`, so the gate means what it says.
+
+### TASK-511 — Date-range contractor invoice (`/me/invoices`)
+**status:** todo
+**depends on:** TASK-504, TASK-505, TASK-509, TASK-510
+
+**Gap (TT, 2026-10-23):** every contractor invoice path is whole-calendar-month. `TimesheetPeriod` is keyed `personId + year + month`, the rate snapshot freezes at month close, and `confirmContractorInvoice` derives its window from `monthStartFrom(year, month)`. A contractor who starts mid-month, finishes mid-month, bills a quarter at once, or simply wants 15 Sep – 14 Oct has no path. The admin out-of-cycle route (`/directory/people/[id]/draft-bill`) is unbounded-all-approved-hours, not a range, and is admin-only regardless.
+
+**acceptance:**
+- [ ] Start + end date inputs on `/me/invoices`, defaulting to the current month so the existing month-at-a-time habit still works in one click.
+- [ ] Preview groups **approved + unbilled** entries in range by project, with hours, rate, ex-GST, GST, total.
+- [ ] **Unapproved time in the same range is listed, not hidden** — hours, project, and the approver it is waiting on. Excluded from the invoice: approved-only is the gate the whole flow rests on (D2), and a range picker must not become the way around it. The contractor's question is "why is my invoice short", and the answer is a name.
+- [ ] **Per-entry rate resolution.** Entries inside a period that closed with a `draftRateCents` price at that frozen rate; everything else at the contractor's current `Person.rate`. A range spanning a closed month and an open one must not silently reprice the closed part — that is the exact repricing TASK-504 exists to prevent, and a range window reintroduces it unless rates resolve per entry.
+- [ ] Pass-through expenses on the same terms as TASK-509: `approved`, `contractorBillId IS NULL`, project-tagged, inside the range, GST-inclusive with no GST added on top (D3/D4). Untagged OPEX expenses excluded and the count surfaced.
+- [ ] One `Bill` per project, `pending_review`, so the AP queue keeps its human gate (A7).
+- [ ] **Double-billing is structurally impossible:** both paths gate on `contractorBillId IS NULL` and set it in the same transaction. A range overlapping an already-invoiced month picks up nothing from the billed part.
+- [ ] Affected periods reconciled through the existing `markPeriodsInvoicedIfFullyBilled` so a month fully consumed by range invoices closes rather than sitting at `approved` forever showing a phantom prompt.
+- [ ] Range validation: end on or after start, bounded span, dates parseable; rejected server-side, not just in the browser.
+- [ ] `AuditEvent` per bill recording the range, which rate priced which hours, and that it came from the range path (A9).
+
+**D5 (TT, 2026-10-23): the generate screen is a form, not a receipt.**
+- [ ] **Every field on the generate screen is editable** — invoice number, issue date, due date, the personal identifier, and the per-project fee lines. The month path presents frozen figures for confirmation; this one is the contractor composing their own document, so nothing is read-only text that should have been an input.
+- [ ] **Invoice number is autogenerated and prefilled**, coding the contractor's initials and a per-person sequence (`{INITIALS}-{YYYY}-{NNN}`, e.g. `JN-2026-004`). The sequence is derived from that person's existing bills, so two contractors never collide and neither does a contractor with themselves.
+- [ ] **The generated number stays editable.** D1 (TT 2026-08-31) turns on the invoice being the contractor's own document rather than a recipient-created tax invoice; a number they cannot change is Foundry issuing on their behalf. Prefilling is a convenience, locking it is an RCTI.
+- [ ] **Collision check on submit.** Reject a number this contractor has already used rather than silently creating a second bill under the same reference — the suggestion is only a default, and an edited one can collide.
+- [ ] **Optional personal identifier** the contractor adds to the invoice description (their own PO, client ref, engagement nickname). Free text, their words, carried onto the Bill so it survives into AP and Xero rather than living only in the audit trail.
+- [ ] `chore(db):` migration adding `Bill.description String?`. The Bill model has no description/notes column today — `confirmContractorInvoice` drops its `notes` into the `AuditEvent` only, so nothing the contractor writes reaches the document itself. Separate commit, applied manually to prod (migrations do not auto-run).
+
+**acceptance (tests):**
+- [ ] Tests: range spanning two months with one closed; partial month; range overlapping already-billed entries yields nothing; frozen vs current rate applied per entry; unapproved surfaced but never billed; expense-only range; FT staff refused; cross-person refused; number autogeneration increments per person; duplicate number rejected; personal identifier reaches `Bill.description`.
+- [ ] Commits: `chore(db): description on Bill` then `feat(TASK-511): date-range contractor invoice`
+
+### TASK-513 — Timesheet look-back: lock approved days, add month + quarter review
+**status:** done
+
+**Gap (TT, 2026-10-23):** stepping back through a timesheet was broken in two ways at once.
+
+1. **Approved days looked editable.** `TimesheetRow.status` collapses to `mixed` the moment a row straddles an approval boundary — last week approved, this week draft — which is most rows a person meets when they go back to check something. The grid decided editability per ROW, so on a mixed row every day rendered as an open input. `saveTimesheet` has refused to rewrite an approved entry since it was written (`if (isLocked && !isSuperAdmin) continue`), so typing into one of those days did nothing and said nothing. The UI was more permissive than the save, which is the wrong way round.
+2. **Only week and month existed.** Reaching anything older than the current month meant clicking Previous one week at a time.
+
+**acceptance:**
+- [x] `TimesheetCell` carries `status` and `billed` per DAY, so the grid can lock a single day inside a mixed row.
+- [x] One lock rule, in `src/lib/timesheet-lock.ts`, shared by the grid, the assistant prefill and the tests — `lib/` rather than `server/timesheet.ts` because the client grid must not pull Prisma into its bundle. Mirrors the `saveTimesheet` guard: billed (either leg) locked for everyone, approved locked for everyone but super admin, draft/submitted/empty open.
+- [x] A locked day renders as the NUMBER plus a lock glyph, not a greyed-out input — a disabled box still reads as "you could type here", and the figure is the thing worth seeing when checking an earlier week. A hidden field keeps the payload shape unchanged.
+- [x] Per-row "N locked" chip, and a legend under the grid saying why and what to do about it (ask an approver to send it back; void the document if it is billed).
+- [x] Remove hidden on a row holding locked days — it only drops the row in the browser, so the hours would return on refresh. Recall now offered on mixed rows, not just all-submitted ones.
+- [x] "Copy last week" skips locked target days.
+- [x] Assistant prefill ignores a locked DAY with reason `locked_day`, not just a locked row.
+- [x] Quarter view: `?view=quarter`, projects × the quarter's three months, read-only. 90-odd editable columns is not a grid, and a quarter is what someone opens to check history. Each column header links into that month; period state (open / lodged / approved / invoiced) shown per month; four stat tiles split the quarter into logged / approved-or-billed / awaiting approval / still draft.
+- [x] Calendar quarters, whose boundaries are also the AU FY quarters — only the count differs — so the label names both: "Jul–Sep 2026 · FY27 Q1".
+- [x] Week / Month / Quarter toggle carries the anchor date across, so switching view keeps you in the same place in time rather than jumping to today. Prev/Next step by the view's own unit.
+- [x] Fixed three-letter month abbreviations in `lib/week.ts` — `Intl` en-AU `month: 'short'` returns "July", "Sept" and "June" next to "Aug", which makes a header row ragged.
+- [x] Tests: quarter boundary maths incl. year rollover and FY numbering; the per-day lock rule for each status × role; the quarter roll-up (grouping, mixed months, AR vs AP leg, empty quarter).
+- [x] Commit: `feat(TASK-513): per-day timesheet locks + quarter review view`
+
+**note on completion:** the server was already correct — no permission or save change was needed, and none was made. This closes the gap between what the grid offered and what the save would accept. Not yet exercised in a browser against real data: the local DB credentials are stale (see memory `foundry_local_db_unreachable`), so the grid and quarter table have been verified by typecheck, lint and unit tests only.
+
 ---
 
 *End of TASKS.md. Start with TASK-001.*

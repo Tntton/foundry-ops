@@ -8,6 +8,10 @@ import { requireCapability } from '@/server/capabilities';
 import { hasAnyRole } from '@/server/roles';
 import { writeAudit } from '@/server/audit';
 import { addDays, daysInMonth, formatMonthLabel, monthStartFrom } from '@/lib/week';
+import {
+  markPeriodsInvoicedIfFullyBilled,
+  monthsInRange,
+} from '@/server/timesheet';
 
 const GST_RATE = 0.1;
 const CONTRACTOR_PAYMENT_TERM_DAYS = 14;
@@ -330,6 +334,408 @@ export async function confirmContractorInvoice(
     status: 'success',
     message:
       `Invoice ${contractorInvoiceNumber} submitted — $${((totalExGst + gst) / 100).toFixed(2)} ` +
+      `inc GST across ${createdBillIds.length} ${createdBillIds.length === 1 ? 'project' : 'projects'}. ` +
+      `It's with Foundry's AP review now.`,
+  };
+}
+
+// ─── Date-range invoice (TASK-511) ──────────────────────────────────────
+
+const MAX_RANGE_DAYS = 400;
+
+const RangeSchema = z
+  .object({
+    personId: z.string().min(1),
+    start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Start date is required'),
+    end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'End date is required'),
+    contractorInvoiceNumber: z.string().trim().min(1).max(80),
+    // D5: the contractor sets their own dates. Defaulted on the form to
+    // today / today + 14, but neither is imposed — a contractor invoicing
+    // late, or on 30-day terms of their own, must not have to ask.
+    issueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Issue date is required'),
+    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Due date is required'),
+    /** D5: the contractor's own identifier — their PO, a client ref, an
+     *  engagement nickname. Lands on `Bill.description` so AP and Xero can
+     *  see it, rather than stopping in the audit trail the way `notes` does. */
+    description: z.string().trim().max(500).optional().nullable(),
+    attachmentSharepointUrl: z
+      .union([z.string().trim().url().max(500), z.literal(''), z.null()])
+      .optional()
+      .transform((v) => (v === '' || v === undefined ? null : v)),
+    notes: z.string().trim().max(1000).optional().nullable(),
+  })
+  .refine((v) => v.end >= v.start, {
+    message: 'The end date must be on or after the start date.',
+    path: ['end'],
+  })
+  .refine((v) => v.dueDate >= v.issueDate, {
+    message: 'The due date must be on or after the issue date.',
+    path: ['dueDate'],
+  });
+
+/** Per-project fee override, posted as `fee:<projectId>` in dollars.
+ *
+ *  D5 makes every field editable, fee lines included — a contractor who
+ *  agreed a discount, a rounding, or a capped month needs to say so on the
+ *  invoice rather than raising the derived figure and arguing later. The
+ *  DERIVED amount is always recorded beside the override in the audit event,
+ *  so "why doesn't this match the hours" has an answer on the row.
+ *
+ *  Hours and their `contractorBillId` links are untouched by an override:
+ *  the hours were still worked and are still consumed by this bill. Only
+ *  the money moves. */
+const FeeOverrideSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{1,9}(\.\d{1,2})?$/)
+  .transform((v) => Math.round(Number(v) * 100));
+
+function parseUtcDate(iso: string): Date {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(Date.UTC(y!, m! - 1, d!));
+}
+
+/**
+ * Raise a contractor invoice for an arbitrary date range.
+ *
+ * Sibling of `confirmContractorInvoice`, not a replacement: that one answers
+ * "invoice September", this one answers "invoice 15 Sep – 14 Oct". They share
+ * the invariant that matters — an hour is billable iff
+ * `status = 'approved' AND contractorBillId IS NULL`, set inside the same
+ * transaction that creates the Bill — so neither can bill an hour the other
+ * already billed, whatever the windows do.
+ *
+ * Rates resolve PER ENTRY (frozen period rate where one exists, else the
+ * contractor's current rate). A range spanning a closed month and an open
+ * one must not reprice the closed part; see `resolveEntryRateCents`.
+ *
+ * Everything is recomputed here inside the transaction. Nothing the preview
+ * rendered is trusted on the way back in.
+ */
+export async function generateRangeContractorInvoice(
+  _prev: ConfirmInvoiceState,
+  formData: FormData,
+): Promise<ConfirmInvoiceState> {
+  const session = await getSession();
+  try {
+    requireCapability(session, 'timesheet.submit');
+  } catch {
+    return { status: 'error', message: 'Not signed in' };
+  }
+
+  const parsed = RangeSchema.safeParse({
+    personId: formData.get('personId'),
+    start: formData.get('start'),
+    end: formData.get('end'),
+    contractorInvoiceNumber: formData.get('contractorInvoiceNumber'),
+    attachmentSharepointUrl: formData.get('attachmentSharepointUrl') || null,
+    notes: formData.get('notes') || null,
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const missingNumber = parsed.error.issues.some(
+      (i) => i.path[0] === 'contractorInvoiceNumber',
+    );
+    return {
+      status: 'error',
+      message: missingNumber
+        ? 'Your invoice number is required — this is your invoice, issued by you.'
+        : (issue?.message ?? 'Invalid input'),
+    };
+  }
+
+  const { personId, contractorInvoiceNumber } = parsed.data;
+  const start = parseUtcDate(parsed.data.start);
+  const end = parseUtcDate(parsed.data.end);
+  const endExclusive = addDays(end, 1);
+
+  const spanDays = Math.round(
+    (endExclusive.getTime() - start.getTime()) / 86_400_000,
+  );
+  if (spanDays > MAX_RANGE_DAYS) {
+    return {
+      status: 'error',
+      message: `That range covers ${spanDays} days — invoice at most ${MAX_RANGE_DAYS} days at a time.`,
+    };
+  }
+
+  // Self-only, with an admin override for support cases.
+  const isAdmin = hasAnyRole(session, ['super_admin', 'admin']);
+  if (personId !== session!.person.id && !isAdmin) {
+    return { status: 'error', message: 'You can only submit your own invoice.' };
+  }
+
+  const person = await prisma.person.findUnique({
+    where: { id: personId },
+    select: { id: true, firstName: true, lastName: true, employment: true, rate: true },
+  });
+  if (!person) return { status: 'error', message: 'Person not found' };
+  if (person.employment !== 'contractor') {
+    return {
+      status: 'error',
+      message: 'Only contractors invoice Foundry. Full-time staff are paid via pay runs.',
+    };
+  }
+
+  const issueDate = parseUtcDate(parsed.data.issueDate);
+  const dueDate = parseUtcDate(parsed.data.dueDate);
+  const description = parsed.data.description?.trim() || null;
+
+  // The number is a suggestion the contractor can edit (D1/D5), so an edited
+  // one can collide — with an earlier invoice of theirs, or with the
+  // suggestion if they raised one in another tab. Scoped to this person:
+  // two different contractors both using `INV-001` is normal.
+  if (await contractorInvoiceNumberTaken(personId, contractorInvoiceNumber)) {
+    return {
+      status: 'error',
+      message: `You have already issued an invoice numbered ${contractorInvoiceNumber}. Change the number and submit again.`,
+    };
+  }
+
+  // Per-project fee overrides, keyed `fee:<projectId>`. Parsed up front so a
+  // malformed amount is rejected before anything is written.
+  const feeOverrides = new Map<string, number>();
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith('fee:') || typeof value !== 'string') continue;
+    if (value.trim() === '') continue;
+    const check = FeeOverrideSchema.safeParse(value);
+    if (!check.success) {
+      return {
+        status: 'error',
+        message: 'Fee amounts must be a number of dollars, e.g. 1250 or 1250.50.',
+      };
+    }
+    feeOverrides.set(key.slice(4), check.data);
+  }
+
+  const createdBillIds: string[] = [];
+  let totalIncGst = 0;
+
+  try {
+    const outcome = await prisma.$transaction(async (tx) => {
+      const currentRateCents = person.rate ?? 0;
+
+      // Frozen rates for every month the window touches, read inside the
+      // transaction so a concurrent period close can't land between the
+      // preview and the write.
+      const months = monthsInRange(start, endExclusive);
+      const periods = await tx.timesheetPeriod.findMany({
+        where: {
+          personId,
+          OR: months.map((m) => ({ year: m.year, month: m.month })),
+        },
+        select: { year: true, month: true, draftRateCents: true },
+      });
+      const frozenByMonth = new Map<string, number>();
+      for (const p of periods) {
+        if (p.draftRateCents !== null && p.draftRateCents > 0) {
+          frozenByMonth.set(`${p.year}-${p.month}`, p.draftRateCents);
+        }
+      }
+
+      const entries = await tx.timesheetEntry.findMany({
+        where: {
+          personId,
+          date: { gte: start, lt: endExclusive },
+          status: 'approved',
+          contractorBillId: null,
+        },
+        select: {
+          id: true,
+          date: true,
+          hours: true,
+          projectId: true,
+          project: { select: { code: true } },
+        },
+      });
+
+      type RangeGroup = {
+        projectId: string;
+        projectCode: string;
+        hours: number;
+        feesExGstCents: number;
+        entryIds: string[];
+        expenseTotalCents: number;
+        expenseGstCents: number;
+        expenseIds: string[];
+        /** rate → hours, for the audit trail. */
+        rateBreakdown: Record<string, number>;
+      };
+      const emptyGroup = (projectId: string, projectCode: string): RangeGroup => ({
+        projectId,
+        projectCode,
+        hours: 0,
+        feesExGstCents: 0,
+        entryIds: [],
+        expenseTotalCents: 0,
+        expenseGstCents: 0,
+        expenseIds: [],
+        rateBreakdown: {},
+      });
+      const groups = new Map<string, RangeGroup>();
+
+      let unpricedHours = 0;
+      for (const e of entries) {
+        const hours = Number(e.hours);
+        if (hours <= 0) continue;
+        const key = `${e.date.getUTCFullYear()}-${e.date.getUTCMonth() + 1}`;
+        const frozen = frozenByMonth.get(key);
+        const rateCents =
+          frozen !== undefined && frozen > 0 ? frozen : currentRateCents;
+        if (rateCents <= 0) {
+          unpricedHours += hours;
+          continue;
+        }
+        const cur =
+          groups.get(e.projectId) ?? emptyGroup(e.projectId, e.project.code);
+        cur.hours += hours;
+        cur.feesExGstCents += Math.round(hours * rateCents);
+        cur.entryIds.push(e.id);
+        cur.rateBreakdown[String(rateCents)] =
+          (cur.rateBreakdown[String(rateCents)] ?? 0) + hours;
+        groups.set(e.projectId, cur);
+      }
+
+      if (unpricedHours > 0) {
+        return {
+          error: `No rate on file for ${unpricedHours.toFixed(2)}h in this range — ask an admin to set your rate.`,
+        } as const;
+      }
+
+      // Pass-through expenses on the TASK-509 terms: approved, unbilled,
+      // project-tagged. Untagged OPEX has no Bill to land on and stays on
+      // the reimbursement path.
+      const expenses = await tx.expense.findMany({
+        where: {
+          personId,
+          date: { gte: start, lt: endExclusive },
+          status: 'approved',
+          contractorBillId: null,
+          projectId: { not: null },
+        },
+        select: {
+          id: true,
+          amount: true,
+          gst: true,
+          projectId: true,
+          project: { select: { code: true } },
+        },
+      });
+      for (const x of expenses) {
+        const projectId = x.projectId!;
+        const cur =
+          groups.get(projectId) ?? emptyGroup(projectId, x.project?.code ?? '—');
+        cur.expenseTotalCents += x.amount;
+        cur.expenseGstCents += x.gst;
+        cur.expenseIds.push(x.id);
+        groups.set(projectId, cur);
+      }
+
+      if (groups.size === 0) {
+        return {
+          error:
+            'Nothing to invoice in that range — the approved hours and expenses in it are already on a contractor bill.',
+        } as const;
+      }
+
+      for (const g of groups.values()) {
+        // Fees: GST ADDED on top of hours × rate (the contractor's supply).
+        const feesGstCents = Math.round(g.feesExGstCents * GST_RATE);
+        // Expenses: GST already inside the figure, never charged again (D3).
+        const gstCents = feesGstCents + g.expenseGstCents;
+        const amountTotalCents =
+          g.feesExGstCents + feesGstCents + g.expenseTotalCents;
+        totalIncGst += amountTotalCents;
+
+        const bill = await tx.bill.create({
+          data: {
+            supplierPersonId: personId,
+            supplierName: `${person.firstName} ${person.lastName}`,
+            supplierInvoiceNumber: contractorInvoiceNumber,
+            receivedVia: 'manual',
+            attachmentSharepointUrl: parsed.data.attachmentSharepointUrl,
+            issueDate,
+            dueDate,
+            amountTotal: amountTotalCents,
+            gst: gstCents,
+            category: 'Contractor — services',
+            projectId: g.projectId,
+            status: 'pending_review',
+          },
+        });
+        createdBillIds.push(bill.id);
+
+        // AP leg only — never touches status or billedInvoiceId (TASK-500).
+        if (g.entryIds.length > 0) {
+          await tx.timesheetEntry.updateMany({
+            where: { id: { in: g.entryIds } },
+            data: { contractorBillId: bill.id },
+          });
+        }
+        if (g.expenseIds.length > 0) {
+          await tx.expense.updateMany({
+            where: { id: { in: g.expenseIds } },
+            data: { contractorBillId: bill.id },
+          });
+        }
+
+        await writeAudit(tx, {
+          actor: { type: 'person', id: session!.person.id },
+          action: 'created',
+          entity: {
+            type: 'bill',
+            id: bill.id,
+            after: {
+              source: 'contractor_range_invoice',
+              rangeStart: parsed.data.start,
+              rangeEnd: parsed.data.end,
+              projectId: g.projectId,
+              projectCode: g.projectCode,
+              hours: g.hours,
+              // Which rate priced which hours — the range can legitimately
+              // mix a frozen period rate with the current one, so a single
+              // "rate" field would misrepresent the amount.
+              hoursByRateCents: g.rateBreakdown,
+              feesExGstCents: g.feesExGstCents,
+              feesGstCents,
+              expenseIds: g.expenseIds,
+              expenseTotalCentsIncGst: g.expenseTotalCents,
+              expenseGstCentsReclaimable: g.expenseGstCents,
+              expenseTreatment: 'pass_through_contractor_adds_no_gst',
+              gstCents,
+              amountTotalCents,
+              contractorInvoiceNumber,
+              timesheetEntryIds: g.entryIds,
+              issuedByContractor: true,
+              onBehalfByAdmin: personId !== session!.person.id,
+              notes: parsed.data.notes ?? null,
+            },
+          },
+          source: 'web',
+        });
+      }
+
+      // A month the range fully consumed should close, not sit at `approved`
+      // showing a phantom "ready to invoice" prompt for hours already billed.
+      await markPeriodsInvoicedIfFullyBilled(tx, personId, months, issueDate);
+
+      return { error: null } as const;
+    });
+
+    if (outcome.error) return { status: 'error', message: outcome.error };
+  } catch (err) {
+    console.error('[me.invoices.range] failed:', err);
+    return { status: 'error', message: 'Submit failed — try again.' };
+  }
+
+  revalidatePath('/me/invoices');
+  revalidatePath('/bills');
+  revalidatePath('/timesheet');
+
+  return {
+    status: 'success',
+    message:
+      `Invoice ${contractorInvoiceNumber} submitted — $${(totalIncGst / 100).toFixed(2)} ` +
       `inc GST across ${createdBillIds.length} ${createdBillIds.length === 1 ? 'project' : 'projects'}. ` +
       `It's with Foundry's AP review now.`,
   };
