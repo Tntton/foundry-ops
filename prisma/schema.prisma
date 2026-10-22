@@ -604,12 +604,23 @@ model WorkHistoryEntry {
 //
 // Submitted from /availability. Unique on (personId, date) so re-submission
 // upserts; deleting a row clears that day's forecast.
+// Where an AvailabilityForecast row came from. `human` is anyone typing
+// into /availability (themselves or an on-behalf editor). `outlook` is the
+// calendar sync (TASK-522), which only ever fills days that have no row —
+// a human row is never overwritten, and saving over a synced day flips it
+// back to `human`, pinning it from future syncs.
+enum AvailabilitySource {
+  human
+  outlook
+}
+
 model AvailabilityForecast {
   id           String    @id @default(cuid())
   personId     String
   date         DateTime  @db.Date // the day this entry applies to
   hours        Int       // expected hours that day (0 = explicitly off)
   notes        String?
+  source       AvailabilitySource @default(human)
   // Optional project the hours are earmarked against. Null means the
   // hours are "unallocated" - i.e. the person has committed to being
   // available but nothing is scheduled against them yet, so they show
