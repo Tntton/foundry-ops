@@ -2152,15 +2152,17 @@ Two resolutions worth recording:
 
 **Not built, deliberately:**
 - **`rebilledOnInvoiceId` is flagged, not blocked.** An expense already passed on to a client invoice can still be amended by an admin; the panel warns that the client's bill won't change and the `AuditEvent` records `warning_rebilled_on_invoice`. Making it a hard stop like the contractor bill would be new policy, and TASK-516 doesn't ask for it — worth putting to TT.
-- **No pay-run reconciliation on `batched_for_payment`.** An admin edit there re-opens the approval per the spec, but `PayRunLine` has no FK to `Expense` (it aggregates per person), so nothing can detect that the pay run's total no longer matches. See TASK-518.
+- **No pay-run reconciliation on `batched_for_payment`.** An admin edit there re-opens the approval per the spec, but `PayRunLine` has no FK to `Expense` (it aggregates per person), so nothing can detect that the pay run's total no longer matches. See TASK-523.
 - Delete is a hard delete. A soft-delete column would need the pay run, the rebillable tallies and the reporting queries all taught to skip it — larger than this task. The `AuditEvent` keeps the full before-image, so nothing is unrecoverable.
 - Not exercised in a browser: local DB credentials are stale (memory `foundry_local_db_unreachable`), so this is verified by typecheck, lint and unit tests only.
 
 **discovered while building:**
 
-### TASK-518 — Link PayRunLine to the expenses it pays
+### TASK-523 — Link PayRunLine to the expenses it pays
 **status:** todo
 **depends on:** TASK-516
+
+*(Filed as TASK-518 on 2026-10-23 and renumbered to 523 on 2026-10-30 — 518 had already been taken by "Managers see availability the way admin does" in a parallel session. Highest in use at renumber time: 522.)*
 
 `PayRunLine` carries `personId` + an aggregate `amount` and no FK to the `Expense` rows that make it up. That was survivable while an expense froze at `approved`, but TASK-516 lets an admin amend a `batched_for_payment` expense, and nothing can then tell that the pay run is paying a figure the expense no longer carries. Either add the join (`PayRunLineExpense`, or `Expense.payRunLineId`) and refuse / re-open on amendment, or make `batched_for_payment` a hard stop like `contractorBillId`. Needs TT on which — the second is simpler and the first is more correct.
 
