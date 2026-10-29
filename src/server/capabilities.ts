@@ -38,6 +38,7 @@ export type Capability =
   | 'bill.approve'
   | 'bill.create'
   | 'bill.delete_draft'
+  | 'bill.review'
   | 'payrun.approve'
   | 'payrun.create'
   | 'project.create'
@@ -123,6 +124,15 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   // Only pre-approval bills can be deleted. Approved/scheduled/paid bills are
   // either in Xero or attached to a pay-run — void there, not here.
   'bill.delete_draft': ['super_admin', 'admin', 'associate_partner'],
+  // Working the AP intake queue: edit a bill's extracted fields and post
+  // it for approval. Deliberately WIDER than `bill.create` on one side
+  // and narrower on the other — partner reviews bills they can't raise,
+  // associate_partner raises bills and now reviews them too (TT,
+  // 2026-10-23). Before this existed the same role list was hard-coded
+  // in `bills/intake/actions.ts` and again in two page components, and
+  // it had already drifted: an AP could raise a vendor bill and had
+  // nowhere to review it. Read it from here, never re-type the list.
+  'bill.review': ['super_admin', 'admin', 'partner', 'associate_partner'],
 
   // Pay run — unchanged. AP isn't in the pay-run decision chain.
   'payrun.approve': ['super_admin'],

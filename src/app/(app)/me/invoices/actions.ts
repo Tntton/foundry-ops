@@ -12,7 +12,12 @@ import {
   markPeriodsInvoicedIfFullyBilled,
   monthsInRange,
 } from '@/server/timesheet';
-import { contractorInvoiceNumberTaken } from '@/server/contractor-bills';
+import {
+  CONTRACTOR_EXPENSE_CATEGORY,
+  CONTRACTOR_FEE_CATEGORY,
+  contractorInvoiceNumberTaken,
+  rechargeExpenseTotals,
+} from '@/server/contractor-bills';
 
 const GST_RATE = 0.1;
 const CONTRACTOR_PAYMENT_TERM_DAYS = 14;
@@ -29,6 +34,14 @@ const ConfirmSchema = z.object({
    * contractor that Foundry does not have.
    */
   contractorInvoiceNumber: z.string().trim().min(1).max(80),
+  /**
+   * The SECOND invoice number — the contractor's expense invoice (D7, TT
+   * 2026-10-23). Expenses no longer ride on the fee invoice; they are their
+   * own document, which means their own number. Optional here because a
+   * month may have no expenses at all; required at the point we know there
+   * are some.
+   */
+  expenseInvoiceNumber: z.string().trim().max(80).optional().nullable(),
   attachmentSharepointUrl: z
     .union([z.string().trim().url().max(500), z.literal(''), z.null()])
     .optional()
@@ -69,6 +82,7 @@ export async function confirmContractorInvoice(
     year: formData.get('year'),
     month: formData.get('month'),
     contractorInvoiceNumber: formData.get('contractorInvoiceNumber'),
+    expenseInvoiceNumber: formData.get('expenseInvoiceNumber') || null,
     attachmentSharepointUrl: formData.get('attachmentSharepointUrl') || null,
     notes: formData.get('notes') || null,
   });
@@ -85,6 +99,7 @@ export async function confirmContractorInvoice(
   }
 
   const { personId, year, month, contractorInvoiceNumber } = parsed.data;
+  const expenseInvoiceNumber = parsed.data.expenseInvoiceNumber?.trim() || null;
 
   // Self-only, with an admin override for support cases. A contractor can
   // never issue an invoice in someone else's name.
@@ -211,23 +226,51 @@ export async function confirmContractorInvoice(
     };
   }
 
+  // Fees and expenses are now two documents (D7), so a project can appear on
+  // one, the other, or both. Split before anything is written.
+  const feeGroups = [...groups.values()].filter((g) => g.hours > 0);
+  const expenseGroups = [...groups.values()].filter((g) => g.expenseIds.length > 0);
+
+  if (expenseGroups.length > 0 && !expenseInvoiceNumber) {
+    return {
+      status: 'error',
+      message:
+        'Your expense invoice number is required — expenses are invoiced separately from your time, so they need their own number.',
+    };
+  }
+  if (
+    expenseInvoiceNumber &&
+    expenseInvoiceNumber === contractorInvoiceNumber
+  ) {
+    return {
+      status: 'error',
+      message: 'Your fee and expense invoices need different numbers.',
+    };
+  }
+  for (const n of [contractorInvoiceNumber, expenseInvoiceNumber]) {
+    if (n && (await contractorInvoiceNumberTaken(personId, n))) {
+      return {
+        status: 'error',
+        message: `You have already issued an invoice numbered ${n}. Change the number and submit again.`,
+      };
+    }
+  }
+
   const issueDate = new Date();
   const dueDate = addDays(issueDate, CONTRACTOR_PAYMENT_TERM_DAYS);
   const createdBillIds: string[] = [];
-  let totalExGst = 0;
+  let grandTotalIncGst = 0;
 
   try {
     await prisma.$transaction(async (tx) => {
-      for (const g of groups.values()) {
-        // Fees: GST is ADDED to hours × rate (the contractor's own supply).
+      // ── Fee invoice: the contractor's time ──────────────────────────
+      for (const g of feeGroups) {
+        // GST is ADDED to hours × rate — the contractor's own supply.
         const feesExGstCents = Math.round(g.hours * rateCents);
         const feesGstCents = Math.round(feesExGstCents * GST_RATE);
-        // Expenses: passed through at what the contractor paid, GST already
-        // inside the figure and NOT charged again on top (D3,
-        // TT 2026-09-10). Foundry reclaims that GST as an input credit.
-        const gstCents = feesGstCents + g.expenseGstCents;
-        const amountTotalCents = feesExGstCents + feesGstCents + g.expenseTotalCents;
-        totalExGst += feesExGstCents;
+        const amountTotalCents = feesExGstCents + feesGstCents;
+        grandTotalIncGst += amountTotalCents;
+
         const bill = await tx.bill.create({
           data: {
             supplierPersonId: personId,
@@ -238,8 +281,8 @@ export async function confirmContractorInvoice(
             issueDate,
             dueDate,
             amountTotal: amountTotalCents,
-            gst: gstCents,
-            category: 'Contractor — services',
+            gst: feesGstCents,
+            category: CONTRACTOR_FEE_CATEGORY,
             projectId: g.projectId,
             status: 'pending_review',
           },
@@ -250,16 +293,6 @@ export async function confirmContractorInvoice(
           where: { id: { in: g.entryIds } },
           data: { contractorBillId: bill.id },
         });
-        // Same for the pass-through costs. Setting contractorBillId takes
-        // them out of the reimbursement float, so they can't also be paid
-        // through a pay run. `rebillable` / `rebilledOnInvoiceId` are left
-        // alone: recharging the client is a separate, legitimate leg.
-        if (g.expenseIds.length > 0) {
-          await tx.expense.updateMany({
-            where: { id: { in: g.expenseIds } },
-            data: { contractorBillId: bill.id },
-          });
-        }
         await writeAudit(tx, {
           actor: { type: 'person', id: session!.person.id },
           action: 'created',
@@ -268,24 +301,90 @@ export async function confirmContractorInvoice(
             id: bill.id,
             after: {
               source: 'contractor_period_invoice',
+              leg: 'fees',
               periodYear: year,
               periodMonth: month,
               projectId: g.projectId,
               projectCode: g.projectCode,
               hours: g.hours,
-              expenseIds: g.expenseIds,
-              expenseTotalCentsIncGst: g.expenseTotalCents,
-              expenseGstCentsReclaimable: g.expenseGstCents,
-              expenseTreatment: 'pass_through_contractor_adds_no_gst',
               // The frozen rate, not today's — recorded so the audit trail
               // explains the amount even after a rate change.
               rateCentsAtClose: rateCents,
               feesExGstCents,
               feesGstCents,
-              gstCents,
               amountTotalCents,
               contractorInvoiceNumber,
               timesheetEntryIds: g.entryIds,
+              issuedByContractor: true,
+              onBehalfByAdmin: personId !== session!.person.id,
+              notes: parsed.data.notes ?? null,
+            },
+          },
+          source: 'web',
+        });
+      }
+
+      // ── Expense invoice: costs recharged to Foundry (D7/D8) ─────────
+      //
+      // Its own document with its own number, and the contractor adds their
+      // own GST on the net rather than passing through what they paid. Both
+      // of those reverse TASK-509 (D3/D4) on TT's instruction, 2026-10-23.
+      for (const g of expenseGroups) {
+        // Σ(amount) − Σ(gst) is the same net as summing per expense, so the
+        // group aggregates are exact here.
+        const { exGstCents, gstCents, totalCents } = rechargeExpenseTotals([
+          { amount: g.expenseTotalCents, gst: g.expenseGstCents },
+        ]);
+        grandTotalIncGst += totalCents;
+
+        const bill = await tx.bill.create({
+          data: {
+            supplierPersonId: personId,
+            supplierName: `${person.firstName} ${person.lastName}`,
+            supplierInvoiceNumber: expenseInvoiceNumber,
+            receivedVia: 'manual',
+            attachmentSharepointUrl: parsed.data.attachmentSharepointUrl,
+            issueDate,
+            dueDate,
+            amountTotal: totalCents,
+            gst: gstCents,
+            category: CONTRACTOR_EXPENSE_CATEGORY,
+            projectId: g.projectId,
+            status: 'pending_review',
+          },
+        });
+        createdBillIds.push(bill.id);
+        // Setting contractorBillId takes these out of the reimbursement
+        // float so they can't also be paid through a pay run. `rebillable` /
+        // `rebilledOnInvoiceId` are left alone: recharging the CLIENT is a
+        // separate, legitimate leg.
+        await tx.expense.updateMany({
+          where: { id: { in: g.expenseIds } },
+          data: { contractorBillId: bill.id },
+        });
+        await writeAudit(tx, {
+          actor: { type: 'person', id: session!.person.id },
+          action: 'created',
+          entity: {
+            type: 'bill',
+            id: bill.id,
+            after: {
+              source: 'contractor_period_invoice',
+              leg: 'expenses',
+              periodYear: year,
+              periodMonth: month,
+              projectId: g.projectId,
+              projectCode: g.projectCode,
+              expenseIds: g.expenseIds,
+              // What they paid, and the GST inside it that THEY now reclaim.
+              paidIncGstCents: g.expenseTotalCents,
+              gstWithinPaidCents: g.expenseGstCents,
+              // What they bill Foundry: net, plus their own GST on top.
+              expensesExGstCents: exGstCents,
+              expenseGstCents: gstCents,
+              amountTotalCents: totalCents,
+              expenseTreatment: 'recharge_contractor_adds_own_gst',
+              expenseInvoiceNumber,
               issuedByContractor: true,
               onBehalfByAdmin: personId !== session!.person.id,
               notes: parsed.data.notes ?? null,
@@ -330,12 +429,14 @@ export async function confirmContractorInvoice(
   revalidatePath('/bills');
   revalidatePath('/timesheet');
 
-  const gst = Math.round(totalExGst * GST_RATE);
+  const numbers = expenseInvoiceNumber
+    ? `Invoices ${contractorInvoiceNumber} (time) and ${expenseInvoiceNumber} (expenses)`
+    : `Invoice ${contractorInvoiceNumber}`;
   return {
     status: 'success',
     message:
-      `Invoice ${contractorInvoiceNumber} submitted — $${((totalExGst + gst) / 100).toFixed(2)} ` +
-      `inc GST across ${createdBillIds.length} ${createdBillIds.length === 1 ? 'project' : 'projects'}. ` +
+      `${numbers} submitted — $${(grandTotalIncGst / 100).toFixed(2)} inc GST across ` +
+      `${createdBillIds.length} ${createdBillIds.length === 1 ? 'bill' : 'bills'}. ` +
       `It's with Foundry's AP review now.`,
   };
 }
@@ -350,6 +451,9 @@ const RangeSchema = z
     start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Start date is required'),
     end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'End date is required'),
     contractorInvoiceNumber: z.string().trim().min(1).max(80),
+    /** The SECOND number — the expense invoice (D7). Optional here because
+     *  a range may hold no expenses; required once we know it does. */
+    expenseInvoiceNumber: z.string().trim().max(80).optional().nullable(),
     // D5: the contractor sets their own dates. Defaulted on the form to
     // today / today + 14, but neither is imposed — a contractor invoicing
     // late, or on 30-day terms of their own, must not have to ask.
@@ -429,6 +533,7 @@ export async function generateRangeContractorInvoice(
     start: formData.get('start'),
     end: formData.get('end'),
     contractorInvoiceNumber: formData.get('contractorInvoiceNumber'),
+    expenseInvoiceNumber: formData.get('expenseInvoiceNumber') || null,
     issueDate: formData.get('issueDate'),
     dueDate: formData.get('dueDate'),
     description: formData.get('description') || null,
@@ -484,16 +589,26 @@ export async function generateRangeContractorInvoice(
   const issueDate = parseUtcDate(parsed.data.issueDate);
   const dueDate = parseUtcDate(parsed.data.dueDate);
   const description = parsed.data.description?.trim() || null;
+  const expenseInvoiceNumber = parsed.data.expenseInvoiceNumber?.trim() || null;
+
+  if (expenseInvoiceNumber && expenseInvoiceNumber === contractorInvoiceNumber) {
+    return {
+      status: 'error',
+      message: 'Your fee and expense invoices need different numbers.',
+    };
+  }
 
   // The number is a suggestion the contractor can edit (D1/D5), so an edited
   // one can collide — with an earlier invoice of theirs, or with the
   // suggestion if they raised one in another tab. Scoped to this person:
   // two different contractors both using `INV-001` is normal.
-  if (await contractorInvoiceNumberTaken(personId, contractorInvoiceNumber)) {
-    return {
-      status: 'error',
-      message: `You have already issued an invoice numbered ${contractorInvoiceNumber}. Change the number and submit again.`,
-    };
+  for (const n of [contractorInvoiceNumber, expenseInvoiceNumber]) {
+    if (n && (await contractorInvoiceNumberTaken(personId, n))) {
+      return {
+        status: 'error',
+        message: `You have already issued an invoice numbered ${n}. Change the number and submit again.`,
+      };
+    }
   }
 
   // Per-project fee overrides, keyed `fee:<projectId>`. Parsed up front so a
@@ -642,7 +757,23 @@ export async function generateRangeContractorInvoice(
         } as const;
       }
 
-      for (const g of groups.values()) {
+      // Fees and expenses are two documents now (D7), so a project can be on
+      // one, the other, or both.
+      const feeGroups = [...groups.values()].filter(
+        (g) => g.entryIds.length > 0 || feeOverrides.has(g.projectId),
+      );
+      const expenseGroups = [...groups.values()].filter(
+        (g) => g.expenseIds.length > 0,
+      );
+      if (expenseGroups.length > 0 && !expenseInvoiceNumber) {
+        return {
+          error:
+            'Your expense invoice number is required — expenses are invoiced separately from your time, so they need their own number.',
+        } as const;
+      }
+
+      // ── Fee invoice: the contractor's time ──────────────────────────
+      for (const g of feeGroups) {
         // D5: the fee line is editable. Where the contractor changed it the
         // override IS the invoice; the derived figure is kept for the audit
         // row so the difference is explainable rather than mysterious.
@@ -653,12 +784,9 @@ export async function generateRangeContractorInvoice(
         const feeWasOverridden =
           override !== undefined && override !== derivedFeesExGstCents;
 
-        // Fees: GST ADDED on top of the fee amount (the contractor's supply).
+        // GST is ADDED on top of the fee amount — the contractor's supply.
         const feesGstCents = Math.round(feesExGstCents * GST_RATE);
-        // Expenses: GST already inside the figure, never charged again (D3).
-        const gstCents = feesGstCents + g.expenseGstCents;
-        const amountTotalCents =
-          feesExGstCents + feesGstCents + g.expenseTotalCents;
+        const amountTotalCents = feesExGstCents + feesGstCents;
         totalIncGst += amountTotalCents;
 
         const bill = await tx.bill.create({
@@ -672,8 +800,8 @@ export async function generateRangeContractorInvoice(
             issueDate,
             dueDate,
             amountTotal: amountTotalCents,
-            gst: gstCents,
-            category: 'Contractor — services',
+            gst: feesGstCents,
+            category: CONTRACTOR_FEE_CATEGORY,
             projectId: g.projectId,
             status: 'pending_review',
           },
@@ -687,12 +815,6 @@ export async function generateRangeContractorInvoice(
             data: { contractorBillId: bill.id },
           });
         }
-        if (g.expenseIds.length > 0) {
-          await tx.expense.updateMany({
-            where: { id: { in: g.expenseIds } },
-            data: { contractorBillId: bill.id },
-          });
-        }
 
         await writeAudit(tx, {
           actor: { type: 'person', id: session!.person.id },
@@ -702,6 +824,7 @@ export async function generateRangeContractorInvoice(
             id: bill.id,
             after: {
               source: 'contractor_range_invoice',
+              leg: 'fees',
               rangeStart: parsed.data.start,
               rangeEnd: parsed.data.end,
               projectId: g.projectId,
@@ -717,17 +840,78 @@ export async function generateRangeContractorInvoice(
               derivedFeesExGstCents,
               feeWasOverridden,
               feesGstCents,
-              expenseIds: g.expenseIds,
-              expenseTotalCentsIncGst: g.expenseTotalCents,
-              expenseGstCentsReclaimable: g.expenseGstCents,
-              expenseTreatment: 'pass_through_contractor_adds_no_gst',
-              gstCents,
               amountTotalCents,
               contractorInvoiceNumber,
               invoiceDescription: description,
               issueDate: parsed.data.issueDate,
               dueDate: parsed.data.dueDate,
               timesheetEntryIds: g.entryIds,
+              issuedByContractor: true,
+              onBehalfByAdmin: personId !== session!.person.id,
+              notes: parsed.data.notes ?? null,
+            },
+          },
+          source: 'web',
+        });
+      }
+
+      // ── Expense invoice: costs recharged to Foundry (D7/D8) ─────────
+      for (const g of expenseGroups) {
+        const { exGstCents, gstCents, totalCents } = rechargeExpenseTotals([
+          { amount: g.expenseTotalCents, gst: g.expenseGstCents },
+        ]);
+        totalIncGst += totalCents;
+
+        const bill = await tx.bill.create({
+          data: {
+            supplierPersonId: personId,
+            supplierName: `${person.firstName} ${person.lastName}`,
+            supplierInvoiceNumber: expenseInvoiceNumber,
+            receivedVia: 'manual',
+            description,
+            attachmentSharepointUrl: parsed.data.attachmentSharepointUrl,
+            issueDate,
+            dueDate,
+            amountTotal: totalCents,
+            gst: gstCents,
+            category: CONTRACTOR_EXPENSE_CATEGORY,
+            projectId: g.projectId,
+            status: 'pending_review',
+          },
+        });
+        createdBillIds.push(bill.id);
+
+        await tx.expense.updateMany({
+          where: { id: { in: g.expenseIds } },
+          data: { contractorBillId: bill.id },
+        });
+
+        await writeAudit(tx, {
+          actor: { type: 'person', id: session!.person.id },
+          action: 'created',
+          entity: {
+            type: 'bill',
+            id: bill.id,
+            after: {
+              source: 'contractor_range_invoice',
+              leg: 'expenses',
+              rangeStart: parsed.data.start,
+              rangeEnd: parsed.data.end,
+              projectId: g.projectId,
+              projectCode: g.projectCode,
+              expenseIds: g.expenseIds,
+              // What they paid, and the GST inside it that THEY now reclaim.
+              paidIncGstCents: g.expenseTotalCents,
+              gstWithinPaidCents: g.expenseGstCents,
+              // What they bill Foundry: net, plus their own GST on top.
+              expensesExGstCents: exGstCents,
+              expenseGstCents: gstCents,
+              amountTotalCents: totalCents,
+              expenseTreatment: 'recharge_contractor_adds_own_gst',
+              expenseInvoiceNumber,
+              invoiceDescription: description,
+              issueDate: parsed.data.issueDate,
+              dueDate: parsed.data.dueDate,
               issuedByContractor: true,
               onBehalfByAdmin: personId !== session!.person.id,
               notes: parsed.data.notes ?? null,
@@ -754,11 +938,14 @@ export async function generateRangeContractorInvoice(
   revalidatePath('/bills');
   revalidatePath('/timesheet');
 
+  const numbers = expenseInvoiceNumber
+    ? `Invoices ${contractorInvoiceNumber} (time) and ${expenseInvoiceNumber} (expenses)`
+    : `Invoice ${contractorInvoiceNumber}`;
   return {
     status: 'success',
     message:
-      `Invoice ${contractorInvoiceNumber} submitted — $${(totalIncGst / 100).toFixed(2)} ` +
-      `inc GST across ${createdBillIds.length} ${createdBillIds.length === 1 ? 'project' : 'projects'}. ` +
+      `${numbers} submitted — $${(totalIncGst / 100).toFixed(2)} inc GST across ` +
+      `${createdBillIds.length} ${createdBillIds.length === 1 ? 'bill' : 'bills'}. ` +
       `It's with Foundry's AP review now.`,
   };
 }

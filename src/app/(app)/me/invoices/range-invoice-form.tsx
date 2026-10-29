@@ -54,6 +54,7 @@ export function RangeInvoiceForm({
   pending,
   excludedExpenseCount,
   suggestedNumber,
+  suggestedExpenseNumber,
   defaultIssueDate,
   defaultDueDate,
   rateNote,
@@ -65,6 +66,7 @@ export function RangeInvoiceForm({
   pending: RangePendingView[];
   excludedExpenseCount: number;
   suggestedNumber: string;
+  suggestedExpenseNumber: string;
   defaultIssueDate: string;
   defaultDueDate: string;
   rateNote: { ratesCents: number[]; usedFrozenRate: boolean; usedCurrentRate: boolean };
@@ -82,7 +84,8 @@ export function RangeInvoiceForm({
   const totals = useMemo(() => {
     let feesExGst = 0;
     let feesGst = 0;
-    let expenseTotal = 0;
+    let expensePaid = 0;
+    let expensesExGst = 0;
     let expenseGst = 0;
     for (const g of groups) {
       const raw = fees[g.projectId] ?? '';
@@ -94,18 +97,23 @@ export function RangeInvoiceForm({
         : 0;
       feesExGst += cents;
       feesGst += Math.round(cents * 0.1);
-      expenseTotal += g.expenseTotalCents;
-      expenseGst += g.expenseGstCents;
+      expensePaid += g.expenseTotalCents;
+      // D8 recharge: bill the NET of what was paid and add your own GST on
+      // top. Mirrors `rechargeExpenseTotals`, rounded per project exactly as
+      // each expense bill is written.
+      const net = g.expenseTotalCents - g.expenseGstCents;
+      expensesExGst += net;
+      expenseGst += Math.round(net * 0.1);
     }
     return {
       feesExGst,
       feesGst,
-      expenseTotal,
+      expensePaid,
+      expensesExGst,
       expenseGst,
-      // GST on fees is ADDED; GST within expenses is already inside the
-      // pass-through figure and is never charged again (D3).
+      // Both legs now add GST of the contractor's own.
       gst: feesGst + expenseGst,
-      total: feesExGst + feesGst + expenseTotal,
+      total: feesExGst + feesGst + expensesExGst + expenseGst,
     };
   }, [fees, groups]);
 
@@ -132,7 +140,7 @@ export function RangeInvoiceForm({
             <tr>
               <th className="px-3 py-2 text-left font-medium">Project</th>
               <th className="px-3 py-2 text-right font-medium">Hours</th>
-              <th className="px-3 py-2 text-right font-medium">Expenses</th>
+              <th className="px-3 py-2 text-right font-medium">Expenses ex GST</th>
               <th className="px-3 py-2 text-right font-medium">Fee ex GST (A$)</th>
             </tr>
           </thead>
@@ -147,7 +155,9 @@ export function RangeInvoiceForm({
                   {g.hours.toFixed(2)}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-ink-2">
-                  {g.expenseCount > 0 ? money(g.expenseTotalCents) : '—'}
+                  {g.expenseCount > 0
+                    ? money(g.expenseTotalCents - g.expenseGstCents)
+                    : '—'}
                 </td>
                 <td className="px-3 py-2 text-right">
                   <Input
@@ -173,7 +183,7 @@ export function RangeInvoiceForm({
               </td>
               <td />
               <td className="px-3 py-2 text-right tabular-nums">
-                {totals.expenseTotal > 0 ? money(totals.expenseTotal) : '—'}
+                {totals.expensesExGst > 0 ? money(totals.expensesExGst) : '—'}
               </td>
               <td className="px-3 py-2 text-right font-semibold tabular-nums">
                 {money(totals.feesExGst)}
@@ -188,21 +198,22 @@ export function RangeInvoiceForm({
           <span className="text-ink-3">Fees ex GST</span>
           <span className="tabular-nums text-ink">{money(totals.feesExGst)}</span>
         </div>
-        {totals.expenseTotal > 0 && (
+        {totals.expensesExGst > 0 && (
           <div className="flex justify-between py-0.5">
             <span className="text-ink-3">
-              Expenses at cost
+              Expenses recharged, ex GST
               <span className="ml-1 text-ink-4">
-                (inc {money(totals.expenseGst)} GST)
+                (you paid {money(totals.expensePaid)} inc GST and reclaim that
+                GST yourself)
               </span>
             </span>
-            <span className="tabular-nums text-ink">{money(totals.expenseTotal)}</span>
+            <span className="tabular-nums text-ink">
+              {money(totals.expensesExGst)}
+            </span>
           </div>
         )}
         <div className="flex justify-between py-0.5">
-          <span className="text-ink-3">
-            GST{totals.expenseTotal > 0 ? ' (10% on fees + GST within expenses)' : ' (10%)'}
-          </span>
+          <span className="text-ink-3">GST (10%)</span>
           <span className="tabular-nums text-ink">{money(totals.gst)}</span>
         </div>
         <div className="mt-1 flex justify-between border-t border-line pt-1 font-semibold">
@@ -255,9 +266,19 @@ export function RangeInvoiceForm({
         </p>
       )}
 
+      {totals.expensesExGst > 0 && (
+        <p className="rounded-md border border-line bg-surface-subtle px-3 py-2 text-[11px] text-ink-3">
+          Expenses go out as a <strong>separate invoice</strong> with its own
+          number. You bill Foundry the amount net of GST and add your own 10% on
+          top; the GST you paid on the receipt is yours to reclaim. On a GST-free
+          cost — an overseas flight, say — there was no GST to reclaim, so the
+          10% you add is a real increase on what you paid.
+        </p>
+      )}
+
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="flex flex-col gap-1 text-xs text-ink-3">
-          Your invoice number <span className="text-status-red">*</span>
+          Your time invoice number <span className="text-status-red">*</span>
           <Input
             name="contractorInvoiceNumber"
             required
@@ -269,6 +290,21 @@ export function RangeInvoiceForm({
             Suggested from your initials — change it to match your own numbering.
           </span>
         </label>
+        {totals.expensesExGst > 0 && (
+          <label className="flex flex-col gap-1 text-xs text-ink-3">
+            Your expense invoice number <span className="text-status-red">*</span>
+            <Input
+              name="expenseInvoiceNumber"
+              required
+              maxLength={80}
+              defaultValue={suggestedExpenseNumber}
+              className="h-8 font-mono text-xs"
+            />
+            <span className="text-[10px] text-ink-4">
+              A second document, so a second number.
+            </span>
+          </label>
+        )}
         <label className="flex flex-col gap-1 text-xs text-ink-3">
           Issue date
           <Input

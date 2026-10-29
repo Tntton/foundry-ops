@@ -70,7 +70,7 @@ type CapabilityGroup = {
 const CAPABILITY_GROUPS: CapabilityGroup[] = [
   { id: 'invoice', label: 'Invoices', description: 'Create, send, approve, delete client-facing invoices.' },
   { id: 'expense', label: 'Expenses', description: 'Personal-reimbursement receipts. Manager + AP can approve up to $2k on their projects; super_admin signs off >$2k.' },
-  { id: 'bill', label: 'Bills (AP)', description: 'Vendor invoices that Foundry pays. Approval is super_admin only per A8 governance.' },
+  { id: 'bill', label: 'Bills (AP)', description: 'Vendor invoices that Foundry pays. Review works the intake queue (edit extracted fields, post for approval); approval itself is super_admin only per A8 governance.' },
   { id: 'payrun', label: 'Pay runs', description: 'Salary + contractor payment cycles. Super_admin approves; admin can prepare.' },
   { id: 'project', label: 'Projects', description: 'Create, edit, delete projects. Edit gated to project-owners at handler level.' },
   { id: 'person', label: 'Directory (People)', description: 'Add, edit, archive team members. Hard delete only for never-used records.' },
@@ -120,6 +120,7 @@ function labelForCapability(cap: Capability): string {
     'ratecard.edit': 'Edit rate card',
     'invoice.delete_draft': 'Delete draft invoices',
     'bill.delete_draft': 'Delete draft bills',
+    'bill.review': 'Review + post AP intake',
     'project.delete': 'Hard-delete a project',
     'person.delete': 'Hard-delete a person',
     'client.delete': 'Hard-delete a client',

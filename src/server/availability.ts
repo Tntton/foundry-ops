@@ -322,6 +322,12 @@ export type AvailabilityDayCell = {
   /** Project the hours are earmarked to. Null = unallocated (available
    *  bandwidth ready to be staffed). */
   projectId: string | null;
+  /** Where the row came from. `outlook` means the calendar sync wrote
+   *  it (TASK-522) and the person hasn't touched that day — the editor
+   *  marks those so a synced figure is never mistaken for one they
+   *  typed. Inherited regular-days defaults are `human`: they come
+   *  from a schedule the person declared. */
+  source: 'human' | 'outlook';
 };
 
 /** Read the existing per-day forecast for a person across `weeks` weeks.
@@ -340,7 +346,7 @@ export async function loadAvailabilityForPerson(
   const [rows, person] = await Promise.all([
     prisma.availabilityForecast.findMany({
       where: { personId, date: { gte: start, lt: end } },
-      select: { date: true, hours: true, notes: true, projectId: true },
+      select: { date: true, hours: true, notes: true, projectId: true, source: true },
     }),
     prisma.person.findUnique({
       where: { id: personId },
@@ -359,7 +365,12 @@ export async function loadAvailabilityForPerson(
   const byDay = new Map(
     rows.map((r) => [
       r.date.toISOString().slice(0, 10),
-      { hours: r.hours, notes: r.notes ?? null, projectId: r.projectId ?? null },
+      {
+        hours: r.hours,
+        notes: r.notes ?? null,
+        projectId: r.projectId ?? null,
+        source: r.source as 'human' | 'outlook',
+      },
     ]),
   );
   // Mon=0..Sun=6 lookup for the regular schedule.
@@ -396,6 +407,7 @@ export async function loadAvailabilityForPerson(
         hours: stored.hours,
         notes: stored.notes,
         projectId: stored.projectId,
+        source: stored.source,
       });
     } else {
       const inherited = regularHoursFor(d);
@@ -404,6 +416,9 @@ export async function loadAvailabilityForPerson(
         hours: person?.regularDaysEnabled ? inherited : null,
         notes: null,
         projectId: null,
+        // Inherited from the person's own standing schedule, so it is
+        // theirs, not the sync's.
+        source: 'human',
       });
     }
   }
@@ -480,10 +495,25 @@ export async function upsertAvailabilityForPerson(
         cleared = del.count;
       }
       for (const w of writes) {
+        // `source: 'human'` on both branches, including the update:
+        // saving over a day the Outlook sync filled (TASK-522) pins it
+        // as the person's own forecast, so later syncs leave it alone.
         await tx.availabilityForecast.upsert({
           where: { personId_date: { personId, date: w.date } },
-          update: { hours: w.hours, notes: w.notes, projectId: w.projectId },
-          create: { personId, date: w.date, hours: w.hours, notes: w.notes, projectId: w.projectId },
+          update: {
+            hours: w.hours,
+            notes: w.notes,
+            projectId: w.projectId,
+            source: 'human',
+          },
+          create: {
+            personId,
+            date: w.date,
+            hours: w.hours,
+            notes: w.notes,
+            projectId: w.projectId,
+            source: 'human',
+          },
         });
         written += 1;
       }

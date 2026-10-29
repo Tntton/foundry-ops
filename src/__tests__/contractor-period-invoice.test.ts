@@ -20,7 +20,7 @@ const db = vi.hoisted(() => ({
   person: { findUnique: vi.fn() },
   timesheetPeriod: { findUnique: vi.fn(), update: vi.fn() },
   timesheetEntry: { findMany: vi.fn(), updateMany: vi.fn() },
-  bill: { create: vi.fn() },
+  bill: { create: vi.fn(), findFirst: vi.fn() },
   // TASK-509: the invoice now has an expense leg. Default to none so
   // these cases keep testing the hours path in isolation.
   expense: { findMany: vi.fn(), updateMany: vi.fn() },
@@ -90,6 +90,8 @@ function form(overrides: Record<string, string> = {}): FormData {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // TASK-517: both numbers are collision-checked before anything is written.
+  db.bill.findFirst.mockResolvedValue(null);
   db.expense.findMany.mockResolvedValue([]);
   sessionMod.getSession.mockResolvedValue(sessionFor('p1', ['staff']));
   db.person.findUnique.mockResolvedValue({

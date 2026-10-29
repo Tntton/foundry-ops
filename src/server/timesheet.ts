@@ -1,6 +1,7 @@
 import { prisma } from '@/server/db';
 import { type Prisma, type TimesheetPeriodState } from '@prisma/client';
 import type { Session } from '@/server/roles';
+import { rechargeExpenseTotals } from '@/server/contractor-bills';
 import {
   addDays,
   addMonths,
@@ -1882,9 +1883,12 @@ export type ContractorRangeGroup = {
   /** Sum over entries of hours × that entry's resolved rate, ex GST. */
   feesExGstCents: number;
   entryIds: string[];
-  /** Pass-through costs, GST-INCLUSIVE (D3) — no GST is added on top. */
+  /** What the contractor PAID, GST-inclusive. Under D8 recharge they bill
+   *  Foundry the net of this and add their own GST; see
+   *  `rechargeExpenseTotals`. */
   expenseTotalCents: number;
-  /** GST contained within expenseTotalCents, which Foundry reclaims. */
+  /** GST contained within what they paid — which, under D8, THEY reclaim,
+   *  not Foundry. */
   expenseGstCents: number;
   expenseIds: string[];
 };
@@ -1928,7 +1932,13 @@ export type ContractorRangePreview = {
     hours: number;
     feesExGstCents: number;
     feesGstCents: number;
-    expenseTotalCents: number;
+    /** What the contractor actually paid, GST inclusive. Shown so they can
+     *  reconcile against their receipts; NOT what Foundry is billed. */
+    expensePaidIncGstCents: number;
+    /** What Foundry is billed for expenses: the net (D8 recharge). */
+    expensesExGstCents: number;
+    /** The contractor's OWN GST, added on top of the net (D8) — no longer
+     *  the component sitting inside what they paid. */
     expenseGstCents: number;
     amountTotalCents: number;
   };
@@ -2006,7 +2016,8 @@ export async function previewContractorRangeInvoice(
       hours: 0,
       feesExGstCents: 0,
       feesGstCents: 0,
-      expenseTotalCents: 0,
+      expensePaidIncGstCents: 0,
+      expensesExGstCents: 0,
       expenseGstCents: 0,
       amountTotalCents: 0,
     },
@@ -2185,15 +2196,23 @@ export async function previewContractorRangeInvoice(
   let hours = 0;
   let feesExGstCents = 0;
   let feesGstCents = 0;
-  let expenseTotalCents = 0;
+  let expensePaidIncGstCents = 0;
+  let expensesExGstCents = 0;
   let expenseGstCents = 0;
   for (const g of groupList) {
     hours += g.hours;
     feesExGstCents += g.feesExGstCents;
     // GST rounded per bill, matching how each Bill is written.
     feesGstCents += Math.round(g.feesExGstCents * 0.1);
-    expenseTotalCents += g.expenseTotalCents;
-    expenseGstCents += g.expenseGstCents;
+    expensePaidIncGstCents += g.expenseTotalCents;
+    // D8 recharge: the contractor bills the NET and adds their own GST on
+    // top, rather than passing through the inclusive figure they paid.
+    // Rounded per bill, as each expense Bill is written.
+    const recharge = rechargeExpenseTotals([
+      { amount: g.expenseTotalCents, gst: g.expenseGstCents },
+    ]);
+    expensesExGstCents += recharge.exGstCents;
+    expenseGstCents += recharge.gstCents;
   }
 
   return {
@@ -2213,9 +2232,11 @@ export async function previewContractorRangeInvoice(
       hours,
       feesExGstCents,
       feesGstCents,
-      expenseTotalCents,
+      expensePaidIncGstCents,
+      expensesExGstCents,
       expenseGstCents,
-      amountTotalCents: feesExGstCents + feesGstCents + expenseTotalCents,
+      amountTotalCents:
+        feesExGstCents + feesGstCents + expensesExGstCents + expenseGstCents,
     },
     blockers,
   };

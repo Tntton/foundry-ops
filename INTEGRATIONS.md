@@ -336,6 +336,62 @@ CORPORATE/ADMIN ACCESS/00 Administration/03 Financial/
 
 ---
 
+## 9. Outlook calendar → availability forecast (TASK-522)
+
+**Status:** built, flag off · `/api/cron/outlook-availability-sync` (nightly, 19:00 UTC / 06:00 AEDT) · `src/server/integrations/outlook-calendar.ts`
+
+Fills the days a person has left blank in `/availability` from their own Outlook calendar, so the bandwidth heatmap and the band-supply figures reflect leave nobody re-typed into the app.
+
+### Product rules (TT, 2026-10-23)
+
+| # | Question | Answer | Where it lives |
+|---|---|---|---|
+| Q1 | Which events reduce availability? | All-day events plus out-of-office only. A `busy` meeting never does — a 30-minute standup eating forecast hours makes the numbers nonsense within a week. | `blocksAvailability()` |
+| Q2 | Overwrite a manual forecast? | Never. Fill blanks only. | `planSync()` + `AvailabilityForecast.source` |
+| Q3 | One direction or two? | Read-only. Nothing is ever written back to a calendar — the only Graph verb used is `GET`. | `fetchCalendarView()` |
+
+One reading sits inside Q1 and is worth knowing about: an all-day event marked `showAs: free` is **ignored**. Those are nearly always banners — birthdays, sprint names, a subscribed public-holiday feed — and zeroing someone's day on one would be wrong more often than right. Change `blocksAvailability()` if that call is wrong.
+
+### How a day is scored
+
+Baseline is the person's standing regular-days schedule, or an even FTE spread across Mon–Fri when they have not declared one. An all-day block takes the whole day to 0; a timed out-of-office subtracts its wall-clock hours from the baseline. A day the person does not work (baseline 0) is skipped entirely rather than written as a zero — a 0 row would make the day look forecast when it isn't.
+
+Provenance lives on `AvailabilityForecast.source` (`human` | `outlook`):
+
+- no row + a calendar block → create, tagged `outlook`
+- `outlook` row, calendar changed → refresh
+- `outlook` row, event gone (leave cancelled) → delete, so no phantom day off is stranded in the forecast
+- `human` row → never touched, whatever the calendar says
+
+Saving in the editor always writes `source: 'human'`, so painting over a synced day pins it from every future sync. Synced days render with a `cal` badge in both the calendar and the grid view, and the badge disappears the moment the value is edited.
+
+The reason a day dropped (the event subjects) goes into the sync's `AuditEvent` delta, **not** into `AvailabilityForecast.notes` — the editor treats the Monday row's `notes` as the whole week's note, so writing there would surface a calendar subject as a week note and get wiped on the next save.
+
+### Required permissions — and why this uses its own app registration
+
+`Calendars.Read` (Application), on a **second app registration**, `Foundry Ops Calendar Sync`, holding that permission and nothing else. Credentials reach the code as `CALENDAR_ENTRA_CLIENT_ID` / `CALENDAR_ENTRA_CLIENT_SECRET`; absent those it falls back to the shared `Foundry Ops` credentials, which is convenient in a tenant with no mail policy but is not the production setup.
+
+**Scope it with RBAC for Applications, not `New-ApplicationAccessPolicy`.** The AAP cmdlet used in section 7 is deprecated — Microsoft's own reference says not to create new policies and that existing ones will need migrating. No retirement date has been announced and the section 7 mail policy keeps working, but nothing new should be built on it.
+
+Two things follow from that, and they pull in opposite directions:
+
+- Under the **legacy** AAP mechanism a policy is scoped per *app registration* and governs Mail, Calendars and Contacts together. On that mechanism, adding `Calendars.Read` to `Foundry Ops` would force a choice between the sync reading only the two AP-intake mailboxes or widening mail access to every staff mailbox.
+- Under **App RBAC** that is not true: `Calendars.Read` can be scoped independently of `Mail.Read` on one registration, via separate role assignments with separate resource scopes.
+
+So the separate registration is a practical call, not a forced one. The AP-intake mail scoping is live and working on a legacy policy; reusing that registration would mean migrating that policy to App RBAC first, which is a change to a working integration with its own verification. A separate registration leaves it alone. Consolidating later is a reasonable piece of housekeeping, not a prerequisite.
+
+### Setup
+
+Step-by-step, with checks and a rollback: **[`docs/runbooks/outlook-calendar-sync-setup.md`](docs/runbooks/outlook-calendar-sync-setup.md)**.
+
+In outline: register `Foundry Ops Calendar Sync` → grant and consent `Calendars.Read` → create `foundry-ops-calendar-sync@foundry.health` and put the opted-in mailboxes in it → `New-ServicePrincipal` / `New-ManagementScope` / `New-ManagementRoleAssignment -Role "Application Calendars.Read" -CustomResourceScope …` → verify with `Test-ServicePrincipalAuthorization` (allow 30 minutes to propagate) → apply the `AvailabilityForecast.source` migration → set the env vars and flip the flag on staging before prod.
+
+Who gets synced is the distribution group, not the app: adding someone turns the sync on for them, removing them turns it off. Reading a colleague's calendar is a consent question, and the group is where that consent is recorded.
+
+### Failure behaviour
+
+A person whose calendar can't be read (no mailbox, outside the access policy, Graph down) is recorded in the run's `failures[]` and skipped; their grid keeps whatever they last saved. A total failure writes nothing at all. The rule this protects: **an unread calendar must never render as "you are free"**, which is the single way this integration could do real damage.
+
 ## Integration health dashboard
 
 On `/admin/integrations`:
@@ -362,5 +418,6 @@ Every integration ships behind a flag so staging dogfoods before prod:
 - `ENABLE_WHATSAPP_INBOUND`
 - `ENABLE_DOCUSIGN_SEND`
 - `ENABLE_TEAMS_NOTIFICATIONS`
+- `outlook_availability_sync` (FeatureFlag row; gates the nightly calendar → availability cron)
 
 Stored in `FeatureFlag` table + env override.

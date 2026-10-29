@@ -2001,7 +2001,13 @@ Tests: 9 new, verified to fail (3 of 9) when GST is wrongly added on top of the 
 - [x] Typecheck + lint clean on every file touched; 695 tests pass.
 - [x] Commit: `feat(TASK-512): merge receipt upload into the expenses page`
 
-**Flagged, not fixed — `bill.create` and `ensureCanReview` disagree.** `bill.create` is `super_admin / admin / associate_partner`; `ensureCanReview` in `bills/intake/actions.ts` is `super_admin / admin / partner`. An associate_partner can therefore raise a vendor bill and has no surface on which to review it, and a partner can review bills they cannot raise. Pre-existing; surfaced by this merge because an AP would now be bounced to `/expenses` by the new redirect. Worked around rather than resolved: `IntakeDropzone` takes a `canReviewBills` prop and only navigates to the review pane for people who have one — the bill queues for an admin either way. **Resolving it is a product decision (TT): should an associate_partner review AP bills, or lose `bill.create`?**
+**Resolved — `bill.review` capability (D5, TT 2026-10-23).** `bill.create` was `super_admin / admin / associate_partner` while `ensureCanReview` in `bills/intake/actions.ts` was a separately hard-coded `super_admin / admin / partner`, so an associate_partner could raise a vendor bill and had nowhere to review it, and a partner could review bills they couldn't raise. **TT's call: give associate_partner AP review rights.** Rather than re-typing a fourth role list, the gate is now a capability — `'bill.review': ['super_admin', 'admin', 'partner', 'associate_partner']` in `capabilities.ts`, read by `ensureCanReview`, by `createPlaceholderIntakeBill` (a placeholder exists to be filled in on the review pane, so raising one you can't edit is a dead end), and by both pages that mirror the gate in their UI. `approveIntakeBill` now checks it explicitly instead of inheriting the refusal from the `patchIntakeBill` call it opens with. Bill *approval* is untouched: still super_admin only, per A8.
+
+**acceptance (D5):**
+- [x] `bill.review` added to the `Capability` union and `CAPABILITY_ROLES`; `/admin/access` picks it up from the live map with a bespoke label, no new wiring.
+- [x] Single source — no role list for AP review survives outside `capabilities.ts`.
+- [x] Tests: `bill.review` covers every `bill.create` role (the regression guard — verified to fail against the old list); associate_partner included; partner keeps review without create; manager/staff excluded; neither partner nor AP gains `bill.approve`.
+- [x] Commit: `feat(TASK-512): bill.review capability — associate_partner can work the AP queue`
 
 **note on completion:** the dropzone component stays at `bills/intake/dropzone.tsx` and is imported by both pages rather than copied — one upload path, two framings. `/expenses` passes `defaultKind="expense"`, `/bills/intake` passes `"bill"`, so each page defaults to its own answer while the per-row toggle still rescues an upload that landed on the wrong one.
 
@@ -2164,24 +2170,205 @@ Two resolutions worth recording:
 - [ ] Test covering an amendment attempt against an expense in an open pay run.
 
 ### TASK-517 — Expenses invoice separately from timesheet fees
-**status:** blocked — needs TT
+**status:** done
 **depends on:** TASK-509, TASK-511
 
-**Ask (TT, 2026-10-23):** "the invoice/expenses needs to generate a separate invoice from timesheets" — expenses should produce their own invoice document rather than riding on the fee invoice.
+**Ask (TT, 2026-10-23):** expenses should produce their own invoice rather than riding on the fee invoice.
 
-**BLOCKER — this reverses D3, and D3 is six weeks old and live.** D3 (TT, 2026-09-10, TASK-509) chose the opposite explicitly: *"one invoice, expenses as their own section… Matches standard practice: a contractor issues a single monthly tax invoice with a fees section and an expenses section. A separate expenses invoice is the minority pattern and is used where expenses run on a different approval or payment cycle."* That shipped in `58b5885` and is what `confirmContractorInvoice` does today.
+**This reverses D3 and D4**, both decided 2026-09-10 and shipped in `58b5885`. D3 chose one invoice with an expenses section; D4 chose pass-through GST. TT answered the three scoping questions on 2026-10-23:
 
-Reversing it is a legitimate call — the usual reason is exactly the one D3 names, expenses running on a different approval or payment cycle, which is true here since expense approval and timesheet approval are separate gates. But it is a reversal, not a gap, so it needs TT to say which before anything is built:
+| # | Question | Answer |
+|---|---|---|
+| D6 | Both paths, or only the range path? | **Both.** The month path (`confirmContractorInvoice`) and the range path (`generateRangeContractorInvoice`) must behave identically — a contractor's September invoice and their 15 Sep – 14 Oct invoice cannot differ in how expenses are treated. |
+| D7 | A separate invoice, or the same number with bills split out? | **Separate invoice.** A second document the contractor numbers themselves, not a presentation change inside Foundry. |
+| D8 | Does D4 pass-through GST stand? | **No — the contractor adds their own GST.** This is the recharge treatment, which is what TASK-509 already flagged as the likely correct answer where the underlying receipt is in the contractor's own name. |
 
-- [ ] **Q1 — both paths or just the range path?** The month path (`confirmContractorInvoice`) and the range path (`generateRangeContractorInvoice`) both currently merge expenses into the fee bill. Changing one and not the other means a contractor's September invoice and their 15 Sep – 14 Oct invoice behave differently.
-- [ ] **Q2 — separate invoice, or separate Bill?** Today one invoice already becomes several `Bill` rows, one per project. "Separate invoice" could mean (a) a second invoice number for the expense lines, or (b) the same number with expense bills split out. (a) is a real second document the contractor numbers themselves; (b) is a presentation change inside Foundry.
-- [ ] **Q3 — does the GST treatment survive?** D4 pass-through (contractor adds no GST on expense lines, Foundry reclaims the input credit) was decided alongside D3. A standalone expenses invoice does not change the GST logic, but it does make the pass-through much more visible to the ATO, and the "receipt in the contractor's own name" concern already flagged on TASK-509 becomes harder to leave open.
+**What D8 actually changes.** Under pass-through, an expense line carried the GST-inclusive amount the contractor paid and they added no GST; Foundry reclaimed the input credit. Under recharge, the contractor claims that credit themselves, bills Foundry the **net** amount, and adds 10% of their own on top. For a standard-rated expense the total is unchanged (A$110 inc GST → A$100 net + A$10 GST). The difference bites on **GST-free** purchases — overseas flights, basic food — where the net is the full amount and 10% is now added on top of it. That is correct for a recharge: the supply from contractor to Foundry is their taxable supply of services, regardless of how the underlying item was taxed.
 
-**acceptance (once answered):**
-- [ ] Expense lines raise their own Bill(s) with their own invoice number, independent of the fee bill.
-- [ ] `TimesheetPeriod` expense snapshot columns (`draftExpenseTotalCents` / `draftExpenseGstCents` / `draftExpenseCount`) either keep working or are migrated — they exist to stop an expense edit repricing a signed-off month.
-- [ ] Double-payment guard holds: `contractorBillId` still takes the expense out of the reimbursement float either way.
-- [ ] Commit: `feat(TASK-517): expenses invoice separately from fees`
+**acceptance:**
+- [x] Expense lines raise their own `Bill` rows, separate from the fee bills, with `category = 'Contractor — expenses'` so AP can tell the two apart without inspecting line items.
+- [x] The expense invoice carries its **own contractor-supplied number**, independent of the fee invoice's. Required whenever there are expenses in scope, autosuggested on the same `{INITIALS}-{YYYY}-{NNN}` sequence, editable, and collision-checked exactly as the fee number is (D1 applies to both documents equally — each is the contractor's own).
+- [x] Still one Bill per project per invoice, so each lands on the right engagement.
+- [x] **Recharge arithmetic (D8):** expense bill ex-GST = Σ(`Expense.amount` − `Expense.gst`); GST = 10% of that; total = ex-GST + GST. GST is no longer "the component already inside the figure".
+- [x] Applied to **both** `confirmContractorInvoice` and `generateRangeContractorInvoice` (D6).
+- [x] Both UIs updated: the fee and expense sections total separately, each with its own number field, and the copy no longer claims GST is not added to expenses.
+- [x] `TimesheetPeriod` snapshot columns need **no migration** — `draftExpenseTotalCents` and `draftExpenseGstCents` are both stored, so the net is derivable as the difference. Reinterpret rather than re-migrate, and say so in the column comments.
+- [x] Double-payment guard holds unchanged: `contractorBillId` still takes the expense out of the reimbursement float, whichever bill it lands on.
+- [x] A range or month containing expenses but **no** hours raises only the expense invoice, and vice versa — neither document is mandatory.
+- [x] Update the D3/D4 comments through `actions.ts`, `timesheet.ts` and `schema.prisma` so the code stops asserting a rule that no longer holds.
+- [x] Tests: existing TASK-509 pass-through assertions **rewritten, not deleted** — they encode the old spec and must now encode the new one; GST added on net; GST-free expense correctly grossed up; separate numbers on separate bills; duplicate expense number rejected; expense-only and fee-only cases; both paths covered.
+- [x] Commit: `feat(TASK-517): expenses invoice separately from fees, on recharge GST`
+
+**Flagged for the accountant, not blocking:** D8 is the treatment TASK-509 predicted, but it does change what Foundry can reclaim. Under pass-through Foundry claimed the input credit on the original receipt; under recharge the contractor claims it and Foundry claims on the contractor's invoice instead. Net position is the same where the contractor is GST-registered, and worse for Foundry where they are not — a non-registered contractor cannot add GST at all, so their expenses should recharge at net with no GST. **Not handled in this task** — the code assumes a registered contractor, which is true of everyone on the books today. Raise it as its own task if an unregistered contractor is ever onboarded.
+
+---
+
+**note on completion:** D6/D7/D8 all landed. Fees and expenses are now two documents on **both** paths — `confirmContractorInvoice` (month) and `generateRangeContractorInvoice` (range) — each raising its own `Bill` rows under `Contractor — services` and `Contractor — expenses`, each carrying its own contractor-supplied number. `suggestContractorInvoiceNumbers(personId, 2)` hands out two consecutive numbers in one pass, because two independent calls would both have returned the same "next" value and collided on submit.
+
+The D8 recharge is a four-line arithmetic change (`rechargeExpenseTotals`) with a much larger behavioural tail, and the tests are built around the one case that can actually detect it: for a standard-rated cost, recharge and pass-through produce the identical total, so only a **GST-free** expense distinguishes them. A$440 with no GST inside it now bills Foundry A$484 — the contractor had nothing to reclaim, so the 10% is a real increase. Both paths have that test; without it the suite would pass under either treatment and tell us nothing.
+
+No migration was needed for the `TimesheetPeriod` snapshot. `draftExpenseTotalCents` and `draftExpenseGstCents` both persist, so the net is their difference — the columns record what was *paid*, which is still true; what changed is that the inclusive figure is no longer what Foundry is billed and the GST inside it is no longer Foundry's to reclaim. Said so in the schema comment rather than re-migrating.
+
+`src/__tests__/contractor-expense-passthrough.test.ts` was renamed to `contractor-expense-recharge.test.ts` and its assertions rewritten rather than deleted — they encoded the old rule correctly and the same arithmetic needed pinning under the new one. Two other suites needed `bill.findFirst` added to their prisma mocks for the collision check; that check also had `hit !== null` loosened to `hit != null`, since a nullish result meant "no row" but was being read as a collision, which would have blocked invoicing outright.
+
+788 tests pass (74 files), typecheck clean, lint clean.
+
+**Still open, deliberately:** the treatment assumes a GST-registered contractor, true of everyone on the books today. An unregistered one cannot add GST at all and would need recharging at net with none. Flagged on the task above rather than guessed at.
+
+### TASK-519 — Receipt filenames identify who, what, which project and when
+**status:** done
+**depends on:** TASK-042b, TASK-046b
+
+**Ask (TT, 2026-10-23):** "for uploaded receipts, ensure the file naming convention in sharepoint indicates who, what, what project and when in the file name for identification, and unique identifier for each".
+
+The archive already named date, vendor, amount, initials and an 8-hex short id. **The project was the gap** — a receipt in `FY 26 - 27/Expenses/2026-08/` said nothing about which engagement it belonged to, so a rebill pack had to be assembled by opening files or cross-referencing the app.
+
+**Convention (now):**
+
+```
+YYYY-MM-DD - <PROJECT> - <vendor> - <category> - $<amount> - <INITIALS> - <UID>.<ext>
+2026-07-08 - IFM001 - Amazon Web Services - subscriptions - $89 - TT - EXP-A1B2C3D4.pdf
+```
+
+| Segment | Answers | Fallback |
+|---|---|---|
+| `YYYY-MM-DD` | when | — (always known) |
+| `<PROJECT>` | which project | `NOPROJECT` for overhead / uncoded |
+| `<vendor>` + `<category>` | what | `no-vendor` / `uncategorised` |
+| `<INITIALS>` | who | `??` |
+| `<UID>` | unique identifier | `EXP-`/`BILL-` + 8 uppercase hex |
+
+Date still leads so folders keep sorting chronologically, matching the invoice-PDF convention. The shape is always seven ` - ` segments; a missing fact gets a loud token rather than a collapsed segment, and a vendor containing `" - "` is collapsed to `-` so it cannot fake one.
+
+**acceptance:**
+- [x] `buildReceiptFilename` takes `projectCode`, `category` and `uid`; project code upper-cased, category lower-cased, each segment sanitised and length-capped.
+- [x] `newReceiptUid(kind)` mints `EXP-`/`BILL-` + 8 uppercase hex. Minted before upload (the row does not exist yet) and echoed back on `ReceiptUploadResult.uid`.
+- [x] All four callers pass the project: `/expenses/new` (project lookup now also selects `code`), `/bills/new` (new project lookup), `/bills/intake` (`null` — AP intake runs before coding, so `NOPROJECT` is honest), and the backfill script (`project.code`, uid derived from the row id so a re-run names the same file).
+- [x] Every caller records the uid on its `AuditEvent` delta — that is what ties a file in SharePoint back to its row.
+- [x] Tests: canonical shape, NOPROJECT / uncategorised fallbacks, seven-segment shape when everything is missing, `" - "` collapse, case normalisation, truncation caps, uid format + uniqueness.
+- [x] Typecheck green, 35 tests green in `sharepoint-receipts-helpers.test.ts`, lint clean on changed files.
+- [x] Commit: `feat(TASK-519): receipt filenames carry project, category and a unique id`
+
+**note:** no migration — the uid lives in the filename and the audit delta, not a column. Existing files keep their old names; SharePoint has no rename-on-convention-change step and renaming would break the stored `receiptSharepointUrl` pointers.
+
+---
+
+## Phase 9 — Resource planning: manager visibility, calendar availability, analyst supply
+
+**Ask (TT, 2026-10-23):** *"on the resource planning, ensure all managers have the same visibility as admin. Also, ensure there is a calendar style view with drag and drop features for availability — this ideally would be synced to each individual foundry outlooks, or the ability to input the hours per day if they don't have blocks. We also need to know what the total 'analyst hours' available each day and week."*
+
+Split by how much of each already existed:
+
+1. Manager visibility — `/resource-planning` already admitted `manager`; `/availability` did not, and that asymmetry was the whole gap (TASK-518).
+2. Calendar + drag-and-drop — new surface over the existing per-day `AvailabilityForecast` rows (TASK-520).
+3. Per-day hours entry — already shipped as the rotated grid. Kept as a view, not replaced (TASK-520).
+4. Analyst hours available per day and per week — new roll-up, nothing like it existed (TASK-521).
+5. Outlook sync — no Graph calendar integration exists, and it needs tenant consent plus three product calls (TASK-522, blocked).
+
+**numbering note (2026-10-23):** this phase was first written as TASK-518/519/520/521. A parallel session rewrote `TASKS.md` from a stale copy, dropped the phase and reused TASK-519 for receipt filenames, which it then committed. The calendar work is renumbered to TASK-520 and the rest shift with it; commit `d14234b` carries the old TASK-519 label and refers to the calendar, not to receipt filenames.
+
+### TASK-518 — Managers see availability the way admin does
+**status:** done
+
+**Gap.** `/resource-planning` had admitted `manager` since TT's 2026-07-20 call. `/availability` never followed: `isAdminGroup` (super_admin / admin) got a firm-wide person picker, while `manager` / `partner` fell into a led-projects branch that walked `Project.managerId` / `primaryPartnerId` and listed only that cohort. A manager resourcing across teams saw a picker with four names and concluded the firm had no bench. `associate_partner` was worse — present in the `/resource-planning` and nav role lists, missing from every on-behalf check in `/availability`, so an AP was offered a person by the page and refused by the action.
+
+- [x] One shared helper (`src/server/availability-access.ts`) decides on-behalf availability access; the page and both server actions call it rather than repeating a role array.
+- [x] `manager`, `partner` and `associate_partner` get the same firm-wide active-person picker admin gets.
+- [x] `associate_partner` added to the on-behalf role list in both server actions.
+- [x] Support_Staff stay out by band, matching the nav `denyBands` rule and the `/resource-planning` page-level defense.
+- [x] On-behalf edits still write an `AuditEvent` naming actor and target.
+- [x] Test: `src/__tests__/availability-access.test.ts`.
+- [x] Commit: `feat(TASK-518): managers get admin-level availability visibility` — `4fdc434`
+
+**note on completion:** the led-projects branch is gone entirely, not widened — every on-behalf role reads the same firm-wide list, which also drops a `Project` query from the page.
+
+### TASK-520 — Calendar view for availability, with drag to paint
+**status:** done
+**depends on:** TASK-518
+
+**Shape.** `AvailabilityForecast` is already one row per person per day (`hours`, optional `projectId`), so the calendar is a new view over existing data — no migration. The rotated grid is TT's "input the hours per day if they don't have blocks" and stays as a toggleable view.
+
+- [x] Calendar renders the 8-week horizon as dated day cells, hours and project shown as a block rather than a number in a box.
+- [x] Drag across a run of days paints the brush onto every day in the run.
+- [x] Drag an existing block onto another day moves it; the source clears.
+- [x] Brush is explicit — hours + project (or Erase) — so a drag is never ambiguous.
+- [x] View toggle between Calendar and Grid; both drive the same state and the same Save, so switching never loses an unsaved edit.
+- [x] Keyboard path survives: Grid keeps real number inputs, and a focused calendar day takes Enter / Space.
+- [x] Weekends de-emphasised but still paintable.
+- [x] Week notes editable from both views, so the calendar is not a lossy view of the same data.
+- [x] Commit: `feat(TASK-519): calendar availability view with drag-to-paint` — `d14234b` (old numbering, see the note above)
+
+**note on completion:** the two gestures are disambiguated by what the pointer goes down on — empty cell paints, block moves — and the block fills most of the cell, so a drag starting on a committed day moves it. That is the intent, and the grab cursor plus the tooltip say so, but it is the one thing that will surprise people on first use.
+
+The transforms live in `availability-brush.ts` as pure functions (`resolveBrush` / `rangeDateIsos` / `applyPaint` / `applyMove`) because the app can't boot in this checkout — no `ENTRA_CLIENT_ID`, stale DB creds — so a unit test is the only test that runs here. The gestures were verified by bundling the component with esbuild and driving real pointer drags against it in a browser: paint across Mon–Fri, move a block Mon → Sat, erase a two-day run. That shook out a double-commit bug — pointerup and pointercancel share a handler and React had not re-rendered between them, so a move cleared the source and then wrote the emptied value onto the target. `commit` now clears the drag ref synchronously, and both components read the cell maps through refs so a mid-drag re-render can't commit against a stale copy.
+
+**not verified here:** the page in situ. Tailwind token classes, the view toggle inside `/availability`, and the interaction with the prefill banner and the inactive-profile gate have not been seen rendered — only the component in isolation.
+
+### TASK-521 — Analyst hours available, per day and per week
+**status:** done
+
+**Gap.** `computeBandwidthHeatmap` aggregates to person × week. There is no band-level supply number and no daily granularity anywhere, so "how many analyst hours can I sell on Thursday" is currently unanswerable from the app.
+
+**Definition used (stated on the surface so nobody has to guess).** Three states per person-day, deliberately kept apart:
+
+- **allocated** — explicit forecast row tagged to a project. Committed, not counted as supply.
+- **declared free** — explicit forecast row with no project. The person has said they are free.
+- **assumed free** — no row, but a standing regular-days schedule says they normally work that day. Real planning signal, but an inference, so it renders as a separate `est` figure rather than being folded into the declared number.
+
+A person with neither a row nor a schedule contributes nothing and is counted as *silent*. Absence of a forecast is unknown capacity, not free capacity, and reading it as free is how a bench gets oversold — so the card says how many people the number is silent about.
+
+The fallback matches `computeBandwidthHeatmap` exactly (explicit row wins, else the standing schedule, regular-days hours always unallocated), so the two surfaces can never disagree about a given day.
+
+- [x] Server function returns, per day in the horizon: unallocated / allocated / total forecast hours, grouped by band.
+- [x] Same roll-up at week granularity.
+- [x] Analyst is the headline band but Consultant and Expert render alongside.
+- [x] Surfaced on `/resource-planning` above the heatmap, honouring the 4/6/8/12-week selector.
+- [x] Non-submitters counted and shown, so the figure is not read as complete.
+- [x] Contractors and partners excluded on the same basis `computeBandwidthHeatmap` excludes them.
+- [x] Test: fixture people across bands with mixed allocated / unallocated / absent forecasts produce the expected daily and weekly totals.
+- [x] Commit: `feat(TASK-521): analyst hours available per day and week`
+
+**note on completion:** `src/server/band-supply.ts` is a new module rather than another function inside `availability.ts`, which is already 500 lines and was being edited by a parallel session. The daily strip on the card covers the first fortnight — the window a staffing conversation actually happens in — while the weekly row spans the whole selected horizon; a week column is exactly the sum of its days because both read the same `addPersonDay` fold.
+
+Verified: 12 unit tests against a mocked Prisma, covering the allocated / declared / assumed split, the day→week roll-up, explicit rows overriding the standing schedule (including an explicit zero for a day off), silent-person counting, the band and employment filter sent to the DB, and bands rendering empty rather than disappearing. The card itself was rendered against fixture data in an isolated bundle to check layout; it has **not** been seen inside `/resource-planning` because the app can't boot in this checkout.
+
+### TASK-522 — Sync availability from each person's Outlook calendar
+**status:** done (flag off; needs tenant consent before it can run)
+**depends on:** TASK-520
+
+**Ask:** *"this ideally would be synced to each individual foundry outlooks"*.
+
+**Answers (TT, 2026-10-23):** Q1 all-day events plus out-of-office only. Q2 fill blanks only, never overwrite a manual forecast. Q3 read-only from Outlook.
+
+- [x] Graph calendar client behind the `outlook_availability_sync` FeatureFlag, off by default, plus `graphConfigured()`. Nightly cron at `/api/cron/outlook-availability-sync`.
+- [x] Q1: `blocksAvailability()` takes out-of-office at any length, and all-day events that aren't marked `free`. Plain `busy` never counts.
+- [x] Q2: `planSync()` skips any day with a `source: 'human'` row. Saving in the editor always writes `source: 'human'`, so painting over a synced day pins it from every future sync.
+- [x] Q3: the only Graph verb is `GET`. Nothing is written back to a calendar.
+- [x] Synced days distinguishable — `cal` badge in both the calendar and the grid view, dashed border on the grid input, and the badge clears the moment the value is edited, before the save.
+- [x] Graph failure degrades to the manual grid: per-person failures are collected and the run continues; a total failure writes nothing.
+- [x] Exchange application access policy documented in `INTEGRATIONS.md` section 9.
+- [x] Tests: 25 in `src/__tests__/outlook-calendar.test.ts`.
+- [x] Commits: `chore(db): AvailabilitySource on AvailabilityForecast` then `feat(TASK-522): Outlook calendar sync for availability`
+
+**The finding that changed the design.** An Exchange `ApplicationAccessPolicy` is scoped per *app registration* and governs Mail, Calendars and Contacts together. The `Foundry Ops` registration already carries a `RestrictAccess` policy pinning `Mail.Read` to the two AP-intake mailboxes (INTEGRATIONS.md section 7). Putting `Calendars.Read` on that registration forces a choice between the calendar sync only being able to read those two mailboxes, or the mail group being widened to every staff mailbox and `Mail.Read` going with it — which breaks A6. So the sync authenticates as a **second registration**, `Foundry Ops Calendar Sync`, via `CALENDAR_ENTRA_CLIENT_ID` / `CALENDAR_ENTRA_CLIENT_SECRET`, with its own access policy. Absent those env vars it falls back to the shared credentials, which is fine in a tenant with no mail policy but is not the production setup.
+
+**Design calls worth knowing about:**
+
+- *An all-day event marked `free` is ignored.* Those are almost always banners — birthdays, sprint names, a subscribed holiday feed — and zeroing a day on one would be wrong more often than right. This sits inside TT's Q1 answer rather than being given by it; `blocksAvailability()` is the line to change if it's wrong.
+- *A non-working day is skipped, not zeroed.* Writing a 0 for a weekend OOF would make the day look forecast when it isn't, which corrupts the submission signal `/resource-planning` reads.
+- *A synced day whose event disappears is deleted.* Without that, a cancelled holiday strands a phantom day off in the forecast forever.
+- *The reason a day dropped lives in the AuditEvent delta, not in `notes`.* The editor treats the Monday row's `notes` as the whole week's note, so a calendar subject written there would surface as a week note and get wiped on the next save.
+- *Membership is the distribution group, not the app.* Reading a colleague's calendar is a consent question, and the group is where that consent is recorded.
+
+**not verified here:** anything that touches Graph. `fetchCalendarView` and `runOutlookAvailabilitySync` have never run against a real tenant — `Calendars.Read` is not granted, the second registration does not exist, and the app can't boot in this checkout. Everything tested is the pure layer: event classification, per-day folding, and the write/refresh/delete/skip plan. **The migration has not been applied either** — nothing auto-runs `migrate deploy`, so `AvailabilityForecast.source` is missing in prod until the SQL is run by hand, and `/availability` will throw P2021-style errors on the new column before then.
+
+**still open for TT** — runbook with checks and rollback: `docs/runbooks/outlook-calendar-sync-setup.md`:
+- [ ] Create the `Foundry Ops Calendar Sync` app registration, grant `Calendars.Read`, consent, and set the two env vars.
+- [ ] Create `foundry-ops-calendar-sync@foundry.health` and decide who goes in it — that group *is* the opt-in list.
+- [ ] Scope it with RBAC for Applications (`New-ServicePrincipal` / `New-ManagementScope` / `New-ManagementRoleAssignment`), **not** `New-ApplicationAccessPolicy`, which Microsoft has deprecated.
+- [ ] Apply the migration SQL, then flip `outlook_availability_sync` on in staging before prod.
+
+**correction to the note above (2026-10-23).** The claim that a second app registration is *forced* was specific to the legacy `ApplicationAccessPolicy` mechanism, which does bundle Mail, Calendars and Contacts per app. Under RBAC for Applications — the supported replacement — `Calendars.Read` can be scoped independently of `Mail.Read` on one registration. The second registration is still the right move here, for a weaker reason: it avoids migrating the live AP-intake mail policy off AAP as a precondition. `getCalendarToken()` falling back to the shared credentials means consolidating later costs nothing in code.
 
 ---
 

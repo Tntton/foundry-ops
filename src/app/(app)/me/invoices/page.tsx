@@ -7,7 +7,7 @@ import {
   listMyInvoicePeriods,
   previewContractorRangeInvoice,
 } from '@/server/timesheet';
-import { suggestContractorInvoiceNumber } from '@/server/contractor-bills';
+import { suggestContractorInvoiceNumbers } from '@/server/contractor-bills';
 import { addDays, daysInMonth, formatIsoDate, startOfMonth } from '@/lib/week';
 import { RangeInvoiceForm } from './range-invoice-form';
 import { Badge } from '@/components/ui/badge';
@@ -119,7 +119,10 @@ export default async function MyInvoicesPage({
         parseIso(rangeEndIso),
       )
     : null;
-  const suggestedNumber = (await suggestContractorInvoiceNumber(person.id)) ?? '';
+  // Two numbers: fees and expenses are separate documents (D7), and they
+  // must not be handed the same "next" value.
+  const [suggestedNumber = '', suggestedExpenseNumber = ''] =
+    await suggestContractorInvoiceNumbers(person.id, 2);
   const today = new Date();
   const defaultIssueDate = formatIsoDate(today);
   const defaultDueDate = formatIsoDate(addDays(today, 14));
@@ -205,6 +208,7 @@ export default async function MyInvoicesPage({
               start={rangeStartIso}
               end={rangeEndIso}
               suggestedNumber={suggestedNumber}
+              suggestedExpenseNumber={suggestedExpenseNumber}
               defaultIssueDate={defaultIssueDate}
               defaultDueDate={defaultDueDate}
               rateNote={preview.rateNote}
@@ -294,6 +298,8 @@ export default async function MyInvoicesPage({
                   expenseGstCents={p.draft.expenseGstCents}
                   expenseCount={p.draft.expenseCount}
                   excludedExpenseCount={p.excludedExpenseCount}
+                  suggestedNumber={suggestedNumber}
+                  suggestedExpenseNumber={suggestedExpenseNumber}
                 />
               )}
 

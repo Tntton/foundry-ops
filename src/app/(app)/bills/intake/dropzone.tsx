@@ -155,13 +155,14 @@ export function IntakeDropzone({
   canCreateBill: boolean;
   /**
    * Whether the current user can open the AP review pane on
-   * /bills/intake. `bill.create` includes associate_partner but
-   * `ensureCanReview` in actions.ts does not, so an AP can raise a
-   * vendor bill and then has nowhere to review it — /bills/intake
-   * bounces them back to /expenses. When false we leave them where
-   * they are instead of navigating into that bounce; their bill still
-   * queues for an admin. Defaults false so a caller that doesn't know
-   * never pushes someone into the redirect.
+   * /bills/intake (the `bill.review` capability). `bill.review` is a
+   * superset of `bill.create` today, so anyone who can raise a vendor
+   * bill can also review it — but the two are separate capabilities
+   * and have drifted apart before, stranding associate_partners with a
+   * bill they couldn't edit. When false we leave the user where they
+   * are rather than navigating into /bills/intake's redirect; the bill
+   * still queues for a reviewer either way. Defaults false so a caller
+   * that doesn't know never pushes someone into that bounce.
    */
   canReviewBills?: boolean;
   /** Eligible projects for the inline project-tag picker shown on

@@ -604,12 +604,23 @@ model WorkHistoryEntry {
 //
 // Submitted from /availability. Unique on (personId, date) so re-submission
 // upserts; deleting a row clears that day's forecast.
+// Where an AvailabilityForecast row came from. `human` is anyone typing
+// into /availability (themselves or an on-behalf editor). `outlook` is the
+// calendar sync (TASK-522), which only ever fills days that have no row —
+// a human row is never overwritten, and saving over a synced day flips it
+// back to `human`, pinning it from future syncs.
+enum AvailabilitySource {
+  human
+  outlook
+}
+
 model AvailabilityForecast {
   id           String    @id @default(cuid())
   personId     String
   date         DateTime  @db.Date // the day this entry applies to
   hours        Int       // expected hours that day (0 = explicitly off)
   notes        String?
+  source       AvailabilitySource @default(human)
   // Optional project the hours are earmarked against. Null means the
   // hours are "unallocated" - i.e. the person has committed to being
   // available but nothing is scheduled against them yet, so they show
@@ -1119,12 +1130,21 @@ model TimesheetPeriod {
   // rate for the same reason: editing an expense between close and confirm
   // must not reprice a month that was already signed off.
   //
-  // D3 (TT 2026-09-10) is PASS-THROUGH treatment: the contractor invoices
-  // the full GST-inclusive amount they paid and adds no GST of their own on
-  // these lines; Foundry claims the input credit. So the total below is
-  // GST-INCLUSIVE, and the GST figure is the component within it, not an
-  // amount added on top. Contrast the fee lines, where GST is added to
-  // hours × rate.
+  // SUPERSEDED BY D8 (TT 2026-10-23). The columns are unchanged and needed
+  // no migration, but what they MEAN downstream has moved.
+  //
+  // D3/D4 (2026-09-10) were pass-through: the contractor invoiced the full
+  // GST-inclusive amount they paid, added no GST of their own, and Foundry
+  // claimed the input credit. D8 replaced that with a RECHARGE — the
+  // contractor reclaims that GST themselves and bills Foundry the net plus
+  // 10% of their own (see `rechargeExpenseTotals`). D7 also moved expenses
+  // onto their own invoice, separate from the fee invoice.
+  //
+  // The two columns below still record exactly what they always did: what
+  // was PAID, GST-inclusive, and the GST component inside it. The net is
+  // their difference, which is why no migration was needed. What changed is
+  // that the inclusive figure is no longer what Foundry is billed, and the
+  // GST inside it is no longer Foundry's to reclaim.
   /// Sum of Expense.amount (GST-inclusive) in AUD cents.
   draftExpenseTotalCents Int?
   /// GST component contained within draftExpenseTotalCents, in AUD cents.

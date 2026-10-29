@@ -1,17 +1,19 @@
 'use server';
 
-import { randomBytes } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
-import { hasAnyRole } from '@/server/roles';
+import type { Session } from '@/server/roles';
 import { hasCapability } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
 import { notifyApproversOfNewApproval } from '@/server/user-updates';
 import { resolveRequiredRole } from '@/server/approval-policies';
-import { uploadReceiptToSharePoint } from '@/server/integrations/sharepoint-receipts';
+import {
+  newReceiptUid,
+  uploadReceiptToSharePoint,
+} from '@/server/integrations/sharepoint-receipts';
 
 /**
  * The intake dropzone is shared between two cost types:
@@ -58,8 +60,8 @@ const PatchSchema = z.object({
   projectId: z.string().trim().max(40).nullable().optional(),
 });
 
-function ensureCanReview(roles: string[]): boolean {
-  return roles.some((r) => ['super_admin', 'admin', 'partner'].includes(r));
+function ensureCanReview(session: Session): boolean {
+  return hasCapability(session, 'bill.review');
 }
 
 /**
@@ -74,7 +76,7 @@ export async function patchIntakeBill(
 ): Promise<IntakeActionState> {
   const session = await getSession();
   if (!session) return { status: 'error', message: 'Not signed in' };
-  if (!ensureCanReview(session.person.roles))
+  if (!ensureCanReview(session))
     return { status: 'error', message: 'Not authorized' };
 
   const parsed = PatchSchema.safeParse({
@@ -203,6 +205,11 @@ export async function approveIntakeBill(
 
   const session = await getSession();
   if (!session) return { status: 'error', message: 'Not signed in' };
+  // `patchIntakeBill` above already refused a non-reviewer, so this is
+  // belt-and-braces — but the capability a handler needs belongs in the
+  // handler, not inherited from whatever it happens to call first.
+  if (!ensureCanReview(session))
+    return { status: 'error', message: 'Not authorized' };
 
   const bill = await prisma.bill.findUnique({
     where: { id: billId },
@@ -437,7 +444,10 @@ export async function createPlaceholderIntakeBill(
   formData: FormData,
 ): Promise<IntakeActionState> {
   const session = await getSession();
-  if (!session || !hasAnyRole(session, ['super_admin', 'admin', 'partner'])) {
+  // A placeholder exists to be filled in on the review pane, so the gate
+  // is `bill.review` rather than `bill.create` — raising one you can't
+  // then edit is a dead end.
+  if (!session || !ensureCanReview(session)) {
     return { status: 'error', message: 'Not authorized' };
   }
   const parsed = PlaceholderSchema.safeParse({
@@ -588,6 +598,7 @@ async function createCostFromExtraction(
   // it up later.
   let attachmentUrl: string;
   let attachmentDriveItemId: string | null = null;
+  let attachmentUid: string | null = null;
   let uploadWarning: string | null = null;
   const actor = await prisma.person.findUnique({
     where: { id: actorPersonId },
@@ -597,14 +608,19 @@ async function createCostFromExtraction(
   if (payload.fileBase64 && payload.fileMime) {
     try {
       const buffer = Buffer.from(payload.fileBase64, 'base64');
-      const shortId = randomBytes(4).toString('hex');
       const upload = await uploadReceiptToSharePoint({
         kind: kind === 'bill' ? 'bill' : 'expense',
         date: extractedIssueDate,
+        // AP intake runs before anyone codes the document, so the
+        // project is genuinely unknown here — the filename says
+        // NOPROJECT rather than guessing (TASK-519). The reviewer
+        // assigns a project in the AP queue afterwards.
+        projectCode: null,
         vendor: extractedSupplier,
+        category: extractedCategory,
         amountCents: amountTotal,
         ownerInitials: initials,
-        id: shortId,
+        uid: newReceiptUid(kind === 'bill' ? 'bill' : 'expense'),
         buffer,
         mimeType: payload.fileMime,
         originalFilename: payload.fileName,
@@ -612,6 +628,7 @@ async function createCostFromExtraction(
       if (upload) {
         attachmentUrl = upload.webUrl;
         attachmentDriveItemId = upload.driveItemId;
+        attachmentUid = upload.uid;
       } else {
         // Graph not configured — fall through to legacy inline base64.
         // Backfill script will migrate these when SharePoint comes up.
@@ -665,6 +682,7 @@ async function createCostFromExtraction(
               category: extractedCategory,
               extraction: extractionMeta,
               attachmentDriveItemId,
+              attachmentUid,
               uploadWarning,
             },
           },
@@ -744,6 +762,7 @@ async function createCostFromExtraction(
               status: extractionUsable ? 'submitted' : 'draft',
               extraction: extractionMeta,
               receiptDriveItemId: attachmentDriveItemId,
+              receiptUid: attachmentUid,
               uploadWarning,
             },
           },

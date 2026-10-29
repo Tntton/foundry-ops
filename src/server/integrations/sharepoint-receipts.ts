@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 import {
   graph,
   graphConfigured,
@@ -26,15 +28,21 @@ import { optionalEnv } from '@/server/env';
  *   - FY subfolder is auto-derived from the receipt date. AU FY starts
  *     July 1 (see `deriveAustralianFY`), so a July-2026 receipt lands
  *     in `FY 26 - 27/` and stays there forever — never renamed.
- *   - Filename is `YYYY-MM-DD - <vendor> - $<amount> - <initials> - <shortId>.<ext>`
- *     so an accountant scrolling the folder can identify a row without
- *     opening it, and search-by-date/vendor works in the SharePoint UI.
+ *   - Filename answers who / what / which project / when, plus a
+ *     unique reference, without anyone opening the file (TASK-519):
+ *       `YYYY-MM-DD - <PROJECT> - <vendor> - <category> - $<amount>
+ *        - <INITIALS> - <UID>.<ext>`
+ *     e.g. `2026-07-08 - IFM001 - Amazon Web Services - subscriptions
+ *     - $89 - TT - EXP-A1B2C3D4.pdf`. Every segment is also a prefix
+ *     SharePoint search matches on, so "IFM001" or "EXP-A1B2C3D4"
+ *     finds the file from the folder search box.
  *   - Returns both `webUrl` (for direct clicks / audit trail) AND
  *     `driveItemId` (for the proxied inline preview at
  *     /api/attachments/*, which needs Graph binary streaming).
- *   - Doesn't dedupe on filename — collisions (same date, same vendor,
- *     same amount) fall through to a `-1`, `-2` suffix via SharePoint's
- *     conflictBehavior=rename. Prevents silent overwrites.
+ *   - Doesn't dedupe on filename — the uid makes a collision all but
+ *     impossible, and anything that does collide falls through to a
+ *     `-1`, `-2` suffix via SharePoint's conflictBehavior=rename.
+ *     Prevents silent overwrites.
  *
  * Graph permission required: `Files.ReadWrite.All` (Application) — same
  * scope the SharePoint backup + Uber email-intake already use. No new
@@ -46,6 +54,12 @@ const DEFAULT_RECEIPTS_ROOT =
 
 // SharePoint disallows these in filenames — replace with `-`.
 const FILENAME_INVALID_CHARS = /[/\\?%*:|"<>#]/gu;
+
+// Placeholder tokens so the filename keeps a fixed seven-segment shape
+// even when the fact isn't known at upload time. Both are deliberately
+// loud: an accountant scanning the folder should see what's unassigned.
+const NO_PROJECT_TOKEN = 'NOPROJECT';
+const NO_CATEGORY_TOKEN = 'uncategorised';
 
 // Chunked upload threshold — Graph docs say <4MB is fine as a direct
 // PUT; larger goes through createUploadSession. Receipts are usually
@@ -79,32 +93,70 @@ function pad2(n: number): string {
 // ─── Filename derivation ────────────────────────────────────────────
 
 /**
- * Build the canonical receipt filename.
+ * Strip SharePoint-illegal characters, collapse whitespace and cap the
+ * length of one ` - `-delimited filename segment. The ` - ` separator
+ * itself is collapsed to a single `-` so a vendor called "Kee - Lee"
+ * can't fake an extra segment and break filename parsing.
+ */
+function sanitiseSegment(raw: string, maxLength: number): string {
+  return raw
+    .replace(FILENAME_INVALID_CHARS, '-')
+    .replace(/\s+/gu, ' ')
+    .replace(/ - /gu, '-')
+    .trim()
+    .slice(0, maxLength);
+}
+
+/**
+ * Mint the unique reference that identifies one uploaded receipt.
  *
- *   `2026-07-08 - Amazon Web Services - $89 - TT - exp_ab12cd.pdf`
+ *   `EXP-A1B2C3D4` / `BILL-A1B2C3D4`
  *
- * Vendor is truncated/sanitised so path length stays under the 400-char
- * SharePoint URL limit even for very long amounts + IDs. Empty vendor
- * falls back to "no-vendor" so the shape is stable.
+ * 32 bits of randomness, not a slice of the row id: the upload happens
+ * before the Expense/Bill row exists, so the uid is generated first and
+ * then carried into the AuditEvent delta, which is what ties file back
+ * to row. Uppercase hex because the uid is the token a human types into
+ * the SharePoint search box.
+ */
+export function newReceiptUid(kind: 'expense' | 'bill'): string {
+  const prefix = kind === 'expense' ? 'EXP' : 'BILL';
+  return `${prefix}-${randomBytes(4).toString('hex').toUpperCase()}`;
+}
+
+/**
+ * Build the canonical receipt filename — who / what / which project /
+ * when, plus the unique reference (TASK-519):
+ *
+ *   `2026-07-08 - IFM001 - Amazon Web Services - subscriptions - $89 - TT - EXP-A1B2C3D4.pdf`
+ *    └ when ──┘   └ project ┘  └─ what ─────────────────────┘  └ who ┘  └ uid ──────┘
+ *
+ * Date leads so the folder still sorts chronologically, matching the
+ * existing archive and the invoice-PDF convention. Every segment is
+ * truncated/sanitised so the path stays under the 400-char SharePoint
+ * URL limit; missing facts fall back to a fixed token rather than
+ * collapsing a segment, so the shape is always seven parts.
  */
 export function buildReceiptFilename(input: {
   date: Date;
+  projectCode: string | null | undefined;
   vendor: string | null | undefined;
+  category: string | null | undefined;
   amountCents: number;
   ownerInitials: string;
-  id: string;
+  uid: string;
   extension: string;
 }): string {
   const iso = input.date.toISOString().slice(0, 10);
-  const vendor = (input.vendor ?? 'no-vendor')
-    .replace(FILENAME_INVALID_CHARS, '-')
-    .replace(/\s+/gu, ' ')
-    .trim()
-    .slice(0, 60);
+  const project =
+    sanitiseSegment(input.projectCode ?? '', 24).toUpperCase() || NO_PROJECT_TOKEN;
+  const vendor = sanitiseSegment(input.vendor ?? '', 60) || 'no-vendor';
+  const category =
+    sanitiseSegment(input.category ?? '', 24).toLowerCase() || NO_CATEGORY_TOKEN;
   const dollars = Math.round(input.amountCents / 100);
-  const shortId = input.id.slice(-8);
+  const initials = sanitiseSegment(input.ownerInitials, 6) || '??';
+  const uid = sanitiseSegment(input.uid, 20) || 'NOUID';
   const ext = input.extension.replace(/^\.+/u, '').toLowerCase() || 'bin';
-  return `${iso} - ${vendor} - $${dollars} - ${input.ownerInitials} - ${shortId}.${ext}`;
+  return `${iso} - ${project} - ${vendor} - ${category} - $${dollars} - ${initials} - ${uid}.${ext}`;
 }
 
 /**
@@ -154,15 +206,22 @@ export type ReceiptUploadResult = {
   driveItemId: string;
   folderPath: string;
   filename: string;
+  /** Echoed back so the caller can record it on the AuditEvent delta. */
+  uid: string;
 };
 
 export type ReceiptUploadInput = {
   kind: 'expense' | 'bill';
   date: Date;
+  /** Project code the cost is tagged to, e.g. `IFM001`. Null = overhead. */
+  projectCode: string | null | undefined;
   vendor: string | null | undefined;
+  /** Expense/Bill category — the "what" segment of the filename. */
+  category: string | null | undefined;
   amountCents: number;
   ownerInitials: string;
-  id: string;
+  /** Unique receipt reference from `newReceiptUid`, e.g. `EXP-A1B2C3D4`. */
+  uid: string;
   buffer: Buffer;
   mimeType: string;
   originalFilename?: string | null;
@@ -191,10 +250,12 @@ export async function uploadReceiptToSharePoint(
   const ext = extensionFromMime(input.mimeType);
   const filename = buildReceiptFilename({
     date: input.date,
+    projectCode: input.projectCode,
     vendor: input.vendor,
+    category: input.category,
     amountCents: input.amountCents,
     ownerInitials: input.ownerInitials,
-    id: input.id,
+    uid: input.uid,
     extension: ext,
   });
   const filePath = `${folderPath}/${filename}`;
@@ -209,6 +270,7 @@ export async function uploadReceiptToSharePoint(
     driveItemId: item.id,
     folderPath,
     filename: item.name,
+    uid: input.uid,
   };
 }
 
@@ -539,8 +601,8 @@ async function uploadSmallFile(
 ): Promise<DriveItem> {
   const token = await getAppToken();
   // ?@microsoft.graph.conflictBehavior=rename guarantees a `-1`/`-2`
-  // suffix on collision, protecting against silent overwrites when
-  // (date + vendor + amount + person + shortId) happen to match.
+  // suffix on collision, protecting against silent overwrites in the
+  // (vanishingly unlikely) case that two uids collide in one folder.
   const url =
     `https://graph.microsoft.com/v1.0/drives/${driveId}` +
     `/root:/${encodePath(filePath)}:/content` +
