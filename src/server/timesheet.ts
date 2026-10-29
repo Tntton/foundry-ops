@@ -361,6 +361,14 @@ async function getRangeForPerson(
           where: {
             personId,
             date: { gte: carryForward.start, lt: carryForward.end },
+            // "projects … open from the previous week — if projects were
+            // removed or have no hours [they] need to be added on" (TT,
+            // 2026-10-30). The save never leaves a 0-hour row behind and the
+            // CSV importer skips one, so this is belt-and-braces against an
+            // imported or legacy row — but the rule is what TT asked for, so
+            // it belongs in the query rather than in a comment about why it
+            // can't happen.
+            hours: { gt: 0 },
             // Don't carry a project that has since been archived — logging
             // to a wrapped engagement should be a deliberate act via the
             // add-row picker, not something the sheet suggests.

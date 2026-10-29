@@ -2394,6 +2394,18 @@ A third, smaller one: a refused day was silently `continue`d. The user typed a n
 ### Third part of the ask — already shipped
 The "just make available the projects open from the previous timesheet/week … rather than having every allocated project" half of TT's 2026-10-30 message is TASK-513, which landed on 2026-10-23. `getRangeForPerson` opens a sheet on the projects worked in the PREVIOUS period, falling back to allocations only when nothing was logged then (a new starter, or someone back from leave, who would otherwise get an empty grid and have to hunt through the picker). A project you stop logging to drops off by itself, because a zero-hour row leaves no `TimesheetEntry` behind. Re-adding one is the "— Add project row —" picker, which offers every active and archived project, not just allocations. Verified against the existing tests in `timesheet-carry-forward.test.ts`; TASK-525 closes the one gap the wording exposed.
 
+### TASK-525 — A 0-hour row doesn't carry to next week
+**status:** done
+
+**Gap (TT, 2026-10-30):** "if projects were removed **or have no hours**" — the carry-forward query filtered on archived projects and the date range, but not on hours, so a row logged at 0 would come back next week as a project to fill in.
+
+**acceptance:**
+- [x] `hours: { gt: 0 }` on the carry-forward read in `getRangeForPerson`.
+- [x] Test in `timesheet-carry-forward.test.ts`.
+- [x] Commit: `fix(TASK-525): don't carry a 0-hour row into next week`
+
+**note:** belt-and-braces in practice — `saveTimesheet` deletes rather than writing a 0-hour row, and the CSV importer skips `hours = 0` — so this guards an imported or legacy row. Put in the query anyway, because it is the rule TT asked for rather than a fact about today's writers.
+
 ---
 
 *End of TASKS.md. Start with TASK-001.*

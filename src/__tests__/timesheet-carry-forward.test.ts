@@ -100,6 +100,19 @@ describe('week view carries the previous week forward', () => {
     expect(rows.map((r) => r.projectCode).sort()).toEqual(['CAC002', 'NEW001']);
   });
 
+  it('never carries a project that was logged with no hours', async () => {
+    // TT, 2026-10-30: "if projects were removed or have no hours [they] need
+    // to be added on into the timesheet". A 0-hour row is a project you
+    // didn't work on, so it should not be waiting for you next week.
+    mockReads({ previous: [entry('p2', 'CAC002', '2026-10-15')] });
+
+    await getWeekForPerson('p1-person', WEEK);
+
+    expect(db.timesheetEntry.findMany.mock.calls[1]![0].where.hours).toEqual({
+      gt: 0,
+    });
+  });
+
   it('never carries a project that has since been archived', async () => {
     mockReads({ previous: [entry('p2', 'CAC002', '2026-10-15')] });
 
