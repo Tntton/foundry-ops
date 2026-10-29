@@ -15,6 +15,8 @@ import { monthStartFrom } from '@/lib/week';
 const db = vi.hoisted(() => ({
   timesheetEntry: { findMany: vi.fn() },
   projectTeam: { findMany: vi.fn() },
+  // Month-level lock lookup (TASK-523). Empty = every month still open.
+  timesheetPeriod: { findMany: vi.fn() },
 }));
 vi.mock('@/server/db', () => ({ prisma: db }));
 
@@ -47,6 +49,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   db.timesheetEntry.findMany.mockResolvedValue([]);
   db.projectTeam.findMany.mockResolvedValue([]);
+  db.timesheetPeriod.findMany.mockResolvedValue([]);
 });
 
 /** getRangeForPerson fires [current entries, allocations, previous entries]. */

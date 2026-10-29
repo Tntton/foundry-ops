@@ -19,9 +19,12 @@ import {
   todayInFirmTz,
 } from '@/lib/week';
 import { revalidateScheduleSurfaces } from '@/server/revalidate-schedule';
+import { isCellEditable, cellLockKind } from '@/lib/timesheet-lock';
 import {
+  getPeriodLocksForRange,
   isBilledEitherLeg,
   monthKeysFor,
+  periodLockFor,
   partitionDecisionBatch,
   preflightLodgeMonth,
   reconcileTimesheetPeriodStates,
@@ -180,7 +183,8 @@ export async function saveTimesheet(
   // (P2028 "Transaction already closed") tripped on slow links / when
   // super-admins were editing on behalf of others.
   const rangeEndDate = addDays(rangeStart, dayCount);
-  const [existingTeamRows, existingEntries, projectManagers] = await Promise.all([
+  const [existingTeamRows, existingEntries, projectManagers, periodLocks] =
+    await Promise.all([
     prisma.projectTeam.findMany({
       where: {
         personId: targetPersonId,
@@ -207,6 +211,10 @@ export async function saveTimesheet(
             // which only ever covered the contractor leg.
             billedInvoiceId: true,
             contractorBillId: true,
+            // Needed to tell a real edit from the hidden field the grid
+            // posts back for a locked day. Without it every save of a week
+            // containing a locked day would report a refusal (TASK-523).
+            hours: true,
           },
         }),
     // Project leadership lookup — needed to (a) gate non-admin on-behalf
@@ -224,6 +232,11 @@ export async function saveTimesheet(
             primaryPartnerId: true,
           },
         }),
+    // Month-level lock. An entry-level guard cannot see it: a day inside an
+    // already-invoiced month that holds no entry had nothing to refuse, so
+    // brand-new hours landed in a month whose invoice had gone out
+    // (TASK-523).
+    getPeriodLocksForRange(targetPersonId, rangeStart, rangeEndDate),
   ]);
 
   // Build the per-project leadership index. A row auto-approves when the
@@ -288,6 +301,7 @@ export async function saveTimesheet(
       status: 'draft' | 'submitted' | 'approved';
       billedInvoiceId: string | null;
       contractorBillId: string | null;
+      hours: number;
     }
   >();
   for (const e of existingEntries) {
@@ -297,10 +311,22 @@ export async function saveTimesheet(
       status: e.status,
       billedInvoiceId: e.billedInvoiceId,
       contractorBillId: e.contractorBillId,
+      hours: Number(e.hours),
     });
   }
   const autoAddedProjects: string[] = [];
   const overriddenLockedEntries: string[] = [];
+  /**
+   * Days this save tried to change but is not allowed to. Reported back
+   * rather than dropped — the old guard just `continue`d, so a user typing
+   * into a locked day was told the save succeeded and watched their number
+   * vanish on the next render (TASK-523).
+   *
+   * Only days whose VALUE differs from what is stored count. The grid posts
+   * a hidden field carrying the current hours for every locked day, so an
+   * ordinary save of a week containing one would otherwise report a refusal.
+   */
+  const refusedCells: Array<{ dayKey: string; kind: string }> = [];
 
   // Build the operations as an array so we can fire them as a single
   // `prisma.$transaction([...])` batch. Array-form transactions don't open
@@ -337,6 +363,32 @@ export async function saveTimesheet(
       const dayKey = date.toISOString().slice(0, 10);
       const existing = existingByKey.get(`${row.projectId}|${dayKey}`);
 
+      // ── The lock, for everything below ──────────────────────────────
+      // One rule, `@/lib/timesheet-lock`, shared with the grid and the
+      // assistant prefill, so a day that renders locked is a day this save
+      // refuses. Evaluated BEFORE the zero-hours branch, because deleting an
+      // hour out of an invoiced month is the same mutation as rewriting one.
+      //
+      // `periodLock` is why this sits ahead of the `existing` check rather
+      // than inside it: an invoiced month has to refuse a day with no entry
+      // behind it too, or new hours land outside the invoice that was
+      // supposed to contain them.
+      const lockCell = {
+        status: existing ? existing.status : null,
+        billed: existing ? isBilledEitherLeg(existing) : false,
+        periodLock: periodLockFor(periodLocks, date),
+      } as const;
+      if (!isCellEditable(lockCell, isSuperAdmin)) {
+        const stored = existing ? existing.hours : 0;
+        if (stored !== hours) {
+          refusedCells.push({
+            dayKey,
+            kind: cellLockKind(lockCell, isSuperAdmin) ?? 'approved',
+          });
+        }
+        continue;
+      }
+
       if (hours === 0) {
         if (
           existing &&
@@ -346,19 +398,16 @@ export async function saveTimesheet(
           ops.push(
             prisma.timesheetEntry.delete({ where: { id: existing.id } }),
           );
-        } else if (existing && isSuperAdmin && !isBilledEitherLeg(existing)) {
-          // Super-admin clearing an approved-but-unbilled entry — convert to
-          // a 0-hour deletion so it stops counting in P&L. Guarding on both
-          // legs is wider than the old status!=='billed' check, which missed
-          // hours already on a CLIENT invoice (that leg never touched status).
+        } else if (existing && isSuperAdmin) {
+          // Super-admin clearing an approved entry — convert to a 0-hour
+          // deletion so it stops counting in P&L. The lock above has already
+          // refused anything billed or in a closed month, so reaching here
+          // means approved-and-unbilled.
           ops.push(
             prisma.timesheetEntry.delete({ where: { id: existing.id } }),
           );
           overriddenLockedEntries.push(existing.id);
         }
-        // Billed entries with 0 hours are left alone — they're historical
-        // record + already invoiced on one or both legs. Editing those needs
-        // a manual void of the invoice / bill first.
         continue;
       }
 
@@ -366,10 +415,9 @@ export async function saveTimesheet(
       const willAutoApprove = autoApproveProjectIds.has(row.projectId);
       const nextStatus = willAutoApprove ? 'approved' : baseStatus;
       if (existing) {
-        // Billed hours are always `approved` (billing never changes status
-        // post-TASK-500), so the approved check covers both.
+        // Reaching here means the lock above let the day through, so an
+        // `approved` entry implies a super-admin override.
         const isLocked = existing.status === 'approved';
-        if (isLocked && !isSuperAdmin) continue;
         // Status decisions on existing rows:
         //   - approved (incl. billed) → preserve (don't replace the original
         //     approver / timestamp; a super-admin override edits hours only)
@@ -459,6 +507,11 @@ export async function saveTimesheet(
     }
   }
 
+  // Everything pushed so far is a real write. Counted before the audit row
+  // joins the batch, so a save that was refused end to end can be told apart
+  // from one that changed something (TASK-523).
+  const mutationOpCount = ops.length;
+
   // Audit row — inlined so we can fire it inside the array-form batch.
   // Mirrors writeAudit() but skips its `tx` requirement (we're not in an
   // interactive session). `computeDelta(undefined, after)` yields the
@@ -473,6 +526,7 @@ export async function saveTimesheet(
     rowCount: parsed.data.rows.length,
     ...(autoAddedProjects.length > 0 ? { autoAddedProjects } : {}),
     ...(overriddenLockedEntries.length > 0 ? { overriddenLockedEntries } : {}),
+    ...(refusedCells.length > 0 ? { refusedCells } : {}),
     ...(autoApprovedEntryRefs.length > 0
       ? {
           autoApproved: {
@@ -640,6 +694,27 @@ export async function saveTimesheet(
     parts.push(
       `Super-admin override applied to ${overriddenLockedEntries.length} locked ${overriddenLockedEntries.length === 1 ? 'entry' : 'entries'}.`,
     );
+  }
+
+  // Say what was refused and why. Silence here is what made the old guard
+  // feel like data loss: the number was typed, the save said it worked, and
+  // the figure reverted on the next render.
+  if (refusedCells.length > 0) {
+    const days = Array.from(new Set(refusedCells.map((c) => c.dayKey))).sort();
+    const kinds = new Set(refusedCells.map((c) => c.kind));
+    const why = kinds.has('billed')
+      ? 'already on an invoice or a contractor bill — void the document to change them'
+      : kinds.has('period_invoiced')
+        ? 'in a month that is already invoiced — it has to be reopened first'
+        : kinds.has('period_approved')
+          ? 'in a month that is already approved — ask an approver to send it back'
+          : 'already approved — ask an approver to send them back';
+    const dayList = days.slice(0, 3).join(', ') + (days.length > 3 ? ', …' : '');
+    const refusal = `${days.length} locked ${days.length === 1 ? 'day was' : 'days were'} left unchanged (${dayList}) — ${why}.`;
+    if (mutationOpCount === 0) {
+      return { status: 'error', message: `Nothing saved. ${refusal}` };
+    }
+    parts.push(refusal);
   }
   return { status: 'success', message: parts.join(' ') };
 }

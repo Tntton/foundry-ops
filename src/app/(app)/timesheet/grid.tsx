@@ -11,7 +11,12 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { countLockedCells, isCellEditable } from '@/lib/timesheet-lock';
+import {
+  countLockedCells,
+  isCellEditable,
+  cellLockKind,
+  type PeriodLock,
+} from '@/lib/timesheet-lock';
 import { formatDayLabel } from '@/lib/week';
 
 type ProjectOption = {
@@ -33,6 +38,7 @@ export function TimesheetGrid({
   isSuperAdmin,
   hourlyRateCents,
   lastWeekRows,
+  cellPeriodLocks,
 }: {
   rangeStart: string;
   initialRows: TimesheetRow[];
@@ -47,6 +53,14 @@ export function TimesheetGrid({
   /** Previous week's rows for the "Copy last week" quick action.
    *  Null in month view (the action only makes sense week-to-week). */
   lastWeekRows?: TimesheetRow[] | null;
+  /**
+   * Month lock per DAY INDEX, aligned to `cells`. Same for every row, so it
+   * travels as one array rather than being repeated on each cell the server
+   * sends. A row added in the browser has to carry it too, or an
+   * already-invoiced month would render an open input on a day that simply
+   * has no entry behind it yet (TASK-523).
+   */
+  cellPeriodLocks: PeriodLock[];
 }) {
   const [rows, setRows] = useState(initialRows);
   const [state, action] = useFormState<TimesheetSaveState, FormData>(saveTimesheet, {
@@ -54,6 +68,16 @@ export function TimesheetGrid({
   });
 
   const dayCount = cells.length;
+  // Strongest month lock anywhere in the range. A week can straddle two
+  // months, so this is a scan rather than a single value.
+  const rangePeriodLock: PeriodLock = cellPeriodLocks.includes('invoiced')
+    ? 'invoiced'
+    : cellPeriodLocks.includes('approved')
+      ? 'approved'
+      : null;
+  const rangeFullyLocked =
+    rangePeriodLock === 'invoiced' ||
+    (rangePeriodLock === 'approved' && !isSuperAdmin);
   const usedProjectIds = useMemo(() => new Set(rows.map((r) => r.projectId)), [rows]);
   const addableProjects = allProjects.filter((p) => !usedProjectIds.has(p.id));
   const submittedRowCount = useMemo(
@@ -132,11 +156,12 @@ export function TimesheetGrid({
         projectStage: p.stage,
         description: '',
         status: 'draft',
-        cells: cells.map((date) => ({
+        cells: cells.map((date, i) => ({
           date,
           hours: 0,
           status: null,
           billed: false,
+          periodLock: cellPeriodLocks[i] ?? null,
         })),
       },
     ]);
@@ -170,6 +195,7 @@ export function TimesheetGrid({
               hours: lw.cells[i]?.hours ?? 0,
               status: null,
               billed: false,
+              periodLock: cellPeriodLocks[i] ?? null,
             })),
           });
         } else {
@@ -225,6 +251,38 @@ export function TimesheetGrid({
               submittedCount={submittedRowCount}
             />
           )}
+        </div>
+      )}
+      {rangePeriodLock !== null && (
+        <div
+          className={cn(
+            'flex items-start gap-2 rounded-md border px-3 py-2 text-xs',
+            rangePeriodLock === 'invoiced'
+              ? 'border-status-red/40 bg-status-red-soft/40 text-status-red'
+              : 'border-status-blue/40 bg-status-blue-soft/40 text-status-blue',
+          )}
+        >
+          <LockIcon />
+          <span>
+            {rangePeriodLock === 'invoiced' ? (
+              <>
+                This month is <strong>invoiced</strong>. Every day in it is
+                locked, including empty ones — hours added here would sit
+                outside the invoice that was supposed to contain them. Reopen
+                the month to change anything in it.
+              </>
+            ) : rangeFullyLocked ? (
+              <>
+                This month is <strong>approved</strong> and locked. Ask an
+                approver to send it back if it needs changing.
+              </>
+            ) : (
+              <>
+                This month is <strong>approved</strong>. Only a super admin can
+                change it, and the original approver and timestamp are kept.
+              </>
+            )}
+          </span>
         </div>
       )}
       {!actingOnBehalf && isSuperAdmin && (
@@ -368,9 +426,12 @@ export function TimesheetGrid({
                     </td>
                     {r.cells.map((c, i) => {
                       const cellOpen = editableCells[i] ?? true;
-                      const cellLocked =
-                        !cellOpen &&
-                        (c.status === 'approved' || c.status === 'billed');
+                      // Any day the save would refuse renders locked — not
+                      // just one with an approved entry behind it. An EMPTY
+                      // day inside an invoiced month is locked too, and used
+                      // to render an open input the server then ignored
+                      // (TASK-523).
+                      const cellLocked = !cellOpen;
                       return (
                         <td
                           key={i}
@@ -390,7 +451,7 @@ export function TimesheetGrid({
                               the server ignores it either way. */}
                           {cellLocked ? (
                             <div
-                              title={cellLockReason(c)}
+                              title={cellLockReason(c, isSuperAdmin)}
                               className="flex h-8 w-full items-center justify-center gap-0.5 rounded-md border border-dashed border-line bg-surface-subtle px-1 text-sm tabular-nums text-ink-2"
                             >
                               {c.hours > 0 ? (
@@ -551,11 +612,15 @@ export function TimesheetGrid({
             <span className="inline-flex items-center gap-1">
               <LockIcon />
               {lockedCellCount} day{lockedCellCount === 1 ? '' : 's'} locked —{' '}
-              {isSuperAdmin
-                ? 'on an invoice or a contractor bill. Void the document to change them.'
-                : hasBilledCells
-                  ? 'already approved, and some are on an invoice or a contractor bill.'
-                  : 'already approved. Ask an approver to send them back to change them.'}
+              {rangePeriodLock === 'invoiced'
+                ? 'the month is invoiced. Reopen it before changing anything in it.'
+                : rangePeriodLock === 'approved'
+                  ? 'the month is approved. Ask an approver to send it back.'
+                  : isSuperAdmin
+                    ? 'on an invoice or a contractor bill. Void the document to change them.'
+                    : hasBilledCells
+                      ? 'already approved, and some are on an invoice or a contractor bill.'
+                      : 'already approved. Ask an approver to send them back to change them.'}
             </span>
           )}
           <span>Changes save when you click Save draft or Submit.</span>
@@ -564,7 +629,11 @@ export function TimesheetGrid({
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          {addableProjects.length > 0 ? (
+          {rangeFullyLocked ? (
+            <span className="text-xs text-ink-3">
+              Locked — no rows can be added to this period.
+            </span>
+          ) : addableProjects.length > 0 ? (
             <AddRowPicker projects={addableProjects} onAdd={addRow} />
           ) : (
             <span className="text-xs text-ink-3">All your projects are on the sheet.</span>
@@ -744,16 +813,22 @@ type GridCell = TimesheetRow['cells'][number];
 const cellEditable = (c: GridCell, isSuperAdmin: boolean) =>
   isCellEditable(c, isSuperAdmin);
 
-function cellLockReason(c: GridCell): string {
+function cellLockReason(c: GridCell, isSuperAdmin: boolean): string {
   const day = c.date.toLocaleDateString('en-AU', {
     day: 'numeric',
     month: 'short',
     timeZone: 'UTC',
   });
-  if (c.billed) {
-    return `${day} — billed. These hours are on an invoice or a contractor bill; void the document to change them.`;
+  switch (cellLockKind(c, isSuperAdmin)) {
+    case 'billed':
+      return `${day} — billed. These hours are on an invoice or a contractor bill; void the document to change them.`;
+    case 'period_invoiced':
+      return `${day} — the month is invoiced. Reopen it before changing anything in it; new hours here would sit outside the invoice.`;
+    case 'period_approved':
+      return `${day} — the month is approved. Ask an approver to send it back if it needs changing.`;
+    default:
+      return `${day} — approved and locked. Ask an approver to send them back if they need changing.`;
   }
-  return `${day} — approved and locked. Ask an approver to send them back if they need changing.`;
 }
 
 function LockIcon() {

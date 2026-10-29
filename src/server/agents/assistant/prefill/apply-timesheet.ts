@@ -1,6 +1,6 @@
 import type { TimesheetRow } from '@/server/timesheet';
 import type { TimesheetPrefillPayload } from './schemas';
-import { isCellEditable } from '@/lib/timesheet-lock';
+import { isCellEditable, type PeriodLock } from '@/lib/timesheet-lock';
 import { formatIsoDate } from '@/lib/week';
 
 /**
@@ -42,6 +42,13 @@ export function applyTimesheetPrefill(
     name: string;
     stage: TimesheetRow['projectStage'];
   }>,
+  /**
+   * Month lock per day index, aligned to `cells`. Optional so the existing
+   * call shape still compiles; passing it is what stops the assistant
+   * prefilling a day inside an invoiced month that has no entry behind it
+   * yet (TASK-523).
+   */
+  cellPeriodLocks: readonly PeriodLock[] = [],
 ): ApplyTimesheetPrefillResult {
   const cellIsoIndex = new Map<string, number>();
   cells.forEach((d, i) => {
@@ -97,7 +104,13 @@ export function applyTimesheetPrefill(
         // there is no status and nothing is billed. Both fields are
         // required on TimesheetCell — the grid reads them per cell to
         // decide which days are editable.
-        cells: cells.map((date) => ({ date, hours: 0, status: null, billed: false })),
+        cells: cells.map((date, i) => ({
+          date,
+          hours: 0,
+          status: null,
+          billed: false,
+          periodLock: cellPeriodLocks[i] ?? null,
+        })),
       };
       working.push(newRow);
       rowIdx = working.length - 1;

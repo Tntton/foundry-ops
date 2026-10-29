@@ -23,6 +23,8 @@ const db = vi.hoisted(() => ({
     delete: vi.fn(),
   },
   auditEvent: { create: vi.fn() },
+  // Month-level lock lookup (TASK-523). Empty = every month still open.
+  timesheetPeriod: { findMany: vi.fn() },
   userUpdate: { findFirst: vi.fn() },
   $transaction: vi.fn(),
 }));
@@ -80,6 +82,8 @@ function monthForm(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // No closed months unless a test says so — see timesheet-period-lock.
+  db.timesheetPeriod.findMany.mockResolvedValue([]);
   sessionMod.getSession.mockResolvedValue(STAFF);
   db.person.findUnique.mockResolvedValue({
     inactiveAt: null,

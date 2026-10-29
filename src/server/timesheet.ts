@@ -14,6 +14,7 @@ import {
   startOfMonth,
   startOfQuarter,
 } from '@/lib/week';
+import type { PeriodLock } from '@/lib/timesheet-lock';
 
 /**
  * What the UI shows for an entry. Wider than the DB enum: `billed` is a
@@ -61,6 +62,60 @@ export function toDisplayStatus(
   return e.status === 'approved' && e.billedInvoiceId !== null ? 'billed' : e.status;
 }
 
+/** `YYYY-MM` for a date, the key `getPeriodLocksForRange` returns. */
+function monthKey(d: Date): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * Lodgement state for every month a date range touches, keyed `YYYY-MM`.
+ *
+ * Only `approved` and `invoiced` come back. `open` and `lodged` months stay
+ * editable — lodging is a submission, not a close — so carrying them would
+ * only add rows the caller has to ignore.
+ *
+ * This is the lock an entry-level check cannot see. `saveTimesheet` guarded
+ * the status of an EXISTING entry, so a day in an already-invoiced month that
+ * held no entry at all accepted brand-new hours: there was no row to refuse
+ * (TASK-523). Those hours then sat outside the invoice that was supposed to
+ * contain the month.
+ */
+export async function getPeriodLocksForRange(
+  personId: string,
+  rangeStart: Date,
+  rangeEnd: Date,
+): Promise<Map<string, 'approved' | 'invoiced'>> {
+  const months: Array<{ year: number; month: number }> = [];
+  for (
+    let cursor = startOfMonth(rangeStart);
+    cursor < rangeEnd;
+    cursor = addMonths(cursor, 1)
+  ) {
+    months.push({ year: cursor.getUTCFullYear(), month: monthNumber(cursor) });
+  }
+  if (months.length === 0) return new Map();
+  const periods = await prisma.timesheetPeriod.findMany({
+    where: { personId, OR: months, state: { in: ['approved', 'invoiced'] } },
+    select: { year: true, month: true, state: true },
+  });
+  const out = new Map<string, 'approved' | 'invoiced'>();
+  for (const p of periods) {
+    out.set(
+      `${p.year}-${String(p.month).padStart(2, '0')}`,
+      p.state as 'approved' | 'invoiced',
+    );
+  }
+  return out;
+}
+
+/** The month lock covering a single day, for `isCellEditable`. */
+export function periodLockFor(
+  locks: Map<string, 'approved' | 'invoiced'>,
+  date: Date,
+): PeriodLock {
+  return locks.get(monthKey(date)) ?? null;
+}
+
 export type TimesheetCell = {
   date: Date;
   hours: number;
@@ -82,6 +137,13 @@ export type TimesheetCell = {
    * can still edit an approved hour, but not one that is on a document.
    */
   billed: boolean;
+  /**
+   * Lodgement state of the month this day sits in, when it has moved past
+   * `open` / `lodged`. An `invoiced` month is locked for everyone, EMPTY days
+   * included — otherwise new hours land in a month whose invoice has already
+   * gone out (TASK-523).
+   */
+  periodLock: PeriodLock;
 };
 
 export type TimesheetRow = {
@@ -163,7 +225,7 @@ async function getRangeForPerson(
     project: { select: { id: true, code: true, name: true, stage: true } },
   } as const;
 
-  const [entries, assignments, previousEntries] = await Promise.all([
+  const [entries, assignments, previousEntries, periodLocks] = await Promise.all([
     prisma.timesheetEntry.findMany({
       where: {
         personId,
@@ -192,6 +254,7 @@ async function getRangeForPerson(
           distinct: ['projectId'],
         })
       : Promise.resolve([]),
+    getPeriodLocksForRange(personId, rangeStart, rangeEnd),
   ]);
 
   type ProjectMini = {
@@ -233,6 +296,9 @@ async function getRangeForPerson(
           hours: entry ? Number(entry.hours) : 0,
           status: entry ? toDisplayStatus(entry) : null,
           billed: entry ? isBilledEitherLeg(entry) : false,
+          // Set even on an empty day — that is the whole point of the
+          // month-level lock (TASK-523).
+          periodLock: periodLockFor(periodLocks, date),
         };
       });
       const description =

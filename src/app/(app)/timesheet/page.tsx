@@ -13,6 +13,8 @@ import {
   getHourlyUtilisationForWeek,
   getApprovalHistoryForPerson,
   getQuarterSummaryForPerson,
+  getPeriodLocksForRange,
+  periodLockFor,
 } from '@/server/timesheet';
 import { prisma } from '@/server/db';
 import {
@@ -242,6 +244,23 @@ export default async function TimesheetPage({
   const quarterSummary =
     view === 'quarter' ? await getQuarterSummaryForPerson(target.id, blockStart) : null;
 
+  // Month lock per day index, for the rows the BROWSER builds (add-row,
+  // copy-last-week, assistant prefill). The rows the server sends already
+  // carry it per cell; a row added client-side has no entry to read it from,
+  // and without this an invoiced month renders open inputs on its empty days
+  // (TASK-523).
+  const cellPeriodLocks =
+    cells.length === 0
+      ? []
+      : await (async () => {
+          const locks = await getPeriodLocksForRange(
+            target.id,
+            blockStart,
+            addDays(blockStart, cells.length),
+          );
+          return cells.map((d) => periodLockFor(locks, d));
+        })();
+
   // Previous week's rows feed the "Copy last week" quick action (week
   // view only) — a repeat week becomes two clicks instead of five
   // typed cells. Month view skips it: the 28-day grid already shows
@@ -334,7 +353,13 @@ export default async function TimesheetPage({
     if (verify.ok) {
       const payloadCheck = TimesheetPrefillSchema.safeParse(verify.payload.payload);
       if (payloadCheck.success) {
-        const result = applyTimesheetPrefill(rows, payloadCheck.data, cells, allProjects);
+        const result = applyTimesheetPrefill(
+          rows,
+          payloadCheck.data,
+          cells,
+          allProjects,
+          cellPeriodLocks,
+        );
         enrichedRows = result.rows;
         prefillIgnored = result.ignored.length > 0 ? result.ignored : undefined;
         const appliedSummary = result.applied
@@ -677,6 +702,7 @@ export default async function TimesheetPage({
             isSuperAdmin={isSuperAdmin}
             hourlyRateCents={hourlyRateCents}
             lastWeekRows={lastWeekRows}
+            cellPeriodLocks={cellPeriodLocks}
           />
         </>
       )}

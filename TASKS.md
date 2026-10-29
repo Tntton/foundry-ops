@@ -2343,6 +2343,50 @@ Verified: 12 unit tests against a mocked Prisma, covering the allocated / declar
 
 **correction to the note above (2026-10-23).** The claim that a second app registration is *forced* was specific to the legacy `ApplicationAccessPolicy` mechanism, which does bundle Mail, Calendars and Contacts per app. Under RBAC for Applications — the supported replacement — `Calendars.Read` can be scoped independently of `Mail.Read` on one registration. The second registration is still the right move here, for a weaker reason: it avoids migrating the live AP-intake mail policy off AAP as a precondition. `getCalendarToken()` falling back to the shared credentials means consolidating later costs nothing in code.
 
+## Phase 9 — Timesheet locking and period entry (TT, 2026-10-30)
+
+**The ask, verbatim:** "timesheets that have been approved and invoiced need to be locked. Also the first timesheet seen when opening that tab should the be the earliest week that requires input. On timesheets, just make available the projects open from the previous timesheet/week - if projects were removed or have no hours need to be added on into the timesheet (rather than having every allocated project)"
+
+Three parts. The third already shipped as TASK-513 (carry the previous period's projects forward) plus the add-row picker, so it needs no work — see the note under TASK-524.
+
+### TASK-523 — Lock an approved-and-invoiced timesheet on the server, not just in the grid
+**status:** done
+
+**Gap (TT, 2026-10-30):** the grid has refused a billed day for everyone since TASK-514, but `saveTimesheet` never agreed with it. Two holes, both on the write side:
+
+1. **A super admin could rewrite a billed hour.** The update guard was `existing.status === 'approved'` with a super-admin bypass, and billed hours are `approved`, so the bypass covered them. The DELETE path two lines above it guarded `isBilledEitherLeg`, the UPDATE path did not — a super admin could not zero an invoiced day but could change it from 8h to 2h.
+2. **An invoiced month accepted brand-new hours.** Every guard keyed off an EXISTING entry, so a day with nothing logged had nothing to refuse. The month's invoice had already gone out and the new hours landed outside it. No entry-level check can see this; it needs the `TimesheetPeriod` state.
+
+A third, smaller one: a refused day was silently `continue`d. The user typed a number, the save said it worked, and the figure reverted on the next render.
+
+**acceptance:**
+- [x] `PeriodLock` (`approved` | `invoiced` | null) on `LockableCell`, folded into the one `isCellEditable` rule: invoiced → locked for everyone, empty days included; approved → super admin only; open / lodged → untouched. Lodging is a submission, not a close, so it never locks.
+- [x] `getPeriodLocksForRange(personId, start, end)` + `periodLockFor(locks, date)` in `server/timesheet.ts`. Enumerates the months a range touches, so a week straddling a boundary reads both.
+- [x] `saveTimesheet` calls `isCellEditable` instead of its own guard — one rule, so a day that renders locked is a day the save refuses. Evaluated before the zero-hours branch: deleting an hour out of an invoiced month is the same mutation as rewriting one.
+- [x] `cellLockKind()` names the reason, document lock ahead of month lock (voiding the document is what unblocks it).
+- [x] Refusals are reported, not dropped: `N locked days were left unchanged (…) — why`, and `status: 'error'` when the save changed nothing at all. Only days whose value actually differs count — the grid posts a hidden field carrying the stored hours for every locked day, so otherwise every ordinary save of a week containing one would carry a warning.
+- [x] `refusedCells` on the AuditEvent delta.
+- [x] Grid: `cellLocked` is now `!cellOpen` rather than `!cellOpen && status is approved/billed` — an EMPTY day in an invoiced month used to render an open input the server then ignored. Month-lock banner above the grid, add-row picker replaced by a "Locked" note when nothing in the range can be typed into, legend names the month lock.
+- [x] `cellPeriodLocks` (one per day index, same for every row) passed to the grid and the assistant prefill, so a row built in the BROWSER carries the lock too.
+- [x] Tests: `src/__tests__/timesheet-period-lock.test.ts` — the pure rule per status × role × period state, the month enumeration incl. straddle and year rollover, and the save guard over both billing legs, the empty-invoiced-month case, the no-op case and the audit delta.
+- [x] Commit: `feat(TASK-523): lock billed hours and closed months on the server`
+
+**note:** no migration — `TimesheetPeriod.state` already existed. Not exercised in a browser: the local DB credentials are stale (memory `foundry_local_db_unreachable`), so this is typecheck, lint and 18 unit tests only.
+
+### TASK-524 — Open the timesheet on the earliest week that still needs input
+**status:** todo
+
+**Gap (TT, 2026-10-30):** `/timesheet` opens on the current week, always. Someone two weeks behind has to notice that, then click Previous twice. The week that needs attention is the oldest incomplete one, not today's.
+
+**acceptance:**
+- [ ] `findEarliestWeekNeedingInput(personId, today)` in `server/timesheet.ts`. A week needs input when it holds at least one PAST weekday (Mon–Fri, strictly before today) with no hours — the same rule `preflightLodgeMonth` uses for `zero_hour_weekdays`.
+- [ ] Bounded below by: the person's `startDate`, the end of the most recent `approved` / `invoiced` period (nothing there can be filled in anyway — TASK-523), and a hard lookback cap.
+- [ ] Used only when no `?week=` is given and the view is `week`; an explicit week always wins, so Prev/Next and every link in the app still land where they say.
+- [ ] Applies to the person being viewed, so a manager on the person-picker sees their backlog too.
+- [ ] A banner when the landed week is not the current one, saying why, with a link to this week. Landing silently two weeks back would read as a bug.
+- [ ] Tests: the week-needs-input rule (fully logged, partly logged, weekend-only gap, today and future days ignored), each lower bound, and the fallback to the current week when nothing is outstanding.
+- [ ] Commit: `feat(TASK-524): open the timesheet on the earliest week needing input`
+
 ---
 
 *End of TASKS.md. Start with TASK-001.*
