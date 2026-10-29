@@ -137,6 +137,7 @@ export async function updateExpense(
     {
       personId: session.person.id,
       isAdmin: hasCapability(session, 'expense.edit.any'),
+      isSuperAdmin: hasCapability(session, 'expense.override.locked'),
     },
     { mutation: 'edit', overrideReason: data.reason },
   );
@@ -297,7 +298,12 @@ export async function updateExpense(
             approvedById: gate.reopensApproval ? null : expense.approvedById,
             via: 'expense_edit',
             mode: gate.mode,
-            ...(gate.mode === 'admin_override' ? { override_reason: data.reason } : {}),
+            ...(gate.mode === 'owner' ? {} : { override_reason: data.reason }),
+            // The bill still says what it said. Recorded explicitly so
+            // the AP side can be brought back into line.
+            ...(expense.contractorBillId
+              ? { override_contractor_bill: expense.contractorBillId }
+              : {}),
             ...(gate.reopensApproval ? { approval_reopened: true } : {}),
             // Flagged, not blocked: the cost may already sit on a client
             // invoice, which the amended figure no longer matches.
@@ -364,6 +370,7 @@ export async function deleteExpense(
     {
       personId: session.person.id,
       isAdmin: hasCapability(session, 'expense.delete.any'),
+      isSuperAdmin: hasCapability(session, 'expense.override.locked'),
     },
     { mutation: 'delete', overrideReason: parsed.data.reason },
   );
@@ -386,9 +393,11 @@ export async function deleteExpense(
           decidedById: session.person.id,
           decidedAt: new Date(),
           decisionNote:
-            gate.mode === 'admin_override'
-              ? `Expense deleted by admin: ${parsed.data.reason}`
-              : 'Expense withdrawn by the submitter',
+            gate.mode === 'owner'
+              ? 'Expense withdrawn by the submitter'
+              : `Expense deleted by ${
+                  gate.mode === 'super_admin_override' ? 'super admin' : 'admin'
+                }: ${parsed.data.reason}`,
         },
       });
       await tx.expense.delete({ where: { id: expenseId } });
@@ -412,6 +421,15 @@ export async function deleteExpense(
             rebilledOnInvoiceId: expense.rebilledOnInvoiceId,
             status: expense.status,
             approvedById: expense.approvedById,
+            contractorBillId: expense.contractorBillId,
+            // Why it went, recorded on the before-image: `after` has to
+            // stay null or computeDelta reads this as an edit rather than
+            // a deletion.
+            deleted_mode: gate.mode,
+            ...(gate.mode === 'owner' ? {} : { override_reason: parsed.data.reason }),
+            ...(expense.contractorBillId
+              ? { override_contractor_bill: expense.contractorBillId }
+              : {}),
           },
           after: null,
         },

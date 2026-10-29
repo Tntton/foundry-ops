@@ -142,7 +142,7 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('expenseMutationGate — the submitter, pre-approval', () => {
-  const owner = { personId: OWNER, isAdmin: false };
+  const owner = { personId: OWNER, isAdmin: false, isSuperAdmin: false };
 
   for (const status of ['draft', 'submitted'] as const) {
     it(`lets the submitter edit their own ${status} expense with no reason`, () => {
@@ -162,8 +162,8 @@ describe('expenseMutationGate — the submitter, pre-approval', () => {
 });
 
 describe('expenseMutationGate — approved and beyond', () => {
-  const owner = { personId: OWNER, isAdmin: false };
-  const admin = { personId: ADMIN, isAdmin: true };
+  const owner = { personId: OWNER, isAdmin: false, isSuperAdmin: false };
+  const admin = { personId: ADMIN, isAdmin: true, isSuperAdmin: false };
 
   for (const status of ['approved', 'rejected', 'reimbursed', 'batched_for_payment'] as const) {
     it(`refuses the submitter once ${status}`, () => {
@@ -229,7 +229,7 @@ describe('expenseMutationGate — approved and beyond', () => {
 
 describe('expenseMutationGate — somebody else’s expense', () => {
   it('refuses a non-admin outright, even pre-approval', () => {
-    const verdict = expenseMutationGate(expenseRow() as never, { personId: OTHER, isAdmin: false }, {
+    const verdict = expenseMutationGate(expenseRow() as never, { personId: OTHER, isAdmin: false, isSuperAdmin: false }, {
       mutation: 'delete',
     });
     expect(verdict.allowed).toBe(false);
@@ -237,7 +237,7 @@ describe('expenseMutationGate — somebody else’s expense', () => {
   });
 
   it("treats an admin touching someone else's draft as an override needing a reason", () => {
-    const admin = { personId: ADMIN, isAdmin: true };
+    const admin = { personId: ADMIN, isAdmin: true, isSuperAdmin: false };
     const bare = expenseMutationGate(expenseRow({ status: 'draft' }) as never, admin, {
       mutation: 'edit',
     });
@@ -259,8 +259,8 @@ describe('expenseMutationGate — somebody else’s expense', () => {
 
 describe('expenseMutationGate — the contractor-bill stop', () => {
   const cases = [
-    ['the submitter', { personId: OWNER, isAdmin: false }],
-    ['an admin', { personId: ADMIN, isAdmin: true }],
+    ['the submitter', { personId: OWNER, isAdmin: false, isSuperAdmin: false }],
+    ['an admin', { personId: ADMIN, isAdmin: true, isSuperAdmin: false }],
   ] as const;
 
   for (const [who, viewer] of cases) {
@@ -283,10 +283,66 @@ describe('expenseMutationGate — the contractor-bill stop', () => {
   it('holds even in draft — the FK outranks the status', () => {
     const verdict = expenseMutationGate(
       expenseRow({ status: 'draft', contractorBillId: 'bill-9' }) as never,
-      { personId: OWNER, isAdmin: false },
+      { personId: OWNER, isAdmin: false, isSuperAdmin: false },
       { mutation: 'edit' },
     );
     expect(verdict.allowed).toBe(false);
+  });
+
+  it('tells the refused where the override lives', () => {
+    const verdict = expenseMutationGate(
+      expenseRow({ contractorBillId: 'bill-9' }) as never,
+      { personId: ADMIN, isAdmin: true, isSuperAdmin: false },
+      { mutation: 'edit', overrideReason: 'I insist' },
+    );
+    expect(verdict.allowed).toBe(false);
+    if (!verdict.allowed) expect(verdict.message).toMatch(/Super Admin/i);
+  });
+});
+
+describe('expenseMutationGate — the Super Admin override (TT, 2026-10-30)', () => {
+  // "There always needs to be a super admin override." The contractor-bill
+  // lock stops everyone else; it does not stop a super_admin.
+  const superAdmin = { personId: ADMIN, isAdmin: true, isSuperAdmin: true };
+
+  for (const mutation of ['edit', 'delete'] as const) {
+    it(`lets a super_admin ${mutation} past the contractor-bill lock`, () => {
+      const verdict = expenseMutationGate(
+        expenseRow({ status: 'approved', contractorBillId: 'bill-9' }) as never,
+        superAdmin,
+        { mutation, overrideReason: 'Contractor invoiced the wrong trip; bill being reissued' },
+      );
+      expect(verdict.allowed).toBe(true);
+      if (verdict.allowed) expect(verdict.mode).toBe('super_admin_override');
+    });
+  }
+
+  it('still demands a reason — the override is loud, not silent', () => {
+    const verdict = expenseMutationGate(
+      expenseRow({ contractorBillId: 'bill-9' }) as never,
+      superAdmin,
+      { mutation: 'edit' },
+    );
+    expect(verdict.allowed).toBe(false);
+    if (!verdict.allowed) expect(verdict.code).toBe('needs_reason');
+  });
+
+  it('re-opens the approval when the row was already decided', () => {
+    const verdict = expenseMutationGate(
+      expenseRow({ status: 'approved', contractorBillId: 'bill-9' }) as never,
+      superAdmin,
+      { mutation: 'edit', overrideReason: 'Reissuing the bill' },
+    );
+    expect(verdict.allowed && verdict.reopensApproval).toBe(true);
+  });
+
+  it('leaves a still-pending approval alone — there is no decision to re-seek', () => {
+    const verdict = expenseMutationGate(
+      expenseRow({ status: 'submitted', contractorBillId: 'bill-9' }) as never,
+      superAdmin,
+      { mutation: 'edit', overrideReason: 'Reissuing the bill' },
+    );
+    expect(verdict.allowed && verdict.reopensApproval).toBe(false);
   });
 });
 
@@ -380,7 +436,7 @@ describe('updateExpense — refusals', () => {
     );
 
     expect(result.status).toBe('error');
-    if (result.status === 'error') expect(result.message).toMatch(/amend the bill/i);
+    if (result.status === 'error') expect(result.message).toMatch(/not even by an admin/i);
     expect(db.expense.update).not.toHaveBeenCalled();
   });
 
@@ -548,8 +604,8 @@ describe('deleteExpense', () => {
     expect(db.expense.delete).not.toHaveBeenCalled();
   });
 
-  it('refuses everyone once the cost is on a contractor bill', async () => {
-    sessionMod.getSession.mockResolvedValue(sessionFor(ADMIN, ['super_admin']));
+  it('refuses an admin once the cost is on a contractor bill', async () => {
+    sessionMod.getSession.mockResolvedValue(sessionFor(ADMIN, ['admin']));
     db.expense.findUnique.mockResolvedValue(expenseRow({ contractorBillId: 'bill-9' }));
 
     const result = await deleteExpense(
@@ -560,6 +616,27 @@ describe('deleteExpense', () => {
 
     expect(result.status).toBe('error');
     expect(db.expense.delete).not.toHaveBeenCalled();
+  });
+
+  it('lets a super_admin through it, and records which lock was broken', async () => {
+    sessionMod.getSession.mockResolvedValue(sessionFor(ADMIN, ['super_admin']));
+    db.expense.findUnique.mockResolvedValue(expenseRow({ contractorBillId: 'bill-9' }));
+
+    const result = await deleteExpense(
+      'exp1',
+      { status: 'idle' },
+      deleteForm({ reason: 'Contractor reissuing the invoice without this line' }),
+    );
+
+    expect(result.status).toBe('deleted');
+    const input = vi.mocked(audit.writeAudit).mock.calls[0]![1];
+    // `after` stays null so the delta still reads as a deletion.
+    expect(input.entity.after).toBeNull();
+    expect(input.entity.before).toMatchObject({
+      deleted_mode: 'super_admin_override',
+      override_contractor_bill: 'bill-9',
+      override_reason: 'Contractor reissuing the invoice without this line',
+    });
   });
 
   it('records the admin’s reason when one deletes on someone else’s behalf', async () => {

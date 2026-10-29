@@ -28,6 +28,13 @@ export type Capability =
   // owning it, not from a capability.
   | 'expense.edit.any'
   | 'expense.delete.any'
+  // The last resort (TT, 2026-10-30: "there always needs to be a super
+  // admin override"). Reaches past the contractor-bill lock — the one
+  // state where even an admin is refused, because the cost is already a
+  // line on an invoice in the AP queue or paid. Super_admin only, reason
+  // mandatory, and the audit records that the bill and the expense now
+  // disagree so the bill can be corrected to match.
+  | 'expense.override.locked'
   | 'bill.approve'
   | 'bill.create'
   | 'bill.delete_draft'
@@ -107,6 +114,7 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   // powers, and only the admin tier audits PII-grade financial records.
   'expense.edit.any': ['super_admin', 'admin'],
   'expense.delete.any': ['super_admin', 'admin'],
+  'expense.override.locked': ['super_admin'],
 
   // Bills (AP) — bill approval still super_admin only; bill creation
   // opened to AP since they manage projects that incur vendor bills.

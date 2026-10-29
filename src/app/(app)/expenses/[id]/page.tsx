@@ -82,6 +82,7 @@ export default async function ExpenseDetailPage({
     (expense.status === 'draft' || expense.status === 'submitted') &&
     expense.contractorBillId === null;
 
+
   // TASK-516 — ask the gate, in "edit" mode, with a placeholder reason so
   // the answer reflects WHO may act rather than whether they've typed a
   // reason yet. The action re-runs the gate for real on submit; this only
@@ -89,12 +90,17 @@ export default async function ExpenseDetailPage({
   const canEdit = hasCapability(session, 'expense.edit.any');
   const editGate = expenseMutationGate(
     expense,
-    { personId: session.person.id, isAdmin: canEdit },
+    {
+      personId: session.person.id,
+      isAdmin: canEdit,
+      // TT, 2026-10-30: there always needs to be a Super Admin override.
+      isSuperAdmin: hasCapability(session, 'expense.override.locked'),
+    },
     { mutation: 'edit', overrideReason: 'probe' },
   );
   // The reason box is mandatory whenever the viewer is reaching past
   // their own pre-approval window.
-  const overrideMode = editGate.allowed && editGate.mode === 'admin_override';
+  const overrideMode = editGate.allowed && editGate.mode !== 'owner';
   // FH-* internal projects (FHB / FHP / FHO / FHX prefixes) are always
   // visible regardless of stage so late re-allocation works on any
   // closed internal bucket too (TT 2026-06-16). Client engagements
@@ -170,6 +176,9 @@ export default async function ExpenseDetailPage({
           status={expense.status}
           overrideMode={overrideMode}
           rebilledOnInvoice={expense.rebilledOnInvoiceId !== null}
+          breaksContractorBillLock={
+            editGate.allowed && editGate.mode === 'super_admin_override'
+          }
           projectOptions={projectOptions}
           initial={{
             dateIso: expense.date.toISOString().slice(0, 10),

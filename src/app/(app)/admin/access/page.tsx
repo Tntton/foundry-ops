@@ -110,6 +110,7 @@ function labelForCapability(cap: Capability): string {
     'expense.approve.under_2k': 'Approve expenses up to $2k',
     'expense.edit.any': "Edit anyone's expense, incl. after approval",
     'expense.delete.any': "Delete anyone's expense, incl. after approval",
+    'expense.override.locked': 'Override the contractor-bill lock on an expense',
     'partner.scorecard.view': 'View partner scorecard',
     'integration.manage': 'Manage integrations',
     'auditlog.view': 'View audit log',

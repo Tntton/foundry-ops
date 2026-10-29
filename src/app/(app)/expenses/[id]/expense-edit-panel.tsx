@@ -27,6 +27,9 @@ export type ExpenseEditPanelProps = {
   overrideMode: boolean;
   /** True when a client invoice already carries this cost. */
   rebilledOnInvoice: boolean;
+  /** True when the viewer is a Super Admin reaching past the
+   *  contractor-bill lock that stops everyone else. */
+  breaksContractorBillLock: boolean;
 };
 
 const SELECT_CLASS =
@@ -47,6 +50,7 @@ export function ExpenseEditPanel({
   status,
   overrideMode,
   rebilledOnInvoice,
+  breaksContractorBillLock,
 }: ExpenseEditPanelProps) {
   const router = useRouter();
   const isDraft = status === 'draft';
@@ -128,6 +132,15 @@ export function ExpenseEditPanel({
           )}
         </p>
       </div>
+
+      {breaksContractorBillLock && (
+        <p className="rounded-md border border-status-red bg-status-red-soft/40 p-2 text-[11px] text-ink-2">
+          <span className="font-semibold">Super Admin override.</span> This cost
+          is already a line on a contractor&apos;s invoice. Changing or deleting
+          it here will leave the bill and the expense disagreeing until the bill
+          is corrected to match — the reason you give is recorded against both.
+        </p>
+      )}
 
       {rebilledOnInvoice && (
         <p className="rounded-md border border-status-amber bg-status-amber-soft/40 p-2 text-[11px] text-ink-2">

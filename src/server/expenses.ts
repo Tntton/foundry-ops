@@ -141,6 +141,9 @@ export type ExpenseMutationViewer = {
   personId: string;
   /** Holds `expense.edit.any` / `expense.delete.any` — admin + super_admin. */
   isAdmin: boolean;
+  /** Holds `expense.override.locked` — super_admin only. The last resort
+   *  past the contractor-bill lock (TT, 2026-10-30). */
+  isSuperAdmin: boolean;
 };
 
 export type ExpenseGateRefusal =
@@ -157,8 +160,11 @@ export type ExpenseGateVerdict =
   | {
       allowed: true;
       /** 'owner' = the submitter fixing their own pre-approval row.
-       *  'admin_override' = an admin reaching past that, reason recorded. */
-      mode: 'owner' | 'admin_override';
+       *  'admin_override' = an admin reaching past that, reason recorded.
+       *  'super_admin_override' = super_admin past the contractor-bill
+       *  lock, which stops everyone else. Loudest of the three: the bill
+       *  and the expense will disagree until the bill is corrected. */
+      mode: 'owner' | 'admin_override' | 'super_admin_override';
       /** True when the mutation amends a figure that was already signed
        *  off, so the approval has to be re-opened rather than quietly
        *  amended. Edits only — a delete cancels the approval instead. */
@@ -203,21 +209,36 @@ export function expenseMutationGate(
   opts: { mutation: ExpenseMutation; overrideReason?: string | null },
 ): ExpenseGateVerdict {
   const verb = opts.mutation === 'delete' ? 'Deleting' : 'Editing';
-
-  // 1. Consumed by a contractor bill — nobody, no override.
-  if (expense.contractorBillId !== null) {
-    return {
-      allowed: false,
-      code: 'contractor_bill',
-      message: `This expense is already on a contractor invoice, so it can't be ${
-        opts.mutation === 'delete' ? 'deleted' : 'edited'
-      } here. Amend the bill instead — changing the line underneath would leave the two disagreeing.`,
-    };
-  }
-
   const isOwner = expense.personId === viewer.personId;
   const ownerMutable = OWNER_MUTABLE_STATUSES.includes(expense.status);
   const reason = opts.overrideReason?.trim() ?? '';
+
+  // 1. Consumed by a contractor bill — super_admin only, and loudly.
+  if (expense.contractorBillId !== null) {
+    if (!viewer.isSuperAdmin) {
+      return {
+        allowed: false,
+        code: 'contractor_bill',
+        message: `This expense is already on a contractor invoice, so it can't be ${
+          opts.mutation === 'delete' ? 'deleted' : 'edited'
+        } here — not even by an admin. Amend the bill instead, or ask a Super Admin to override.`,
+      };
+    }
+    if (reason === '') {
+      return {
+        allowed: false,
+        code: 'needs_reason',
+        message: `Give a reason — this cost is on a contractor invoice, and changing it here will leave the bill and the expense disagreeing until the bill is corrected too.`,
+      };
+    }
+    return {
+      allowed: true,
+      mode: 'super_admin_override',
+      // Re-open only if there was a decision to re-open. A still-pending
+      // row keeps its approval; a decided one has to be re-sought.
+      reopensApproval: opts.mutation === 'edit' && !ownerMutable,
+    };
+  }
 
   // 2. Pre-approval: the submitter's own to fix.
   if (ownerMutable) {
