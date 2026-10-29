@@ -1,6 +1,7 @@
 'use client';
 
 import { useFormState, useFormStatus } from 'react-dom';
+import type { TimesheetView } from './page';
 import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { saveTimesheet, recallSubmittedTimesheet, type TimesheetSaveState } from './actions';
@@ -10,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { countLockedCells, isCellEditable } from '@/lib/timesheet-lock';
 import { formatDayLabel } from '@/lib/week';
 
 type ProjectOption = {
@@ -36,7 +38,7 @@ export function TimesheetGrid({
   initialRows: TimesheetRow[];
   cells: Date[];
   allProjects: ProjectOption[];
-  view: 'week' | 'month';
+  view: TimesheetView;
   targetPersonId: string;
   actingOnBehalf: boolean;
   isSuperAdmin: boolean;
@@ -72,6 +74,16 @@ export function TimesheetGrid({
   //   - there's at least one submitted entry visible
   const canShowPromote =
     actingOnBehalf && submittedRowCount > 0;
+
+  // How much of what's on screen can no longer be edited here. Drives the
+  // legend below the grid — a lock symbol with no explanation is just a
+  // mystery, and this is the view people land on when checking back over
+  // weeks that have already been signed off.
+  const lockedCellCount = rows.reduce(
+    (n, r) => n + countLockedCells(r.cells, isSuperAdmin),
+    0,
+  );
+  const hasBilledCells = rows.some((r) => r.cells.some((c) => c.billed));
 
   const dailyTotals = cells.map((_, i) =>
     rows.reduce((sum, r) => sum + (r.cells[i]?.hours ?? 0), 0),
@@ -120,7 +132,12 @@ export function TimesheetGrid({
         projectStage: p.stage,
         description: '',
         status: 'draft',
-        cells: cells.map((date) => ({ date, hours: 0 })),
+        cells: cells.map((date) => ({
+          date,
+          hours: 0,
+          status: null,
+          billed: false,
+        })),
       },
     ]);
   }
@@ -151,6 +168,8 @@ export function TimesheetGrid({
             cells: cells.map((date, i) => ({
               date,
               hours: lw.cells[i]?.hours ?? 0,
+              status: null,
+              billed: false,
             })),
           });
         } else {
@@ -158,7 +177,9 @@ export function TimesheetGrid({
           next[idx] = {
             ...r,
             cells: r.cells.map((c, i) =>
-              c.hours === 0 ? { ...c, hours: lw.cells[i]?.hours ?? 0 } : c,
+              c.hours === 0 && cellEditable(c, isSuperAdmin)
+                ? { ...c, hours: lw.cells[i]?.hours ?? 0 }
+                : c,
             ),
           };
         }
@@ -272,15 +293,25 @@ export function TimesheetGrid({
             ) : (
               rows.map((r) => {
                 const total = r.cells.reduce((s, c) => s + c.hours, 0);
-                const isLocked =
-                  r.status === 'approved' || r.status === 'billed';
-                // Billed entries are always read-only here (need an invoice
-                // void first). Approved entries can be edited by super_admin
-                // overriders.
-                const editable =
-                  r.status === 'billed'
-                    ? false
-                    : !isLocked || isSuperAdmin;
+                // Editability is decided per DAY, not per row. A row that
+                // straddles an approval boundary ("mixed") used to be
+                // editable end to end, so an approved day rendered as an open
+                // input and quietly dropped whatever was typed — the save
+                // action has always refused to rewrite an approved entry.
+                // Reviewing an earlier week is precisely when that happens.
+                const editableCells = r.cells.map((c) =>
+                  cellEditable(c, isSuperAdmin),
+                );
+                const lockedCells = r.cells.filter(
+                  (c, i) => c.hours > 0 && !editableCells[i],
+                );
+                const hasBilledCell = r.cells.some((c) => c.billed);
+                // The row is editable if ANY day in it still is — that is
+                // what gates the description field and the Remove button.
+                const editable = editableCells.some(Boolean);
+                const hasSubmittedCell = r.cells.some(
+                  (c) => c.status === 'submitted',
+                );
                 return (
                   <tr key={r.projectId} className="border-b border-line last:border-b-0">
                     <td className="sticky left-0 z-10 bg-card px-3 py-2">
@@ -293,14 +324,33 @@ export function TimesheetGrid({
                             {r.projectName}
                           </span>
                           <StatusBadge status={r.status} />
-                          {isLocked && editable && (
-                            <Badge
-                              variant="outline"
-                              className="text-[10px] uppercase tracking-wide"
+                          {lockedCells.length > 0 && (
+                            <span
+                              title={
+                                hasBilledCell
+                                  ? 'Some days are on an invoice or a contractor bill. Void the document to change them.'
+                                  : 'Some days are already approved. Ask an approver to send them back if they need changing.'
+                              }
+                              className="inline-flex items-center gap-1 rounded-full border border-line bg-surface-subtle px-1.5 py-0.5 text-[10px] text-ink-3"
                             >
-                              SU edit
-                            </Badge>
+                              <LockIcon />
+                              {lockedCells.length} locked
+                            </span>
                           )}
+                          {isSuperAdmin &&
+                            r.cells.some(
+                              (c, i) =>
+                                editableCells[i] &&
+                                (c.status === 'approved' ||
+                                  c.status === 'billed'),
+                            ) && (
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] uppercase tracking-wide"
+                              >
+                                SU edit
+                              </Badge>
+                            )}
                         </div>
                         <span className="mt-0.5 text-[11px] capitalize text-ink-3">
                           {r.projectStage}
@@ -316,50 +366,84 @@ export function TimesheetGrid({
                         />
                       </div>
                     </td>
-                    {r.cells.map((c, i) => (
-                      <td
-                        key={i}
-                        className={cn(
-                          'px-0.5 py-2',
-                          weekBoundaries.has(i) && 'border-l border-line',
-                          (c.date.getUTCDay() === 0 || c.date.getUTCDay() === 6) &&
-                            'bg-[repeating-linear-gradient(135deg,_var(--surface-subtle)_0px,_var(--surface-subtle)_4px,_transparent_4px,_transparent_8px)]',
-                        )}
-                      >
-                        <input
-                          name={`hours::${r.projectId}::${i}`}
-                          type="number"
-                          min="0"
-                          max="24"
-                          step="0.5"
-                          inputMode="decimal"
-                          value={
-                            rawCell[`${r.projectId}::${i}`] ??
-                            (c.hours === 0 ? '' : String(c.hours))
-                          }
-                          onChange={(e) => {
-                            setRawCell((prev) => ({
-                              ...prev,
-                              [`${r.projectId}::${i}`]: e.target.value,
-                            }));
-                            setHours(r.projectId, i, parseFloat(e.target.value || '0'));
-                          }}
-                          onBlur={() =>
-                            setRawCell((prev) => {
-                              const next = { ...prev };
-                              delete next[`${r.projectId}::${i}`];
-                              return next;
-                            })
-                          }
-                          disabled={!editable}
-                          placeholder="0"
+                    {r.cells.map((c, i) => {
+                      const cellOpen = editableCells[i] ?? true;
+                      const cellLocked =
+                        !cellOpen &&
+                        (c.status === 'approved' || c.status === 'billed');
+                      return (
+                        <td
+                          key={i}
                           className={cn(
-                            'h-8 w-full rounded-md border border-line bg-surface-elev px-1 text-center text-sm tabular-nums text-ink focus:outline-none focus:ring-1 focus:ring-ring',
-                            !editable && 'bg-surface-subtle',
+                            'px-0.5 py-2',
+                            weekBoundaries.has(i) && 'border-l border-line',
+                            (c.date.getUTCDay() === 0 || c.date.getUTCDay() === 6) &&
+                              'bg-[repeating-linear-gradient(135deg,_var(--surface-subtle)_0px,_var(--surface-subtle)_4px,_transparent_4px,_transparent_8px)]',
                           )}
-                        />
-                      </td>
-                    ))}
+                        >
+                          {/* A locked day renders as text, not a disabled
+                              input. A greyed-out box still reads as "you
+                              could type here", and the number is the thing
+                              worth seeing when you come back to check an
+                              earlier week. The hidden field keeps the value
+                              in the payload so the row shape is unchanged —
+                              the server ignores it either way. */}
+                          {cellLocked ? (
+                            <div
+                              title={cellLockReason(c)}
+                              className="flex h-8 w-full items-center justify-center gap-0.5 rounded-md border border-dashed border-line bg-surface-subtle px-1 text-sm tabular-nums text-ink-2"
+                            >
+                              {c.hours > 0 ? (
+                                <>
+                                  <LockIcon />
+                                  <span>{c.hours}</span>
+                                </>
+                              ) : (
+                                <span className="text-ink-4">—</span>
+                              )}
+                              <input
+                                type="hidden"
+                                name={`hours::${r.projectId}::${i}`}
+                                value={c.hours}
+                              />
+                            </div>
+                          ) : (
+                            <input
+                              name={`hours::${r.projectId}::${i}`}
+                              type="number"
+                              min="0"
+                              max="24"
+                              step="0.5"
+                              inputMode="decimal"
+                              value={
+                                rawCell[`${r.projectId}::${i}`] ??
+                                (c.hours === 0 ? '' : String(c.hours))
+                              }
+                              onChange={(e) => {
+                                setRawCell((prev) => ({
+                                  ...prev,
+                                  [`${r.projectId}::${i}`]: e.target.value,
+                                }));
+                                setHours(r.projectId, i, parseFloat(e.target.value || '0'));
+                              }}
+                              onBlur={() =>
+                                setRawCell((prev) => {
+                                  const next = { ...prev };
+                                  delete next[`${r.projectId}::${i}`];
+                                  return next;
+                                })
+                              }
+                              disabled={!cellOpen}
+                              placeholder="0"
+                              className={cn(
+                                'h-8 w-full rounded-md border border-line bg-surface-elev px-1 text-center text-sm tabular-nums text-ink focus:outline-none focus:ring-1 focus:ring-ring',
+                                !cellOpen && 'bg-surface-subtle',
+                              )}
+                            />
+                          )}
+                        </td>
+                      );
+                    })}
                     <td className="px-3 py-2 text-right font-semibold tabular-nums text-ink">
                       {total.toFixed(1)}h
                     </td>
@@ -372,7 +456,11 @@ export function TimesheetGrid({
                     )}
                     <td className="px-2 py-2 text-right">
                       <div className="flex flex-col items-end gap-1">
-                        {r.status === 'submitted' && editable && (
+                        {/* Recall works on any submitted day in the range,
+                            so a mixed row (part approved, part submitted)
+                            gets the button too — previously only an
+                            all-submitted row did. */}
+                        {hasSubmittedCell && editable && (
                           <RecallRowButton
                             targetPersonId={targetPersonId}
                             projectId={r.projectId}
@@ -380,7 +468,12 @@ export function TimesheetGrid({
                             dayCount={dayCount}
                           />
                         )}
-                        {editable && (
+                        {/* Remove only drops the row from the sheet in the
+                            browser; locked days would survive the save and
+                            reappear on refresh. Offering it on a row that
+                            holds approved hours promises a deletion that
+                            cannot happen. */}
+                        {editable && lockedCells.length === 0 && (
                           <button
                             type="button"
                             onClick={() => removeRow(r.projectId)}
@@ -453,9 +546,20 @@ export function TimesheetGrid({
         {/* Truthful save-model hint — hours live in the browser until
             Save/Submit is clicked. (Previous chips advertised autosave
             + Excel paste that were never implemented.) */}
-        <span className="text-[11px] text-ink-3">
-          Changes save when you click Save draft or Submit.
-        </span>
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-[11px] text-ink-3">
+          {lockedCellCount > 0 && (
+            <span className="inline-flex items-center gap-1">
+              <LockIcon />
+              {lockedCellCount} day{lockedCellCount === 1 ? '' : 's'} locked —{' '}
+              {isSuperAdmin
+                ? 'on an invoice or a contractor bill. Void the document to change them.'
+                : hasBilledCells
+                  ? 'already approved, and some are on an invoice or a contractor bill.'
+                  : 'already approved. Ask an approver to send them back to change them.'}
+            </span>
+          )}
+          <span>Changes save when you click Save draft or Submit.</span>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -479,9 +583,9 @@ export function TimesheetGrid({
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-ink-3">
-            {view === 'month'
-              ? 'Submit marks all editable rows as submitted for the whole block.'
-              : 'Submit marks this week for approval.'}
+            {view === 'week'
+              ? 'Submit marks this week for approval.'
+              : `Submit marks every editable row in the ${view} as submitted.`}
           </span>
           <SaveButton intent="save" label="Save draft" variant="outline" />
           <SaveButton intent="submit" label="Submit for approval" variant="default" />
@@ -509,12 +613,18 @@ function AddRowPicker({
       }),
     [projects],
   );
-  // "On the project team" group is active-only; archived projects route
-  // to the dedicated "Closed projects (needs approval)" group below
-  // regardless of team membership, so the approval-required label is
-  // never hidden behind the "your team" shorthand.
+  // Internal FH projects (FHP series) are the home for non-project /
+  // admin time — surfaced in their own group so it's obvious where to
+  // book it (FHP000 is the catch-all; reallocate to a real project later
+  // by editing the draft entry). feedback #12.
+  const isInternal = (p: ProjectOption) => p.code.startsWith('FHP');
+  // "On the project team" group is active-only + excludes internal;
+  // archived projects route to the dedicated "Closed projects (needs
+  // approval)" group below regardless of team membership, so the
+  // approval-required label is never hidden behind the "your team"
+  // shorthand.
   const onTeamCount = projects.filter(
-    (p) => p.isTeamMember && p.stage !== 'archived',
+    (p) => p.isTeamMember && p.stage !== 'archived' && !isInternal(p),
   ).length;
 
   return (
@@ -529,7 +639,10 @@ function AddRowPicker({
           {onTeamCount > 0 && (
             <optgroup label="On the project team">
               {sorted
-                .filter((p) => p.isTeamMember && p.stage !== 'archived')
+                .filter(
+                  (p) =>
+                    p.isTeamMember && p.stage !== 'archived' && !isInternal(p),
+                )
                 .map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.code} · {p.name}
@@ -537,10 +650,26 @@ function AddRowPicker({
                 ))}
             </optgroup>
           )}
-          {sorted.some((p) => !p.isTeamMember && p.stage !== 'archived') && (
+          {sorted.some((p) => isInternal(p) && p.stage !== 'archived') && (
+            <optgroup label="Internal / non-project">
+              {sorted
+                .filter((p) => isInternal(p) && p.stage !== 'archived')
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.code} · {p.name}
+                  </option>
+                ))}
+            </optgroup>
+          )}
+          {sorted.some(
+            (p) => !p.isTeamMember && p.stage !== 'archived' && !isInternal(p),
+          ) && (
             <optgroup label="Other active projects (will auto-join the team)">
               {sorted
-                .filter((p) => !p.isTeamMember && p.stage !== 'archived')
+                .filter(
+                  (p) =>
+                    !p.isTeamMember && p.stage !== 'archived' && !isInternal(p),
+                )
                 .map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.code} · {p.name}
@@ -606,6 +735,42 @@ function SaveButton({
     >
       {pending ? '…' : label}
     </Button>
+  );
+}
+
+type GridCell = TimesheetRow['cells'][number];
+
+/** See `@/lib/timesheet-lock` — the rule is shared with the server guard. */
+const cellEditable = (c: GridCell, isSuperAdmin: boolean) =>
+  isCellEditable(c, isSuperAdmin);
+
+function cellLockReason(c: GridCell): string {
+  const day = c.date.toLocaleDateString('en-AU', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  });
+  if (c.billed) {
+    return `${day} — billed. These hours are on an invoice or a contractor bill; void the document to change them.`;
+  }
+  return `${day} — approved and locked. Ask an approver to send them back if they need changing.`;
+}
+
+function LockIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="h-3 w-3 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="4" y="11" width="16" height="9" rx="2" />
+      <path d="M8 11V7a4 4 0 1 1 8 0v4" />
+    </svg>
   );
 }
 

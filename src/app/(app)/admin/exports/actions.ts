@@ -7,6 +7,7 @@ import { prisma } from '@/server/db';
 import { writeAudit } from '@/server/audit';
 import { generateDataExport } from '@/server/exports/data-export';
 import { uploadDataExportToSharePoint } from '@/server/exports/sharepoint-backup';
+import { runAllReportWorkbookBackups } from '@/server/exports/report-workbooks';
 
 export type RunExportState =
   | { status: 'idle' }
@@ -123,6 +124,55 @@ export async function runDataExportNowAction(
     return {
       status: 'error',
       message: (err as Error).message ?? 'Export failed — see server logs.',
+    };
+  }
+}
+
+export type RunWorkbooksState =
+  | { status: 'idle' }
+  | { status: 'error'; message: string }
+  | {
+      status: 'success';
+      results: { name: string; ok: boolean; webUrl: string | null; uploadSkipped: boolean }[];
+    };
+
+/**
+ * Admin-triggered regeneration of the themed reporting workbooks
+ * (Phase 1F — Finance, Timesheet, etc.). Same pipeline as the nightly
+ * cron, fired synchronously. Gated on `integration.manage` to match the
+ * rest of this admin surface.
+ */
+export async function runReportWorkbooksNowAction(
+  _prev: RunWorkbooksState,
+  _formData: FormData,
+): Promise<RunWorkbooksState> {
+  const session = await getSession();
+  try {
+    requireCapability(session, 'integration.manage');
+  } catch {
+    return { status: 'error', message: 'Not authorized' };
+  }
+
+  try {
+    const results = await runAllReportWorkbookBackups({
+      actor: { type: 'person', id: session!.person.id },
+      source: 'web',
+      via: 'manual',
+    });
+    revalidatePath('/admin/exports');
+    return {
+      status: 'success',
+      results: results.map((r) => ({
+        name: r.name,
+        ok: r.ok,
+        webUrl: r.webUrl,
+        uploadSkipped: r.uploadSkipped,
+      })),
+    };
+  } catch (err) {
+    return {
+      status: 'error',
+      message: (err as Error).message ?? 'Workbook regeneration failed.',
     };
   }
 }

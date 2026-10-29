@@ -81,7 +81,12 @@ function bucketForDays(days: number): AgingKey {
  */
 export async function computeFirmReimbursementsAging(): Promise<FirmReimbursementsAging> {
   const expenses = await prisma.expense.findMany({
-    where: { status: { in: OPEN_STATUSES } },
+    // Anything already on a contractor bill has left the reimbursement
+    // float: it is being paid through that contractor's own invoice
+    // instead (TASK-509). Counting it here as well would show Foundry
+    // owing the money twice, and would put it in front of whoever pays
+    // reimbursements a second time.
+    where: { status: { in: OPEN_STATUSES }, contractorBillId: null },
     orderBy: { date: 'asc' },
     include: {
       person: {

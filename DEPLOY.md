@@ -21,6 +21,8 @@ explicitly want it in Preview too).
 | `ENTRA_TENANT_ID`           | From Entra app registration                                      |
 | `ENTRA_CLIENT_ID`           | From Entra app registration                                      |
 | `ENTRA_CLIENT_SECRET`       | Secret **Value** (not Secret ID)                                 |
+| `CALENDAR_ENTRA_CLIENT_ID`  | Optional. Second registration for the Outlook availability sync — see `docs/runbooks/outlook-calendar-sync-setup.md`. Unset = falls back to `ENTRA_CLIENT_ID` |
+| `CALENDAR_ENTRA_CLIENT_SECRET` | Optional. Secret **Value** for the above                      |
 | `RESEND_API_KEY`            | Rotated; paste without the `re_` prefix stripped                 |
 | `EMAIL_FROM`                | `auth@foundry.health` (or verified domain address)               |
 
@@ -59,6 +61,46 @@ explicitly want it in Preview too).
 | `ABA_USER_NAME`        | `FOUNDRY HEALTH PTY LTD` (max 26 chars in ABA spec)         |
 | `ABA_BANK_ABBREV`      | `CBA`                                                       |
 | `ABA_REMITTER_NAME`    | `FOUNDRY HEALTH` (max 16 chars on payee's statement)        |
+
+---
+
+## 1b. Database migrations & first-run bootstrap
+
+Vercel does **not** run migrations. Apply them manually from a machine that
+has the prod **`DIRECT_URL`** (non-pooled) set in its `.env.local`.
+
+1. Check what's pending:
+   ```
+   npx prisma migrate status --schema=prisma/schema.prisma
+   ```
+2. Apply (uses `DIRECT_URL`):
+   ```
+   npx prisma migrate deploy --schema=prisma/schema.prisma
+   ```
+   Re-run `migrate status` → expect "Database schema is up to date".
+   **Repeat this after every deploy that adds a `prisma/migrations/` folder**, or
+   the app throws `P2021` (table does not exist) at runtime.
+
+3. Load the rate card (prod must start with this). The seed loads team + rate
+   card and self-guards in prod:
+   ```
+   FORCE_SEED=1 NODE_ENV=production npx tsx prisma/seed.ts
+   ```
+   Idempotent (skips existing rows). Spec is "prod starts empty except rate
+   card" — if you want rate-card-only, load `prisma/fixtures/rate-card.json`
+   manually instead of running the full seed.
+
+4. First Super Admin:
+   - Sign in once via Entra SSO — auth upserts your `Person` row. ⚠️ Your Entra
+     **UPN must be `@foundry.health`** and a `Person` with that `@foundry.health`
+     email must exist, or the first login creates a blank record. Fix UPN +
+     `Person.email` **before** first login.
+   - Grant yourself `super_admin` once (direct DB update):
+     ```sql
+     UPDATE "Person" SET roles = ARRAY['super_admin']::"Role"[]
+     WHERE email = 'trung@foundry.health';
+     ```
+   - All further role grants happen in-app via the Directory.
 
 ---
 

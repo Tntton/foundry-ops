@@ -23,6 +23,7 @@ export type Capability =
   | 'bill.approve'
   | 'bill.create'
   | 'bill.delete_draft'
+  | 'bill.review'
   | 'payrun.approve'
   | 'payrun.create'
   | 'project.create'
@@ -66,7 +67,15 @@ export type Capability =
   // / contractor agreement / etc). Partner-tier+ because the act of
   // sending creates legal commitment; managers can prepare a doc
   // but the partner needs to send it for signature.
-  | 'docusign.send';
+  | 'docusign.send'
+  // Master ledger (TASK-069) — the firm-wide AR/AP audit ledger and
+  // its Excel/CSV export. `view` gates the in-app reporting tab;
+  // `export` gates the download + SharePoint backup, which is
+  // PII-bearing (payment refs / BSB / account per PayRunLine), so
+  // both stay at the super_admin / admin tier that may read PII
+  // (CLAUDE.md security). Covers Jas (jas.navarro@, super_admin+admin).
+  | 'report.ledger.view'
+  | 'report.ledger.export';
 
 export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   // Invoices — AP gets the same approval + create rights as partner.
@@ -93,6 +102,15 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   // Only pre-approval bills can be deleted. Approved/scheduled/paid bills are
   // either in Xero or attached to a pay-run — void there, not here.
   'bill.delete_draft': ['super_admin', 'admin', 'associate_partner'],
+  // Working the AP intake queue: edit a bill's extracted fields and post
+  // it for approval. Deliberately WIDER than `bill.create` on one side
+  // and narrower on the other — partner reviews bills they can't raise,
+  // associate_partner raises bills and now reviews them too (TT,
+  // 2026-10-23). Before this existed the same role list was hard-coded
+  // in `bills/intake/actions.ts` and again in two page components, and
+  // it had already drifted: an AP could raise a vendor bill and had
+  // nowhere to review it. Read it from here, never re-type the list.
+  'bill.review': ['super_admin', 'admin', 'partner', 'associate_partner'],
 
   // Pay run — unchanged. AP isn't in the pay-run decision chain.
   'payrun.approve': ['super_admin'],
@@ -119,8 +137,10 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   'person.delete': ['super_admin'],
   'client.create': ['super_admin', 'admin', 'partner', 'associate_partner'],
   'client.edit': ['super_admin', 'admin', 'partner', 'associate_partner'],
-  'deal.create': ['super_admin', 'admin', 'partner', 'associate_partner'],
-  'deal.edit': ['super_admin', 'admin', 'partner', 'associate_partner'],
+  // Managers get full BD pipeline edit rights (per TT, 2026-07-20) —
+  // this cascades to every deal server action + the create/move/edit UI.
+  'deal.create': ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'],
+  'deal.edit': ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'],
   // Client hard-delete: super_admin only, and handler refuses if the client has
   // any projects / deals / invoices attached. No soft-archive yet — add it with
   // a migration when mid-engagement "close" becomes a need.
@@ -170,12 +190,128 @@ export const CAPABILITY_ROLES: Record<Capability, readonly Role[]> = {
   // JWT key rotation) stays gated on `integration.manage` which
   // is super_admin only.
   'docusign.send': ['super_admin', 'admin', 'partner', 'associate_partner'],
+
+  // Master ledger — firm-wide financial audit surface + PII-bearing
+  // export. Both at the super_admin / admin tier (the roles cleared to
+  // read PII); partners are deliberately excluded here even though they
+  // see P&L / AR, because the export carries bank payment refs.
+  'report.ledger.view': ['super_admin', 'admin'],
+  'report.ledger.export': ['super_admin', 'admin'],
 };
 
 export function hasCapability(session: Session | null, capability: Capability): boolean {
   if (!session) return false;
   const allowed = CAPABILITY_ROLES[capability];
   return allowed.some((r) => session.person.roles.includes(r));
+}
+
+/** The full set of capabilities a role-set grants. */
+export function capabilitiesForRoles(roles: readonly Role[]): Set<Capability> {
+  const out = new Set<Capability>();
+  for (const cap of Object.keys(CAPABILITY_ROLES) as Capability[]) {
+    if (CAPABILITY_ROLES[cap].some((r) => roles.includes(r))) out.add(cap);
+  }
+  return out;
+}
+
+/** True iff every capability granted by `candidate` is also granted by
+ *  `base` — i.e. overlaying `candidate` can never grant a capability the
+ *  holder of `base` doesn't already have. */
+export function isCapabilitySubset(
+  candidate: readonly Role[],
+  base: readonly Role[],
+): boolean {
+  const baseCaps = capabilitiesForRoles(base);
+  for (const cap of capabilitiesForRoles(candidate)) {
+    if (!baseCaps.has(cap)) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether `base` roles may engage a "view as" overlay pretending to be
+ * `candidate` roles. The overlay must be a *strict* downgrade: it grants
+ * a subset of `base`'s capabilities AND strictly fewer (so a no-op
+ * self-overlay isn't offered, and — critically — an Admin can never
+ * overlay super_admin or any lateral role that would grant a capability
+ * they lack). This is the single authority both the session resolver and
+ * the set-overlay action rely on; role hierarchy is never assumed.
+ */
+export function canOverlayAs(
+  candidate: readonly Role[],
+  base: readonly Role[],
+): boolean {
+  if (candidate.length === 0) return false;
+  return (
+    isCapabilitySubset(candidate, base) && !isCapabilitySubset(base, candidate)
+  );
+}
+
+/**
+ * Every role in the system. The source of truth for validating role
+ * strings coming off the wire / out of cookies. MUST stay in sync with
+ * the Prisma `Role` enum — a missing entry silently drops that role from
+ * view-as validation (that omission is why `associate_partner` used to be
+ * unrepresentable in an overlay).
+ */
+export const ALL_ROLES: readonly Role[] = [
+  'super_admin',
+  'admin',
+  'partner',
+  'associate_partner',
+  'manager',
+  'staff',
+];
+
+export function isRole(r: unknown): r is Role {
+  return typeof r === 'string' && (ALL_ROLES as readonly string[]).includes(r);
+}
+
+/** Sorted set-equality over two role arrays (order-insensitive). */
+function sameRoleSet(a: readonly Role[], b: readonly Role[]): boolean {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  return sa.every((r, i) => r === sb[i]);
+}
+
+/**
+ * A view-as overlay, bound to the identity + real-role snapshot it was
+ * created under. The binding is the whole point: an overlay that isn't
+ * anchored to *who set it* and *what their real roles were at the time*
+ * can outlive the grant it was created under and silently keep stripping
+ * a person's real access. That is exactly the bug this guards against —
+ * an admin who previewed `staff`, then had their real roles changed in
+ * the platform, must not stay pinned to staff by a leftover cookie.
+ *
+ *   sub   — Person.id the overlay was set for
+ *   rr    — real roles at set-time (the anchor; invalidated on any change)
+ *   roles — the role-set being previewed
+ */
+export type ViewAsOverlay = { sub: string; rr: Role[]; roles: Role[] };
+
+/**
+ * Decide whether a stored overlay may be applied to the current request.
+ * Pure so it can be unit-tested without cookies/auth/db. All three
+ * conditions must hold:
+ *   1. same person (sub === personId) — a leftover cookie from another
+ *      account never applies;
+ *   2. real roles unchanged since set-time (sameRoleSet) — a grant/revoke
+ *      in the platform discards any stale preview immediately;
+ *   3. strict capability downgrade (canOverlayAs) — the overlay can never
+ *      grant a capability the real person lacks.
+ */
+export function viewAsOverlayApplies(
+  overlay: ViewAsOverlay | null,
+  personId: string,
+  realRoles: readonly Role[],
+): boolean {
+  return (
+    overlay !== null &&
+    overlay.sub === personId &&
+    sameRoleSet(overlay.rr, realRoles) &&
+    canOverlayAs(overlay.roles, realRoles)
+  );
 }
 
 export function requireCapability(

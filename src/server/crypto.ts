@@ -80,3 +80,21 @@ export function last4(s: string): string {
   if (digits.length <= 4) return digits;
   return digits.slice(-4);
 }
+
+/**
+ * Best-effort decrypt for a value that MAY be legacy plaintext — written
+ * before its column was encrypted (e.g. bank details entered via the
+ * self-service form before that path encrypted). `null`/empty pass
+ * through. A decrypt failure is exactly what a raw-plaintext value
+ * produces (the GCM auth tag won't verify), so we return the input as-is
+ * rather than lose it during the migration window. New writes are always
+ * encrypted, so this only ever falls back on pre-fix rows.
+ */
+export function tryDecryptText(value: string | null): string | null {
+  if (value === null || value === '') return value;
+  try {
+    return decryptText(value);
+  } catch {
+    return value; // legacy plaintext
+  }
+}

@@ -51,7 +51,7 @@ export default async function NavanIntegrationPage() {
           <h1 className="text-xl font-semibold text-ink">Navan</h1>
           <p className="text-sm text-ink-3">
             Pulls travel bookings + receipts from Foundry&apos;s Navan
-            account, lands them as Expense rows in /bills/intake. Owner
+            account, lands them as Expense rows on /expenses. Owner
             is matched by traveller email → Person.email; unmatched
             travellers are skipped + reported on each sync.
           </p>
@@ -163,10 +163,10 @@ export default async function NavanIntegrationPage() {
                 Pulls every booking + expense Navan has updated since
                 the watermark and lands them as Expense rows in{' '}
                 <Link
-                  href="/bills/intake"
+                  href="/expenses"
                   className="text-brand hover:underline"
                 >
-                  /bills/intake
+                  /expenses
                 </Link>
                 . Idempotent — re-runs are safe.
               </p>

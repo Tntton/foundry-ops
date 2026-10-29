@@ -19,6 +19,7 @@ const mkSession = (roles: Role[]): Session => ({
     headshotUrl: null,
     band: 'Consultant',
   },
+  realRoles: roles,
   isRealSuperAdmin: roles.includes('super_admin'),
   viewAsRoles: null,
 });
@@ -84,6 +85,11 @@ describe('Manager — can approve expenses under $2k (own project enforced elsew
   it('cannot edit rate card', () => {
     expect(hasCapability(s, 'ratecard.edit')).toBe(false);
   });
+
+  it('has full BD pipeline edit rights (per TT, 2026-07-20)', () => {
+    expect(hasCapability(s, 'deal.create')).toBe(true);
+    expect(hasCapability(s, 'deal.edit')).toBe(true);
+  });
 });
 
 describe('Partner — approves under-threshold invoices, creates projects', () => {
@@ -130,6 +136,42 @@ describe('Null session', () => {
   it('has no capability', () => {
     expect(hasCapability(null, 'timesheet.submit')).toBe(false);
     expect(hasCapability(null, 'ratecard.view')).toBe(false);
+  });
+});
+
+describe('bill.review — the AP intake gate', () => {
+  // Regression guard for the drift that stranded associate_partners:
+  // `bill.create` let them raise a vendor bill, the review gate was a
+  // separately hard-coded role list that left them out, and the bill had
+  // nowhere to be edited or posted. Anyone who can raise one must be able
+  // to work it.
+  it('covers every role that can create a bill', () => {
+    for (const role of CAPABILITY_ROLES['bill.create']) {
+      expect(
+        hasCapability(mkSession([role]), 'bill.review'),
+        `${role} can create a bill but cannot review it`,
+      ).toBe(true);
+    }
+  });
+
+  it('includes associate_partner (TT, 2026-10-23)', () => {
+    expect(hasCapability(mkSession(['associate_partner']), 'bill.review')).toBe(true);
+  });
+
+  it('keeps partner, who reviews bills without raising them', () => {
+    const s = mkSession(['partner']);
+    expect(hasCapability(s, 'bill.review')).toBe(true);
+    expect(hasCapability(s, 'bill.create')).toBe(false);
+  });
+
+  it('excludes manager and staff', () => {
+    expect(hasCapability(mkSession(['manager']), 'bill.review')).toBe(false);
+    expect(hasCapability(mkSession(['staff']), 'bill.review')).toBe(false);
+  });
+
+  it('does not imply approving the bill — that stays super_admin (A8)', () => {
+    expect(hasCapability(mkSession(['associate_partner']), 'bill.approve')).toBe(false);
+    expect(hasCapability(mkSession(['partner']), 'bill.approve')).toBe(false);
   });
 });
 

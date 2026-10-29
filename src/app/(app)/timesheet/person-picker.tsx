@@ -15,7 +15,7 @@ export function TimesheetPersonPicker({
   selectedPersonId,
   options,
 }: {
-  view: 'week' | 'month';
+  view: 'week' | 'month' | 'quarter';
   selfId: string;
   selfFirstName: string;
   selfLastName: string;

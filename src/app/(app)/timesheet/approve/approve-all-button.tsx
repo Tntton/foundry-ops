@@ -7,8 +7,13 @@ import { Button } from '@/components/ui/button';
 
 /**
  * "Approve all pending" mass-action button. Lives at the top of the
- * approve page so a trusting manager / partner can clear an entire
- * week's queue in one decision when there's nothing to flag.
+ * approve page so a trusting manager / partner can clear the whole
+ * queue in one decision when there's nothing to flag.
+ *
+ * Demoted in TASK-503: the per-month cards are now the primary action, and
+ * this is the firm-wide escape hatch. It only ever carries entries the viewer
+ * can actually decide — the server re-checks anyway, but sending ids that
+ * will bounce would make the confirm dialog's count a lie.
  *
  * Safety guards:
  *   - A native confirm() dialog summarises the impact ("N entries /
@@ -27,10 +32,12 @@ import { Button } from '@/components/ui/button';
 export function ApproveAllPendingButton({
   entryIds,
   totalHours,
+  monthCount,
   peopleCount,
 }: {
   entryIds: string[];
   totalHours: number;
+  monthCount: number;
   peopleCount: number;
 }) {
   const [state, action] = useFormState<TimesheetSaveState, FormData>(
@@ -44,11 +51,13 @@ export function ApproveAllPendingButton({
   function onClickApprove(e: React.MouseEvent<HTMLButtonElement>) {
     if (totalEntries === 0) return;
     const ok = window.confirm(
-      `Approve all ${totalEntries} pending entr${totalEntries === 1 ? 'y' : 'ies'} ` +
-        `(${totalHours.toFixed(1)}h across ${peopleCount} ` +
-        `${peopleCount === 1 ? 'person' : 'people'})?\n\n` +
-        `This is irreversible — each approved entry locks its project P&L. ` +
-        `Cancel + use the per-card buttons if you want to review individual rows first.`,
+      `Approve everything you can decide: ${totalEntries} entr${totalEntries === 1 ? 'y' : 'ies'} ` +
+        `(${totalHours.toFixed(1)}h) spanning ${monthCount} person-month` +
+        `${monthCount === 1 ? '' : 's'} across ${peopleCount} ` +
+        `${peopleCount === 1 ? 'person' : 'people'}?\n\n` +
+        `This is irreversible — each approved entry locks its project P&L, and any ` +
+        `person-month it completes will close and raise that contractor's invoice.\n\n` +
+        `Cancel and use the per-month cards if you want to review first.`,
     );
     if (!ok) {
       e.preventDefault();

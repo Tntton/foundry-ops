@@ -26,7 +26,7 @@ export default async function TimesheetImportPage({
   if (!session || !hasCapability(session, 'timesheet.approve')) notFound();
 
   if (searchParams.stage === 'preview' && searchParams.token) {
-    const preview = readTimesheets(session.person.id, searchParams.token);
+    const preview = await readTimesheets(session.person.id, searchParams.token);
     if (!preview) {
       return (
         <div className="space-y-4">

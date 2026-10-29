@@ -1,5 +1,6 @@
 import { graph, graphConfigured, getAppToken, GraphError } from '@/server/graph';
 import { optionalEnv } from '@/server/env';
+import { resolveSiteAndDrive } from '@/server/integrations/sharepoint-graph';
 
 /**
  * Upload the business-continuity export ZIP to a secure folder
@@ -64,8 +65,7 @@ export async function uploadDataExportToSharePoint(opts: {
     );
   }
 
-  const siteId = await resolveSiteId(siteUrl);
-  const driveId = await resolveDriveId(siteId);
+  const { driveId } = await resolveSiteAndDrive(siteUrl);
 
   // Build the folder path: <backupsRoot>/<date>. The previous
   // layout had an extra `data-exports/` segment but the dedicated
@@ -206,21 +206,6 @@ async function uploadLargeFile(
     throw new Error('Upload completed but no DriveItem returned');
   }
   return lastResponse;
-}
-
-async function resolveSiteId(siteUrl: string): Promise<string> {
-  const parsed = new URL(siteUrl);
-  const path = parsed.pathname.replace(/\/+$/u, '');
-  const site = await graph<{ id: string }>(
-    'GET',
-    `/sites/${parsed.hostname}:${path}`,
-  );
-  return site.id;
-}
-
-async function resolveDriveId(siteId: string): Promise<string> {
-  const drive = await graph<{ id: string }>('GET', `/sites/${siteId}/drive`);
-  return drive.id;
 }
 
 function encodePath(p: string): string {

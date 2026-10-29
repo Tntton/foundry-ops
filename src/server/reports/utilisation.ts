@@ -92,7 +92,7 @@ export async function computeFirmUtilisation(
     prisma.timesheetEntry.findMany({
       where: {
         date: { gte: start, lt: end },
-        status: { in: ['approved', 'billed'] },
+        status: 'approved',
       },
       select: {
         personId: true,

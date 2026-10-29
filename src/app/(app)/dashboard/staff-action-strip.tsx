@@ -39,7 +39,7 @@ export function StaffActionStrip({
           sub="This week's grid"
         />
         <QuickActionTile
-          href="/bills/intake"
+          href="/expenses"
           icon="🧾"
           label="Upload receipt"
           sub="Drop a photo or PDF"

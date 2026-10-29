@@ -3,6 +3,9 @@ import { requireEnv } from '@/server/env';
 import { prisma } from '@/server/db';
 import { generateDataExport } from '@/server/exports/data-export';
 import { uploadDataExportToSharePoint } from '@/server/exports/sharepoint-backup';
+import { generateLedgerBackup } from '@/server/exports/ledger-backup';
+import { runAllReportWorkbookBackups } from '@/server/exports/report-workbooks';
+import { evaluateBackupGate } from '@/server/exports/backup-gate';
 import { writeAudit } from '@/server/audit';
 
 export const runtime = 'nodejs';
@@ -44,6 +47,38 @@ export async function GET(req: Request) {
   }
 
   try {
+    // Skip-gate: if nothing has changed since the last successful backup,
+    // don't regenerate/upload anything (TASK-069f). On-demand triggers are
+    // never gated, so a false negative is harmless.
+    const gate = await evaluateBackupGate();
+    if (!gate.changed) {
+      console.log('[cron/data-export] no changes since last backup — skipping', {
+        lastBackupAt: gate.lastBackupAt,
+      });
+      await prisma.$transaction(async (tx) => {
+        await writeAudit(tx, {
+          actor: { type: 'system' },
+          action: 'nightly_export_skipped',
+          entity: {
+            type: 'integration',
+            id: 'sharepoint-backup',
+            after: {
+              via: 'cron',
+              reason: 'no_changes',
+              lastBackupAt: gate.lastBackupAt?.toISOString() ?? null,
+            },
+          },
+          source: 'integration_sync',
+        });
+      });
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        reason: 'no_changes',
+        lastBackupAt: gate.lastBackupAt,
+      });
+    }
+
     const { manifest, buffer } = await generateDataExport();
     let webUrl: string | null = null;
     let folderPath: string | null = null;
@@ -103,12 +138,44 @@ export async function GET(req: Request) {
       });
     });
 
+    // Also refresh the master-ledger workbook in SharePoint (TASK-069c).
+    // Best-effort + independently audited — a ledger-backup failure must
+    // not fail the already-successful data-export run.
+    let ledgerBackup: { rowCount: number; webUrl: string | null; uploadSkipped: boolean } | null =
+      null;
+    try {
+      ledgerBackup = await generateLedgerBackup({
+        actor: { type: 'system' },
+        source: 'integration_sync',
+        via: 'cron',
+      });
+    } catch (ledgerErr) {
+      console.error('[cron/data-export] ledger backup failed:', ledgerErr);
+    }
+
+    // Refresh the themed reporting workbooks (Phase 1F) too. Each entry
+    // is independently audited and best-effort — never fails the cron.
+    let reportWorkbooks: { name: string; ok: boolean }[] = [];
+    try {
+      reportWorkbooks = (
+        await runAllReportWorkbookBackups({
+          actor: { type: 'system' },
+          source: 'integration_sync',
+          via: 'cron',
+        })
+      ).map((r) => ({ name: r.name, ok: r.ok }));
+    } catch (wbErr) {
+      console.error('[cron/data-export] report workbooks failed:', wbErr);
+    }
+
     console.log('[cron/data-export] ok:', {
       filename: manifest.filename,
       sizeBytes: manifest.sizeBytes,
       tables: Object.keys(manifest.tableCounts).length,
       webUrl,
       uploadSkipped,
+      ledgerRows: ledgerBackup?.rowCount ?? null,
+      reportWorkbooks,
     });
     return NextResponse.json({
       ok: true,
@@ -116,6 +183,8 @@ export async function GET(req: Request) {
       webUrl,
       folderPath,
       uploadSkipped,
+      ledgerBackup,
+      reportWorkbooks,
     });
   } catch (err) {
     console.error('[cron/data-export] failed:', err);

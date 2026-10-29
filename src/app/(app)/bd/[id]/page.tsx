@@ -51,7 +51,7 @@ export default async function DealDetailPage({
   params: { id: string };
 }) {
   const session = await getSession();
-  if (!hasAnyRole(session, ['super_admin', 'admin', 'partner'])) notFound();
+  if (!hasAnyRole(session, ['super_admin', 'admin', 'partner', 'associate_partner', 'manager'])) notFound();
 
   const deal = await prisma.deal.findUnique({
     where: { id: params.id },

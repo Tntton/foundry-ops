@@ -211,9 +211,7 @@ export default async function ProjectsPage({
               ['super_admin', 'admin', 'partner'].includes(r),
             )
               ? 'all engagements visible'
-              : session.person.roles.includes('manager')
-                ? 'projects you manage'
-                : 'projects you are on'}
+              : 'project-level view'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

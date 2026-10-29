@@ -70,7 +70,7 @@ export default async function ProjectTrackerPage({
         orderBy: { periodAnchor: 'asc' },
       }),
       prisma.timesheetEntry.findMany({
-        where: { projectId: project.id, status: { in: ['approved', 'billed'] } },
+        where: { projectId: project.id, status: 'approved' },
         include: { person: { select: { firstName: true, lastName: true, rate: true } } },
       }),
       prisma.bill.findMany({

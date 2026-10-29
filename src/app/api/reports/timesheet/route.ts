@@ -4,16 +4,12 @@ import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
 import { prisma } from '@/server/db';
 import { centsToDecimal, toCsv, ymd } from '@/server/reports/csv';
+import { toDisplayStatus } from '@/server/timesheet';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const STATUS_OPTIONS: readonly TimesheetStatus[] = [
-  'draft',
-  'submitted',
-  'approved',
-  'billed',
-];
+const STATUS_OPTIONS: readonly TimesheetStatus[] = ['draft', 'submitted', 'approved'];
 
 export async function GET(req: Request) {
   const session = await getSession();
@@ -68,6 +64,7 @@ export async function GET(req: Request) {
       },
       project: { select: { code: true, name: true } },
       billedInvoice: { select: { number: true } },
+      contractorBill: { select: { id: true, supplierInvoiceNumber: true } },
     },
   });
 
@@ -83,7 +80,8 @@ export async function GET(req: Request) {
       'Approved at',
       'Cost rate (AUD/hr)',
       'Cost (AUD)',
-      'Linked invoice',
+      'Linked client invoice',
+      'Linked contractor bill',
     ],
     rows.map((e) => [
       ymd(e.date),
@@ -92,11 +90,14 @@ export async function GET(req: Request) {
       e.project.name,
       Number(e.hours).toFixed(2),
       e.description ?? '',
-      e.status,
+      // Derived: `billed` once either leg has consumed the hour. The two
+      // linked-document columns say which one(s).
+      toDisplayStatus(e),
       e.approvedAt ? ymd(e.approvedAt) : '',
       centsToDecimal(e.person.rate ?? 0),
       centsToDecimal(Math.round(Number(e.hours) * (e.person.rate ?? 0))),
       e.billedInvoice?.number ?? '',
+      e.contractorBill?.supplierInvoiceNumber ?? (e.contractorBill ? e.contractorBill.id : ''),
     ]),
   );
 

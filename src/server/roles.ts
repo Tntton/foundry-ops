@@ -16,14 +16,19 @@ export type SessionPerson = {
 
 export type Session = {
   person: SessionPerson;
+  /** The signed-in person's *real* roles, before any view-as overlay.
+   *  `person.roles` reflects the overlay (what they can currently see /
+   *  do); this is the ground truth used to decide what overlays they may
+   *  engage. Never trust `person.roles` for that decision. */
+  realRoles: Role[];
   /** True when the signed-in person actually holds super_admin —
    *  preserved across the view-as overlay so the UI knows they can
    *  exit view-as mode. */
   isRealSuperAdmin: boolean;
-  /** When the super_admin has engaged "view as", this is the role-set
-   *  they're pretending to be. `person.roles` already reflects the
-   *  overlay; this field exists so the UI can surface the banner +
-   *  exit affordance. Null when no overlay is active. */
+  /** When the person has engaged "view as", this is the role-set they're
+   *  pretending to be. `person.roles` already reflects the overlay; this
+   *  field exists so the UI can surface the banner + exit affordance.
+   *  Null when no overlay is active. */
   viewAsRoles: Role[] | null;
 };
 

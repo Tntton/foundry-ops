@@ -4,6 +4,7 @@ import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import type { Role } from '@prisma/client';
 import { getSession, VIEW_AS_COOKIE } from '@/server/session';
+import { canOverlayAs } from '@/server/capabilities';
 import { writeAudit } from '@/server/audit';
 import { prisma } from '@/server/db';
 
@@ -11,17 +12,23 @@ const VALID_ROLES: readonly Role[] = [
   'super_admin',
   'admin',
   'partner',
+  'associate_partner',
   'manager',
   'staff',
 ];
 
 /**
- * Toggle the super-admin "view as" overlay. Sets a short-lived cookie
- * containing the role-set the super_admin wants to pretend to be.
+ * Toggle the "view as" overlay. Sets a short-lived cookie containing the
+ * role-set the person wants to preview.
  *
  *   - Pass `null` to clear the overlay (return to real roles).
- *   - Only the underlying super_admin can engage; for anyone else this
- *     refuses silently (UI doesn't expose it).
+ *   - Super_admins and admins can engage; anyone else is refused.
+ *   - The requested role-set must be a strict capability *downgrade* of
+ *     the person's real roles (canOverlayAs). This is what lets an admin
+ *     "view as" a contractor/staff member to see their surface, while
+ *     making it impossible for an admin to overlay super_admin (or any
+ *     role granting a capability they lack). Re-checked in getSession on
+ *     every request, so this is defence-in-depth, not the only gate.
  *
  * The overlay only changes WHAT the user sees / can do — audit trail
  * still attributes mutations to the real personId.
@@ -31,8 +38,10 @@ export async function setViewAsRoles(
 ): Promise<{ ok: boolean; message?: string }> {
   const session = await getSession();
   if (!session) return { ok: false, message: 'Not signed in' };
-  if (!session.isRealSuperAdmin) {
-    return { ok: false, message: 'Only super admins can switch view modes.' };
+  const mayViewAs =
+    session.isRealSuperAdmin || session.realRoles.includes('admin');
+  if (!mayViewAs) {
+    return { ok: false, message: 'You can’t switch view modes.' };
   }
 
   const jar = cookies();
@@ -55,7 +64,26 @@ export async function setViewAsRoles(
     if (sanitised.length === 0) {
       return { ok: false, message: 'Invalid role selection.' };
     }
-    jar.set(VIEW_AS_COOKIE, JSON.stringify(sanitised), {
+    // Escalation guard: the overlay must grant strictly fewer
+    // capabilities than the person's real roles. Blocks e.g. an admin
+    // trying to view-as super_admin.
+    if (!canOverlayAs(sanitised, session.realRoles)) {
+      return {
+        ok: false,
+        message: 'You can only view as a role with fewer permissions than your own.',
+      };
+    }
+    // Bind the overlay to the person + a snapshot of their real roles at
+    // set-time. getSession discards the overlay if either changes, so a
+    // preview can never outlive the role-set it was created under (and a
+    // leftover cookie can't strip a person whose access was just changed
+    // in the platform). `roles` is what they're previewing as.
+    const overlay = {
+      sub: session.person.id,
+      rr: [...session.realRoles].sort(),
+      roles: sanitised,
+    };
+    jar.set(VIEW_AS_COOKIE, JSON.stringify(overlay), {
       httpOnly: true,
       sameSite: 'lax',
       secure: process.env['NODE_ENV'] === 'production',

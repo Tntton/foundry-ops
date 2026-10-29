@@ -3,29 +3,7 @@ import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
-import { PersonAvatar } from '@/components/person-avatar';
-import { Badge } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { NewRiskForm, RiskInlineSelect } from './form';
-
-const SEVERITY_VARIANT: Record<string, 'outline' | 'amber' | 'red'> = {
-  low: 'outline',
-  medium: 'amber',
-  high: 'red',
-};
-const STATUS_VARIANT: Record<string, 'amber' | 'blue' | 'green'> = {
-  open: 'amber',
-  mitigating: 'blue',
-  closed: 'green',
-};
+import { RiskRegister } from './register';
 
 export default async function RisksPage({ params }: { params: { code: string } }) {
   const session = await getSession();
@@ -52,7 +30,6 @@ export default async function RisksPage({ params }: { params: { code: string } }
     orderBy: [{ band: 'asc' }, { lastName: 'asc' }],
     select: { id: true, initials: true, headshotUrl: true, firstName: true, lastName: true },
   });
-  const peopleById = new Map(people.map((p) => [p.id, p]));
 
   return (
     <div className="space-y-6">
@@ -68,83 +45,7 @@ export default async function RisksPage({ params }: { params: { code: string } }
         </p>
       </header>
 
-      <Card className="p-0">
-        {project.risks.length === 0 ? (
-          <div className="p-12 text-center text-sm text-ink-3">
-            No risks logged yet. Add one below.
-          </div>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Title</TableHead>
-                <TableHead>Owner</TableHead>
-                <TableHead>Severity</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Mitigation</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {project.risks.map((r) => {
-                const owner = r.ownerId ? peopleById.get(r.ownerId) : null;
-                return (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-medium text-ink">{r.title}</TableCell>
-                    <TableCell>
-                      {owner ? (
-                        <div className="flex items-center gap-2">
-                          <PersonAvatar
-  className="h-6 w-6"
-  fallbackClassName="text-[10px]"
-  initials={owner.initials}
-  headshotUrl={owner.headshotUrl}
-/>
-                          <span className="text-sm text-ink-2">
-                            {owner.firstName} {owner.lastName}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-ink-4">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Badge variant={SEVERITY_VARIANT[r.severity] ?? 'outline'}>
-                          {r.severity}
-                        </Badge>
-                        <RiskInlineSelect
-                          riskId={r.id}
-                          field="severity"
-                          current={r.severity}
-                          options={['low', 'medium', 'high']}
-                        />
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Badge variant={STATUS_VARIANT[r.status] ?? 'outline'}>
-                          {r.status}
-                        </Badge>
-                        <RiskInlineSelect
-                          riskId={r.id}
-                          field="status"
-                          current={r.status}
-                          options={['open', 'mitigating', 'closed']}
-                        />
-                      </div>
-                    </TableCell>
-                    <TableCell className="max-w-sm text-sm text-ink-2">
-                      {r.mitigation ?? <span className="text-ink-4">—</span>}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        )}
-      </Card>
-
-      <NewRiskForm projectId={project.id} people={people} />
+      <RiskRegister projectId={project.id} risks={project.risks} people={people} canEdit />
     </div>
   );
 }

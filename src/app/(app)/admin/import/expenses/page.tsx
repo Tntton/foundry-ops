@@ -24,7 +24,7 @@ export default async function ExpensesImportPage({
   if (!session || !hasCapability(session, 'expense.approve.under_2k')) notFound();
 
   if (searchParams.stage === 'preview' && searchParams.token) {
-    const preview = readExpenses(session.person.id, searchParams.token);
+    const preview = await readExpenses(session.person.id, searchParams.token);
     if (!preview) {
       return (
         <div className="space-y-4">

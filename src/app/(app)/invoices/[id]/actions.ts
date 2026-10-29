@@ -109,6 +109,15 @@ export async function deleteDraftInvoice(
 
   try {
     await prisma.$transaction(async (tx) => {
+      // Deleting the invoice releases its timesheet hours back to the
+      // billable pool via `TimesheetEntry_billedInvoiceId_fkey`
+      // (ON DELETE SET NULL). That happens silently in the database, so
+      // count the affected rows first and put the number in the audit
+      // delta — otherwise the ledger shows an invoice disappearing and
+      // hours reappearing with nothing connecting the two (TASK-500).
+      const releasedHourEntries = await tx.timesheetEntry.count({
+        where: { billedInvoiceId: invoice.id },
+      });
       await writeAudit(tx, {
         actor: { type: 'person', id: session.person.id },
         action: 'deleted',
@@ -119,6 +128,7 @@ export async function deleteDraftInvoice(
             number: invoice.number,
             status: invoice.status,
             amountTotal: invoice.amountTotal,
+            billedTimesheetEntries: releasedHourEntries,
           },
           after: null,
         },

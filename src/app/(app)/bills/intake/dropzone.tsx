@@ -146,12 +146,25 @@ function fileToBase64(f: File): Promise<string> {
 export function IntakeDropzone({
   defaultKind,
   canCreateBill,
+  canReviewBills = false,
   projectOptions,
 }: {
   /** Initial per-row kind for new uploads. Set by the page based on session role. */
   defaultKind: IntakeKind;
   /** Whether the current user can create vendor bills. If false, the per-row toggle is locked to 'expense'. */
   canCreateBill: boolean;
+  /**
+   * Whether the current user can open the AP review pane on
+   * /bills/intake (the `bill.review` capability). `bill.review` is a
+   * superset of `bill.create` today, so anyone who can raise a vendor
+   * bill can also review it — but the two are separate capabilities
+   * and have drifted apart before, stranding associate_partners with a
+   * bill they couldn't edit. When false we leave the user where they
+   * are rather than navigating into /bills/intake's redirect; the bill
+   * still queues for a reviewer either way. Defaults false so a caller
+   * that doesn't know never pushes someone into that bounce.
+   */
+  canReviewBills?: boolean;
   /** Eligible projects for the inline project-tag picker shown on
    *  done-state expense rows. Empty array hides the picker (e.g. for
    *  pages that haven't loaded project options yet). The picker only
@@ -437,10 +450,12 @@ export function IntakeDropzone({
     // when the URL already had `?id=oldBillId` from a previous review, the
     // new upload silently lands in the queue without switching the active
     // bill — the user reported this as "uploads not autopopulating the
-    // review section". Expense uploads stay on the same URL since there's
-    // no review pane for them on this page.
+    // review section". Expense uploads stay on the same URL: they have no
+    // review pane, and since the dropzone now also sits on /expenses, a
+    // refresh there is exactly what's wanted — the submitted list below
+    // picks the new row up.
     const newestBill = [...outcomes].reverse().find((o) => o.kind === 'bill');
-    if (newestBill) {
+    if (newestBill && canReviewBills) {
       router.push(`/bills/intake?id=${newestBill.subjectId}`);
     } else {
       router.refresh();

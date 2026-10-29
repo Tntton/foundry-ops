@@ -61,7 +61,7 @@ export async function computeProjectPnL(projectId: string): Promise<ProjectPnL> 
       select: { amountTotal: true, gst: true, issueDate: true },
     }),
     prisma.timesheetEntry.findMany({
-      where: { projectId, status: { in: ['approved', 'billed'] } },
+      where: { projectId, status: 'approved' },
       select: {
         hours: true,
         date: true,

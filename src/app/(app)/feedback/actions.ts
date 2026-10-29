@@ -6,6 +6,7 @@ import { prisma } from '@/server/db';
 import { getSession } from '@/server/session';
 import { writeAudit } from '@/server/audit';
 import { notifyAdminPool } from '@/server/user-updates';
+import { notifySuperAdminsOfCriticalFeedbackWhatsApp } from '@/server/feedback';
 
 const FeedbackSubmit = z.object({
   urgency: z.enum(['critical', 'urgent', 'routine']),
@@ -80,6 +81,21 @@ export async function submitFeedback(
       });
       return t;
     });
+    // Critical tickets also get a WhatsApp nudge to every Super Admin
+    // with a number on file — the in-app feed alone can sit unseen and
+    // "critical" means it shouldn't. Best-effort side-channel, launched
+    // after the ticket is durably committed so a send failure can never
+    // roll back the ticket. Errors are logged inside the helper.
+    if (ticket.urgency === 'critical') {
+      void notifySuperAdminsOfCriticalFeedbackWhatsApp({
+        title: ticket.title,
+        kind: ticket.kind,
+        submitterId: session.person.id,
+        submitterName: `${session.person.firstName} ${session.person.lastName}`,
+      }).catch((err) => {
+        console.error('[feedback.submit] critical WhatsApp nudge failed:', err);
+      });
+    }
     revalidatePath('/admin/feedback');
     return { status: 'success', id: ticket.id };
   } catch (err) {

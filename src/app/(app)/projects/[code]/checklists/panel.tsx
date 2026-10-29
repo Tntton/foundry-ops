@@ -8,11 +8,21 @@ import {
   addChecklistItem,
   toggleChecklistItem,
   deleteChecklistItem,
+  assignChecklistItem,
   type ChecklistActionState,
 } from './actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PersonAvatar } from '@/components/person-avatar';
+
+export type PersonOpt = {
+  id: string;
+  initials: string;
+  headshotUrl: string | null;
+  firstName: string;
+  lastName: string;
+};
 
 export type ChecklistDTO = {
   id: string;
@@ -22,18 +32,22 @@ export type ChecklistDTO = {
     label: string;
     done: boolean;
     doneAt: Date | null;
+    assigneeId: string | null;
   }>;
 };
 
 export function ProjectChecklistsPanel({
   projectId,
   checklists,
+  people,
   canEdit,
 }: {
   projectId: string;
   checklists: ChecklistDTO[];
+  people: PersonOpt[];
   canEdit: boolean;
 }) {
+  const peopleById = new Map(people.map((p) => [p.id, p]));
   return (
     <div className="space-y-4">
       {checklists.length === 0 ? (
@@ -50,6 +64,8 @@ export function ProjectChecklistsPanel({
               key={cl.id}
               projectId={projectId}
               checklist={cl}
+              people={people}
+              peopleById={peopleById}
               canEdit={canEdit}
             />
           ))}
@@ -63,10 +79,14 @@ export function ProjectChecklistsPanel({
 function ChecklistCard({
   projectId,
   checklist,
+  people,
+  peopleById,
   canEdit,
 }: {
   projectId: string;
   checklist: ChecklistDTO;
+  people: PersonOpt[];
+  peopleById: Map<string, PersonOpt>;
   canEdit: boolean;
 }) {
   const done = checklist.items.filter((i) => i.done).length;
@@ -94,6 +114,8 @@ function ChecklistCard({
               key={item.id}
               projectId={projectId}
               item={item}
+              people={people}
+              peopleById={peopleById}
               canEdit={canEdit}
             />
           ))}
@@ -110,10 +132,14 @@ function ChecklistCard({
 function ItemRow({
   projectId,
   item,
+  people,
+  peopleById,
   canEdit,
 }: {
   projectId: string;
   item: ChecklistDTO['items'][number];
+  people: PersonOpt[];
+  peopleById: Map<string, PersonOpt>;
   canEdit: boolean;
 }) {
   const toggleBound = toggleChecklistItem.bind(null, projectId, item.id);
@@ -124,6 +150,8 @@ function ItemRow({
   const [, deleteAction] = useFormState<ChecklistActionState, FormData>(deleteBound, {
     status: 'idle',
   });
+
+  const assignee = (item.assigneeId ? peopleById.get(item.assigneeId) : null) ?? null;
 
   return (
     <li className="flex items-start gap-2 text-sm">
@@ -159,6 +187,13 @@ function ItemRow({
       >
         {item.label}
       </span>
+      <AssigneeControl
+        projectId={projectId}
+        item={item}
+        assignee={assignee}
+        people={people}
+        canEdit={canEdit}
+      />
       {canEdit && (
         <form action={deleteAction as unknown as (fd: FormData) => void}>
           <button
@@ -173,6 +208,75 @@ function ItemRow({
         </form>
       )}
     </li>
+  );
+}
+
+/**
+ * Per-item ownership control. Editors get an inline person picker that
+ * auto-submits on change (mirroring the risk register's inline selects);
+ * everyone else sees the assignee's avatar, or nothing when unassigned.
+ */
+function AssigneeControl({
+  projectId,
+  item,
+  assignee,
+  people,
+  canEdit,
+}: {
+  projectId: string;
+  item: ChecklistDTO['items'][number];
+  assignee: PersonOpt | null;
+  people: PersonOpt[];
+  canEdit: boolean;
+}) {
+  const assignBound = assignChecklistItem.bind(null, projectId, item.id);
+  const [, assignAction] = useFormState<ChecklistActionState, FormData>(assignBound, {
+    status: 'idle',
+  });
+
+  if (!canEdit) {
+    return assignee ? (
+      <PersonAvatar
+        className="mt-0.5 h-5 w-5 shrink-0"
+        fallbackClassName="text-[9px]"
+        initials={assignee.initials}
+        headshotUrl={assignee.headshotUrl}
+        title={`${assignee.firstName} ${assignee.lastName}`}
+      />
+    ) : null;
+  }
+
+  return (
+    <div className="mt-0.5 flex shrink-0 items-center gap-1">
+      {assignee && (
+        <PersonAvatar
+          className="h-5 w-5"
+          fallbackClassName="text-[9px]"
+          initials={assignee.initials}
+          headshotUrl={assignee.headshotUrl}
+          title={`${assignee.firstName} ${assignee.lastName}`}
+        />
+      )}
+      <form action={assignAction as unknown as (fd: FormData) => void} className="inline">
+        <select
+          name="assigneeId"
+          defaultValue={item.assigneeId ?? ''}
+          onChange={(e) => {
+            const form = e.currentTarget.closest('form');
+            if (form) form.requestSubmit();
+          }}
+          aria-label="Assign owner"
+          className="h-6 max-w-[7.5rem] rounded-md border border-line bg-surface-elev px-1 text-[11px] text-ink"
+        >
+          <option value="">Unassigned</option>
+          {people.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.initials} · {p.firstName} {p.lastName}
+            </option>
+          ))}
+        </select>
+      </form>
+    </div>
   );
 }
 
