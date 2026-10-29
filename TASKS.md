@@ -2122,7 +2122,7 @@ Unapproved time in the range is listed with the approver's name rather than hidd
 **note on completion:** the server was already correct — no permission or save change was needed, and none was made. This closes the gap between what the grid offered and what the save would accept. Not yet exercised in a browser against real data: the local DB credentials are stale (see memory `foundry_local_db_unreachable`), so the grid and quarter table have been verified by typecheck, lint and unit tests only.
 
 ### TASK-516 — Edit / delete a receipt or expense after submission
-**status:** todo
+**status:** done
 
 *(Numbered 516/517 after 514 and 515 were taken by parallel sessions on 2026-10-23. Four sessions were appending to this file at once; check the highest number in use before claiming one.)*
 **depends on:** TASK-512
@@ -2130,17 +2130,46 @@ Unapproved time in the range is listed with the approver's name rather than hidd
 **Gap (TT, 2026-10-23):** a receipt goes up, Sonnet reads it, and whatever it got wrong is frozen. There is no way for the submitter to fix a misread supplier, amount, date or project tag, and no way to delete a duplicate or a receipt uploaded to the wrong account. The only route today is asking an admin.
 
 **acceptance:**
-- [ ] Submitter can edit their own expense while it is still `draft` or `submitted` — supplier, amount, GST, date, project tag, category, description.
-- [ ] Submitter can delete their own expense while it is still `draft` or `submitted`.
-- [ ] **Approved and beyond is not freely editable.** Once `approved` the expense is a number somebody signed off, and once `reimbursed` or linked to a `contractorBillId` it is money that has moved or is moving. Edit/delete there is admin-only and must re-open the approval rather than silently amending a signed-off figure.
-- [ ] **Never editable once consumed by a contractor bill** (`contractorBillId` set) — the expense is on an invoice that is in the AP queue or already paid. Amend the bill, not the line underneath it.
-- [ ] Admin override for every state, with the reason captured.
-- [ ] `AuditEvent` on every edit and delete with the before/after delta (A9) — this is a financial record, and "the amount changed" must always have an actor and a timestamp.
-- [ ] Re-running OCR after an edit must not clobber the human's correction.
-- [ ] Tests: self-edit allowed in draft/submitted; refused once approved; refused once `contractorBillId` is set; admin override audited; delete refused for someone else's expense.
-- [ ] Commit: `feat(TASK-516): edit + delete own expenses before approval`
+- [x] Submitter can edit their own expense while it is still `draft` or `submitted` — supplier, amount, GST, date, project tag, category, description.
+- [x] Submitter can delete their own expense while it is still `draft` or `submitted`.
+- [x] **Approved and beyond is not freely editable.** Once `approved` the expense is a number somebody signed off, and once `reimbursed` or linked to a `contractorBillId` it is money that has moved or is moving. Edit/delete there is admin-only and must re-open the approval rather than silently amending a signed-off figure.
+- [x] **Never editable once consumed by a contractor bill** (`contractorBillId` set) — the expense is on an invoice that is in the AP queue or already paid. Amend the bill, not the line underneath it.
+- [x] Admin override for every state, with the reason captured.
+- [x] `AuditEvent` on every edit and delete with the before/after delta (A9) — this is a financial record, and "the amount changed" must always have an actor and a timestamp.
+- [x] Re-running OCR after an edit must not clobber the human's correction.
+- [x] Tests: self-edit allowed in draft/submitted; refused once approved; refused once `contractorBillId` is set; admin override audited; delete refused for someone else's expense.
+- [x] Commit: `feat(TASK-516): edit + delete own expenses before approval`
 
 **overlap warning:** `/expenses` was restructured by TASK-512 in a parallel session on 2026-10-23. Build this on top of that page, not against the pre-merge layout.
+
+**note on completion:** one edit surface, one write path. `expenseMutationGate` in `src/server/expenses.ts` is the single, pure decision point (deny-by-default, no DB, no session) and every mutation path asks it; `updateExpense` / `deleteExpense` in `src/app/(app)/expenses/[id]/edit-actions.ts` are the plumbing around it — Zod in, gate, `prisma.$transaction` with the `AuditEvent` alongside the mutation. The old draft-only `saveDraftExpense` + `DraftEditForm` were REMOVED rather than left beside the new panel: a second editor that didn't consult the gate would have been a way around the contractor-bill stop. 54 new tests in `src/__tests__/expense-edit-delete.test.ts`; suite 798 green across 73 files.
+
+Two resolutions worth recording:
+
+1. **The contractor-bill stop beats the ADMIN override, but not the Super Admin one.** The acceptance list lumps `contractorBillId` in with `reimbursed` as "admin-only" and then, in the next line, carves it back out as "never editable". Shipped first as an absolute stop for everyone; **TT, 2026-10-30: "there always needs to be a super admin override"** — so `expense.override.locked` (super_admin only) now reaches past it, with a mandatory reason and a `super_admin_override` audit mode that records `override_contractor_bill: <billId>` so the AP side can be brought back into line. Admin and below are still refused, and the refusal now says where the override lives. "Admin override for every state" is satisfied for every `ExpenseStatus`; the FK is a separate axis with its own, higher, key. The same lock was added to `tagExpenseProject`, which had been reachable as a side door onto the project field.
+
+2. **The OCR-clobber guard reads the audit log rather than a new column.** `expenseHasHumanEdit()` asks whether a person-actor `updated` / `submitted` `AuditEvent` exists for the expense — data A9 already guarantees. The alternative, a `lastHumanEditAt` column, would have put every expense read behind a migration that is applied by hand here (memory: `foundry_migrations_manual`), and an unapplied one would break `/expenses` wholesale rather than degrade. No schema change, so no migration to forget.
+
+**Not built, deliberately:**
+- **`rebilledOnInvoiceId` is flagged, not blocked.** An expense already passed on to a client invoice can still be amended by an admin; the panel warns that the client's bill won't change and the `AuditEvent` records `warning_rebilled_on_invoice`. Making it a hard stop like the contractor bill would be new policy, and TASK-516 doesn't ask for it — worth putting to TT.
+- **No pay-run reconciliation on `batched_for_payment`.** An admin edit there re-opens the approval per the spec, but `PayRunLine` has no FK to `Expense` (it aggregates per person), so nothing can detect that the pay run's total no longer matches. See TASK-523.
+- Delete is a hard delete. A soft-delete column would need the pay run, the rebillable tallies and the reporting queries all taught to skip it — larger than this task. The `AuditEvent` keeps the full before-image, so nothing is unrecoverable.
+- Not exercised in a browser: local DB credentials are stale (memory `foundry_local_db_unreachable`), so this is verified by typecheck, lint and unit tests only.
+
+**discovered while building:**
+
+### TASK-523 — Link PayRunLine to the expenses it pays
+**status:** todo
+**depends on:** TASK-516
+
+*(Filed as TASK-518 on 2026-10-23 and renumbered to 523 on 2026-10-30 — 518 had already been taken by "Managers see availability the way admin does" in a parallel session. Highest in use at renumber time: 522.)*
+
+`PayRunLine` carries `personId` + an aggregate `amount` and no FK to the `Expense` rows that make it up. That was survivable while an expense froze at `approved`, but TASK-516 lets an admin amend a `batched_for_payment` expense, and nothing can then tell that the pay run is paying a figure the expense no longer carries. Either add the join (`PayRunLineExpense`, or `Expense.payRunLineId`) and refuse / re-open on amendment, or make `batched_for_payment` a hard stop like `contractorBillId`. Needs TT on which — the second is simpler and the first is more correct.
+
+**acceptance:**
+- [ ] A decision from TT on refuse-vs-reconcile, recorded here.
+- [ ] Whichever path: an expense in a live pay run cannot silently diverge from the amount being paid.
+- [ ] Test covering an amendment attempt against an expense in an open pay run.
 
 ### TASK-517 — Expenses invoice separately from timesheet fees
 **status:** done

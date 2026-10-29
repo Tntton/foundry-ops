@@ -2,12 +2,15 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSession } from '@/server/session';
 import { hasAnyRole } from '@/server/roles';
+import { hasCapability } from '@/server/capabilities';
 import { prisma } from '@/server/db';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { TagProjectForm } from './tag-project-form';
-import { DraftEditForm } from './draft-edit-form';
+import { ExpenseEditPanel } from './expense-edit-panel';
+import { expenseMutationGate } from '@/server/expenses';
+import { splitExternalRef } from '@/lib/expense-ref';
 
 function formatMoney(cents: number): string {
   return new Intl.NumberFormat('en-AU', {
@@ -73,14 +76,36 @@ export default async function ExpenseDetailPage({
   // Reallocation policy (per TT, 2026-05-10): any signed-in person
   // can re-tag a draft / submitted expense. Locks once it hits an
   // approval-bound status — admin can still flip it via the approval
-  // decision flow.
+  // decision flow. A cost already on a contractor's bill is frozen
+  // outright (TASK-516) — amend the bill, not the line underneath.
   const canTagProject =
-    expense.status === 'draft' || expense.status === 'submitted';
+    (expense.status === 'draft' || expense.status === 'submitted') &&
+    expense.contractorBillId === null;
+
+
+  // TASK-516 — ask the gate, in "edit" mode, with a placeholder reason so
+  // the answer reflects WHO may act rather than whether they've typed a
+  // reason yet. The action re-runs the gate for real on submit; this only
+  // decides what to render.
+  const canEdit = hasCapability(session, 'expense.edit.any');
+  const editGate = expenseMutationGate(
+    expense,
+    {
+      personId: session.person.id,
+      isAdmin: canEdit,
+      // TT, 2026-10-30: there always needs to be a Super Admin override.
+      isSuperAdmin: hasCapability(session, 'expense.override.locked'),
+    },
+    { mutation: 'edit', overrideReason: 'probe' },
+  );
+  // The reason box is mandatory whenever the viewer is reaching past
+  // their own pre-approval window.
+  const overrideMode = editGate.allowed && editGate.mode !== 'owner';
   // FH-* internal projects (FHB / FHP / FHO / FHX prefixes) are always
   // visible regardless of stage so late re-allocation works on any
   // closed internal bucket too (TT 2026-06-16). Client engagements
   // still hide once archived. Order is straight alphabetical by code.
-  const projectOptions = canTagProject
+  const projectOptions = canTagProject || editGate.allowed
     ? await prisma.project.findMany({
         where: {
           OR: [
@@ -141,24 +166,40 @@ export default async function ExpenseDetailPage({
         </div>
       </header>
 
-      {/* Draft correction panel — the owner (or admin) fixes fields the
-          OCR got wrong and submits into the approval queue. Renders
-          only for drafts; everything below stays read-only display. */}
-      {expense.status === 'draft' &&
+      {/* TASK-516 — the correction panel. The submitter fixes what the
+          OCR got wrong (and submits, from draft); an admin can reach
+          past that with a reason. Refused outright once the cost is on
+          a contractor bill — the notice below says so instead. */}
+      {editGate.allowed ? (
+        <ExpenseEditPanel
+          expenseId={expense.id}
+          status={expense.status}
+          overrideMode={overrideMode}
+          rebilledOnInvoice={expense.rebilledOnInvoiceId !== null}
+          breaksContractorBillLock={
+            editGate.allowed && editGate.mode === 'super_admin_override'
+          }
+          projectOptions={projectOptions}
+          initial={{
+            dateIso: expense.date.toISOString().slice(0, 10),
+            amountDollars:
+              expense.amount > 0 ? (expense.amount / 100).toFixed(2) : '',
+            gstDollars: expense.gst > 0 ? (expense.gst / 100).toFixed(2) : '',
+            category: expense.category,
+            vendor: expense.vendor ?? '',
+            // The sync reference is metadata, not prose — hidden from
+            // the human and re-attached on save (lib/expense-ref).
+            description: splitExternalRef(expense.description).text,
+            projectId: expense.projectId ?? '',
+          }}
+        />
+      ) : (
         (isOwner || canSeeAll) && (
-          <DraftEditForm
-            expenseId={expense.id}
-            initial={{
-              dateIso: expense.date.toISOString().slice(0, 10),
-              amountDollars:
-                expense.amount > 0 ? (expense.amount / 100).toFixed(2) : '',
-              gstDollars: expense.gst > 0 ? (expense.gst / 100).toFixed(2) : '',
-              category: expense.category,
-              vendor: expense.vendor ?? '',
-              description: expense.description ?? '',
-            }}
-          />
-        )}
+          <p className="rounded-lg border border-line bg-surface-subtle/40 p-3 text-xs text-ink-3">
+            {editGate.message}
+          </p>
+        )
+      )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Card>
@@ -258,7 +299,11 @@ export default async function ExpenseDetailPage({
           <CardContent className="space-y-2 text-sm">
             {expense.description && (
               <Row label="Description">
-                <p className="whitespace-pre-wrap text-ink-2">{expense.description}</p>
+                {/* Sync reference stripped — it is a dedupe key, not prose,
+                    and the edit panel hides it for the same reason. */}
+                <p className="whitespace-pre-wrap text-ink-2">
+                  {splitExternalRef(expense.description).text || expense.description}
+                </p>
               </Row>
             )}
             {expense.receiptSharepointUrl && (
