@@ -14,6 +14,13 @@ import { nextInvoiceNumber } from '@/server/invoices';
 const LineSchema = z.object({
   label: z.string().trim().min(1).max(200),
   amountDollars: z.coerce.number().min(0).max(10_000_000),
+  // Optional per-line project override (Option C, feedback #12B). '' → null
+  // (line belongs to the invoice's primary project). Validated against the
+  // header project's client below.
+  projectId: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : null)),
 });
 
 const InvoiceCreateSchema = z
@@ -46,8 +53,13 @@ export async function createInvoice(
 
   const labels = formData.getAll('lineLabel').map(String);
   const amounts = formData.getAll('lineAmount').map(String);
+  const lineProjectIds = formData.getAll('lineProjectId').map(String);
   const lines = labels
-    .map((label, i) => ({ label, amountDollars: amounts[i] ?? '0' }))
+    .map((label, i) => ({
+      label,
+      amountDollars: amounts[i] ?? '0',
+      projectId: lineProjectIds[i] ?? '',
+    }))
     .filter((l) => l.label.trim().length > 0);
 
   const parsed = InvoiceCreateSchema.safeParse({
@@ -71,6 +83,40 @@ export async function createInvoice(
     select: { id: true, code: true, clientId: true },
   });
   if (!project) return { status: 'error', message: 'Project not found' };
+
+  // Validate per-line project overrides (Option C): every referenced
+  // project must exist, be non-archived, and belong to the SAME client as
+  // the invoice — cross-client billing on one invoice is never allowed.
+  const lineProjectIdSet = Array.from(
+    new Set(data.lines.map((l) => l.projectId).filter((id): id is string => !!id)),
+  );
+  if (lineProjectIdSet.length > 0) {
+    const lineProjects = await prisma.project.findMany({
+      where: { id: { in: lineProjectIdSet } },
+      select: { id: true, code: true, clientId: true, stage: true },
+    });
+    const foundIds = new Set(lineProjects.map((p) => p.id));
+    const missing = lineProjectIdSet.filter((id) => !foundIds.has(id));
+    if (missing.length > 0) {
+      return { status: 'error', message: 'A line references a project that no longer exists.' };
+    }
+    const wrongClient = lineProjects.filter((p) => p.clientId !== project.clientId);
+    if (wrongClient.length > 0) {
+      return {
+        status: 'error',
+        message: `Line projects must belong to the same client as the invoice (${wrongClient
+          .map((p) => p.code)
+          .join(', ')} don't).`,
+      };
+    }
+    const archived = lineProjects.filter((p) => p.stage === 'archived');
+    if (archived.length > 0) {
+      return {
+        status: 'error',
+        message: `Can't bill against archived projects (${archived.map((p) => p.code).join(', ')}).`,
+      };
+    }
+  }
 
   const amountExGstCents = data.lines.reduce(
     (s, l) => s + Math.round(l.amountDollars * 100),
@@ -100,6 +146,7 @@ export async function createInvoice(
             create: data.lines.map((l) => ({
               label: l.label,
               amount: Math.round(l.amountDollars * 100),
+              projectId: l.projectId ?? null,
             })),
           },
         },
@@ -143,6 +190,9 @@ export async function createInvoice(
             amountTotal: amountTotalCents,
             status: nextStatus,
             projectId: project.id,
+            // Sibling projects this invoice bills across (Option C); empty
+            // for a normal single-project invoice.
+            crossProjectLineProjectIds: lineProjectIdSet,
           },
         },
         source: 'web',
