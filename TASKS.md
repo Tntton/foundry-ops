@@ -2374,18 +2374,25 @@ A third, smaller one: a refused day was silently `continue`d. The user typed a n
 **note:** no migration — `TimesheetPeriod.state` already existed. Not exercised in a browser: the local DB credentials are stale (memory `foundry_local_db_unreachable`), so this is typecheck, lint and 18 unit tests only.
 
 ### TASK-524 — Open the timesheet on the earliest week that still needs input
-**status:** todo
+**status:** done
 
 **Gap (TT, 2026-10-30):** `/timesheet` opens on the current week, always. Someone two weeks behind has to notice that, then click Previous twice. The week that needs attention is the oldest incomplete one, not today's.
 
 **acceptance:**
-- [ ] `findEarliestWeekNeedingInput(personId, today)` in `server/timesheet.ts`. A week needs input when it holds at least one PAST weekday (Mon–Fri, strictly before today) with no hours — the same rule `preflightLodgeMonth` uses for `zero_hour_weekdays`.
-- [ ] Bounded below by: the person's `startDate`, the end of the most recent `approved` / `invoiced` period (nothing there can be filled in anyway — TASK-523), and a hard lookback cap.
-- [ ] Used only when no `?week=` is given and the view is `week`; an explicit week always wins, so Prev/Next and every link in the app still land where they say.
-- [ ] Applies to the person being viewed, so a manager on the person-picker sees their backlog too.
-- [ ] A banner when the landed week is not the current one, saying why, with a link to this week. Landing silently two weeks back would read as a bug.
-- [ ] Tests: the week-needs-input rule (fully logged, partly logged, weekend-only gap, today and future days ignored), each lower bound, and the fallback to the current week when nothing is outstanding.
-- [ ] Commit: `feat(TASK-524): open the timesheet on the earliest week needing input`
+- [x] `findEarliestWeekNeedingInput(personId, today)` in `server/timesheet.ts`. A week needs input when it holds at least one PAST weekday (Mon–Fri, strictly before today) with no hours — the same rule `preflightLodgeMonth` uses for `zero_hour_weekdays`.
+- [x] Bounded below by the person's `startDate` and an 8-week lookback cap (`MAX_BACKFILL_LOOKBACK_WEEKS`). Someone three months behind wants the nudge and a current week they can work in, not to be dropped into August.
+- [x] Days inside an `approved` / `invoiced` month are SKIPPED rather than used as a floor (TASK-523 locked them, so an empty one is not a gap anyone can act on). Skipping instead of flooring is what makes a week straddling the boundary judge itself on its open days — the week of Mon 28 Sep with September invoiced still owes Thu 1 and Fri 2 Oct.
+- [x] Used only when no `?week=` is given and the view is `week`; an explicit week always wins, so Prev / Next and every link in the app still land where they say. Month and quarter are period pickers — dropping someone into August there would fight the lodgement flow.
+- [x] Applies to the person being viewed, so a manager on the person-picker sees their backlog too.
+- [x] Banner when the landed week is not the current one — which week, how many days are missing, whether the scan was capped — with a "Go to this week" button.
+- [x] "Now" in the toolbar made explicit (`?week=<this monday>`). It was a bare `/timesheet`, which now resolves to the backfill week — the opposite of what the button says.
+- [x] Tests: `src/__tests__/timesheet-earliest-week.test.ts` — fully logged, partly logged, weekend-only gap, today and future days ignored, each lower bound, the closed-month skip, the straddling week, a person who started this week, a missing person, and the fallback to the current week.
+- [x] Commit: `feat(TASK-524): open the timesheet on the earliest week needing input`
+
+**note:** not exercised in a browser — the local DB credentials are stale (memory `foundry_local_db_unreachable`), so this is typecheck, lint and 13 unit tests only.
+
+### Third part of the ask — already shipped
+The "just make available the projects open from the previous timesheet/week … rather than having every allocated project" half of TT's 2026-10-30 message is TASK-513, which landed on 2026-10-23. `getRangeForPerson` opens a sheet on the projects worked in the PREVIOUS period, falling back to allocations only when nothing was logged then (a new starter, or someone back from leave, who would otherwise get an empty grid and have to hunt through the picker). A project you stop logging to drops off by itself, because a zero-hour row leaves no `TimesheetEntry` behind. Re-adding one is the "— Add project row —" picker, which offers every active and archived project, not just allocations. Verified against the existing tests in `timesheet-carry-forward.test.ts`; TASK-525 closes the one gap the wording exposed.
 
 ---
 
