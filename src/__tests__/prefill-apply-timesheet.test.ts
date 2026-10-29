@@ -26,7 +26,13 @@ const blankRow = (
   projectStage: stage,
   description: '',
   status: 'draft',
-  cells: cells.map((date) => ({ date, hours: 0, status: null, billed: false })),
+  cells: cells.map((date) => ({
+    date,
+    hours: 0,
+    status: null,
+    billed: false,
+    periodLock: null,
+  })),
 });
 
 describe('applyTimesheetPrefill', () => {

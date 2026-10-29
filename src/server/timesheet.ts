@@ -13,7 +13,9 @@ import {
   quarterMonths,
   startOfMonth,
   startOfQuarter,
+  startOfWeek,
 } from '@/lib/week';
+import type { PeriodLock } from '@/lib/timesheet-lock';
 
 /**
  * What the UI shows for an entry. Wider than the DB enum: `billed` is a
@@ -61,6 +63,175 @@ export function toDisplayStatus(
   return e.status === 'approved' && e.billedInvoiceId !== null ? 'billed' : e.status;
 }
 
+/** `YYYY-MM` for a date, the key `getPeriodLocksForRange` returns. */
+function monthKey(d: Date): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * Lodgement state for every month a date range touches, keyed `YYYY-MM`.
+ *
+ * Only `approved` and `invoiced` come back. `open` and `lodged` months stay
+ * editable — lodging is a submission, not a close — so carrying them would
+ * only add rows the caller has to ignore.
+ *
+ * This is the lock an entry-level check cannot see. `saveTimesheet` guarded
+ * the status of an EXISTING entry, so a day in an already-invoiced month that
+ * held no entry at all accepted brand-new hours: there was no row to refuse
+ * (TASK-523). Those hours then sat outside the invoice that was supposed to
+ * contain the month.
+ */
+export async function getPeriodLocksForRange(
+  personId: string,
+  rangeStart: Date,
+  rangeEnd: Date,
+): Promise<Map<string, 'approved' | 'invoiced'>> {
+  const months: Array<{ year: number; month: number }> = [];
+  for (
+    let cursor = startOfMonth(rangeStart);
+    cursor < rangeEnd;
+    cursor = addMonths(cursor, 1)
+  ) {
+    months.push({ year: cursor.getUTCFullYear(), month: monthNumber(cursor) });
+  }
+  if (months.length === 0) return new Map();
+  const periods = await prisma.timesheetPeriod.findMany({
+    where: { personId, OR: months, state: { in: ['approved', 'invoiced'] } },
+    select: { year: true, month: true, state: true },
+  });
+  const out = new Map<string, 'approved' | 'invoiced'>();
+  for (const p of periods) {
+    out.set(
+      `${p.year}-${String(p.month).padStart(2, '0')}`,
+      p.state as 'approved' | 'invoiced',
+    );
+  }
+  return out;
+}
+
+/** The month lock covering a single day, for `isCellEditable`. */
+export function periodLockFor(
+  locks: Map<string, 'approved' | 'invoiced'>,
+  date: Date,
+): PeriodLock {
+  return locks.get(monthKey(date)) ?? null;
+}
+
+/**
+ * How far back the "earliest week needing input" scan will look.
+ *
+ * Someone three months behind does not want to be dropped into August with
+ * no explanation; they want the nudge and a current week they can work in.
+ * The cap bounds the scan, and the banner says which week it landed on.
+ */
+export const MAX_BACKFILL_LOOKBACK_WEEKS = 8;
+
+export type EarliestWeekNeedingInput = {
+  /** Monday of the week to open on. The current week when nothing is owed. */
+  weekStart: Date;
+  /** Past weekdays in that week with no hours. 0 when nothing is owed. */
+  missingDayCount: number;
+  /** True when the scan hit the lookback cap — there may be older gaps. */
+  cappedAtLookback: boolean;
+};
+
+/**
+ * The oldest week this person still owes hours for.
+ *
+ * `/timesheet` used to open on the current week, always. Someone two weeks
+ * behind had to notice that for themselves and then click Previous twice —
+ * and the week that wants attention is the oldest incomplete one, not
+ * today's (TT, 2026-10-30).
+ *
+ * A week needs input when it holds at least one PAST weekday with no hours.
+ * Same rule as `preflightLodgeMonth`'s `zero_hour_weekdays`:
+ *
+ *   - Mon–Fri only. A contractor working a Saturday is not the common case,
+ *     and treating an empty Sunday as a gap would mean every week qualifies.
+ *   - strictly before today. Today is still being worked, and nagging about
+ *     a day that has not happened is how people learn to ignore a banner.
+ *
+ * Three lower bounds, whichever is latest: the person's start date, the
+ * lookback cap, and anything inside a closed month — days in an `approved`
+ * or `invoiced` month are skipped rather than bounding the scan, so a week
+ * straddling the boundary is still judged on the days that are open
+ * (TASK-523).
+ */
+export async function findEarliestWeekNeedingInput(
+  personId: string,
+  today: Date,
+  opts: { maxLookbackWeeks?: number } = {},
+): Promise<EarliestWeekNeedingInput> {
+  const currentWeek = startOfWeek(today);
+  const lookback = opts.maxLookbackWeeks ?? MAX_BACKFILL_LOOKBACK_WEEKS;
+  const capFloor = addDays(currentWeek, -7 * lookback);
+
+  const person = await prisma.person.findUnique({
+    where: { id: personId },
+    select: { startDate: true },
+  });
+  // No person, no backlog to compute — the caller still gets a usable week.
+  if (!person) {
+    return { weekStart: currentWeek, missingDayCount: 0, cappedAtLookback: false };
+  }
+  const startFloor = startOfWeek(person.startDate);
+  const floor = capFloor > startFloor ? capFloor : startFloor;
+  const cappedAtLookback = capFloor > startFloor;
+  if (floor >= currentWeek) {
+    return { weekStart: currentWeek, missingDayCount: 0, cappedAtLookback: false };
+  }
+
+  const scanEnd = addDays(currentWeek, 7);
+  const [worked, periodLocks] = await Promise.all([
+    prisma.timesheetEntry.findMany({
+      where: { personId, date: { gte: floor, lt: scanEnd }, hours: { gt: 0 } },
+      select: { date: true },
+      distinct: ['date'],
+    }),
+    getPeriodLocksForRange(personId, floor, scanEnd),
+  ]);
+  const workedDays = new Set(
+    worked.map((e) => e.date.toISOString().slice(0, 10)),
+  );
+
+  for (let week = floor; week < currentWeek; week = addDays(week, 7)) {
+    const missing = countMissingWeekdays(week, today, workedDays, periodLocks);
+    if (missing > 0) {
+      return { weekStart: week, missingDayCount: missing, cappedAtLookback };
+    }
+  }
+  // Nothing outstanding behind us. The current week may still have gaps, but
+  // it is where the person was going anyway, so it is not a redirect.
+  return {
+    weekStart: currentWeek,
+    missingDayCount: countMissingWeekdays(currentWeek, today, workedDays, periodLocks),
+    // Still true if the cap bound the scan — nothing is owed in the window
+    // we looked at, which is not the same as nothing being owed at all.
+    cappedAtLookback,
+  };
+}
+
+/** Past Mon–Fri days in `weekStart`'s week with no hours and no month lock. */
+function countMissingWeekdays(
+  weekStart: Date,
+  today: Date,
+  workedDays: ReadonlySet<string>,
+  periodLocks: Map<string, 'approved' | 'invoiced'>,
+): number {
+  let missing = 0;
+  for (let i = 0; i < 7; i += 1) {
+    const d = addDays(weekStart, i);
+    const dow = d.getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    if (d >= today) continue;
+    // A closed month cannot be filled in, so an empty day in one is not a
+    // gap anyone can act on.
+    if (periodLockFor(periodLocks, d) !== null) continue;
+    if (!workedDays.has(d.toISOString().slice(0, 10))) missing += 1;
+  }
+  return missing;
+}
+
 export type TimesheetCell = {
   date: Date;
   hours: number;
@@ -82,6 +253,13 @@ export type TimesheetCell = {
    * can still edit an approved hour, but not one that is on a document.
    */
   billed: boolean;
+  /**
+   * Lodgement state of the month this day sits in, when it has moved past
+   * `open` / `lodged`. An `invoiced` month is locked for everyone, EMPTY days
+   * included — otherwise new hours land in a month whose invoice has already
+   * gone out (TASK-523).
+   */
+  periodLock: PeriodLock;
 };
 
 export type TimesheetRow = {
@@ -163,7 +341,7 @@ async function getRangeForPerson(
     project: { select: { id: true, code: true, name: true, stage: true } },
   } as const;
 
-  const [entries, assignments, previousEntries] = await Promise.all([
+  const [entries, assignments, previousEntries, periodLocks] = await Promise.all([
     prisma.timesheetEntry.findMany({
       where: {
         personId,
@@ -183,6 +361,14 @@ async function getRangeForPerson(
           where: {
             personId,
             date: { gte: carryForward.start, lt: carryForward.end },
+            // "projects … open from the previous week — if projects were
+            // removed or have no hours [they] need to be added on" (TT,
+            // 2026-10-30). The save never leaves a 0-hour row behind and the
+            // CSV importer skips one, so this is belt-and-braces against an
+            // imported or legacy row — but the rule is what TT asked for, so
+            // it belongs in the query rather than in a comment about why it
+            // can't happen.
+            hours: { gt: 0 },
             // Don't carry a project that has since been archived — logging
             // to a wrapped engagement should be a deliberate act via the
             // add-row picker, not something the sheet suggests.
@@ -192,6 +378,7 @@ async function getRangeForPerson(
           distinct: ['projectId'],
         })
       : Promise.resolve([]),
+    getPeriodLocksForRange(personId, rangeStart, rangeEnd),
   ]);
 
   type ProjectMini = {
@@ -233,6 +420,9 @@ async function getRangeForPerson(
           hours: entry ? Number(entry.hours) : 0,
           status: entry ? toDisplayStatus(entry) : null,
           billed: entry ? isBilledEitherLeg(entry) : false,
+          // Set even on an empty day — that is the whole point of the
+          // month-level lock (TASK-523).
+          periodLock: periodLockFor(periodLocks, date),
         };
       });
       const description =

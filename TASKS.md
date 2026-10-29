@@ -2343,6 +2343,69 @@ Verified: 12 unit tests against a mocked Prisma, covering the allocated / declar
 
 **correction to the note above (2026-10-23).** The claim that a second app registration is *forced* was specific to the legacy `ApplicationAccessPolicy` mechanism, which does bundle Mail, Calendars and Contacts per app. Under RBAC for Applications — the supported replacement — `Calendars.Read` can be scoped independently of `Mail.Read` on one registration. The second registration is still the right move here, for a weaker reason: it avoids migrating the live AP-intake mail policy off AAP as a precondition. `getCalendarToken()` falling back to the shared credentials means consolidating later costs nothing in code.
 
+## Phase 9 — Timesheet locking and period entry (TT, 2026-10-30)
+
+**The ask, verbatim:** "timesheets that have been approved and invoiced need to be locked. Also the first timesheet seen when opening that tab should the be the earliest week that requires input. On timesheets, just make available the projects open from the previous timesheet/week - if projects were removed or have no hours need to be added on into the timesheet (rather than having every allocated project)"
+
+Three parts. The third already shipped as TASK-513 (carry the previous period's projects forward) plus the add-row picker, so it needs no work — see the note under TASK-524.
+
+### TASK-523 — Lock an approved-and-invoiced timesheet on the server, not just in the grid
+**status:** done
+
+**Gap (TT, 2026-10-30):** the grid has refused a billed day for everyone since TASK-514, but `saveTimesheet` never agreed with it. Two holes, both on the write side:
+
+1. **A super admin could rewrite a billed hour.** The update guard was `existing.status === 'approved'` with a super-admin bypass, and billed hours are `approved`, so the bypass covered them. The DELETE path two lines above it guarded `isBilledEitherLeg`, the UPDATE path did not — a super admin could not zero an invoiced day but could change it from 8h to 2h.
+2. **An invoiced month accepted brand-new hours.** Every guard keyed off an EXISTING entry, so a day with nothing logged had nothing to refuse. The month's invoice had already gone out and the new hours landed outside it. No entry-level check can see this; it needs the `TimesheetPeriod` state.
+
+A third, smaller one: a refused day was silently `continue`d. The user typed a number, the save said it worked, and the figure reverted on the next render.
+
+**acceptance:**
+- [x] `PeriodLock` (`approved` | `invoiced` | null) on `LockableCell`, folded into the one `isCellEditable` rule: invoiced → locked for everyone, empty days included; approved → super admin only; open / lodged → untouched. Lodging is a submission, not a close, so it never locks.
+- [x] `getPeriodLocksForRange(personId, start, end)` + `periodLockFor(locks, date)` in `server/timesheet.ts`. Enumerates the months a range touches, so a week straddling a boundary reads both.
+- [x] `saveTimesheet` calls `isCellEditable` instead of its own guard — one rule, so a day that renders locked is a day the save refuses. Evaluated before the zero-hours branch: deleting an hour out of an invoiced month is the same mutation as rewriting one.
+- [x] `cellLockKind()` names the reason, document lock ahead of month lock (voiding the document is what unblocks it).
+- [x] Refusals are reported, not dropped: `N locked days were left unchanged (…) — why`, and `status: 'error'` when the save changed nothing at all. Only days whose value actually differs count — the grid posts a hidden field carrying the stored hours for every locked day, so otherwise every ordinary save of a week containing one would carry a warning.
+- [x] `refusedCells` on the AuditEvent delta.
+- [x] Grid: `cellLocked` is now `!cellOpen` rather than `!cellOpen && status is approved/billed` — an EMPTY day in an invoiced month used to render an open input the server then ignored. Month-lock banner above the grid, add-row picker replaced by a "Locked" note when nothing in the range can be typed into, legend names the month lock.
+- [x] `cellPeriodLocks` (one per day index, same for every row) passed to the grid and the assistant prefill, so a row built in the BROWSER carries the lock too.
+- [x] Tests: `src/__tests__/timesheet-period-lock.test.ts` — the pure rule per status × role × period state, the month enumeration incl. straddle and year rollover, and the save guard over both billing legs, the empty-invoiced-month case, the no-op case and the audit delta.
+- [x] Commit: `feat(TASK-523): lock billed hours and closed months on the server`
+
+**note:** no migration — `TimesheetPeriod.state` already existed. Not exercised in a browser: the local DB credentials are stale (memory `foundry_local_db_unreachable`), so this is typecheck, lint and 18 unit tests only.
+
+### TASK-524 — Open the timesheet on the earliest week that still needs input
+**status:** done
+
+**Gap (TT, 2026-10-30):** `/timesheet` opens on the current week, always. Someone two weeks behind has to notice that, then click Previous twice. The week that needs attention is the oldest incomplete one, not today's.
+
+**acceptance:**
+- [x] `findEarliestWeekNeedingInput(personId, today)` in `server/timesheet.ts`. A week needs input when it holds at least one PAST weekday (Mon–Fri, strictly before today) with no hours — the same rule `preflightLodgeMonth` uses for `zero_hour_weekdays`.
+- [x] Bounded below by the person's `startDate` and an 8-week lookback cap (`MAX_BACKFILL_LOOKBACK_WEEKS`). Someone three months behind wants the nudge and a current week they can work in, not to be dropped into August.
+- [x] Days inside an `approved` / `invoiced` month are SKIPPED rather than used as a floor (TASK-523 locked them, so an empty one is not a gap anyone can act on). Skipping instead of flooring is what makes a week straddling the boundary judge itself on its open days — the week of Mon 28 Sep with September invoiced still owes Thu 1 and Fri 2 Oct.
+- [x] Used only when no `?week=` is given and the view is `week`; an explicit week always wins, so Prev / Next and every link in the app still land where they say. Month and quarter are period pickers — dropping someone into August there would fight the lodgement flow.
+- [x] Applies to the person being viewed, so a manager on the person-picker sees their backlog too.
+- [x] Banner when the landed week is not the current one — which week, how many days are missing, whether the scan was capped — with a "Go to this week" button.
+- [x] "Now" in the toolbar made explicit (`?week=<this monday>`). It was a bare `/timesheet`, which now resolves to the backfill week — the opposite of what the button says.
+- [x] Tests: `src/__tests__/timesheet-earliest-week.test.ts` — fully logged, partly logged, weekend-only gap, today and future days ignored, each lower bound, the closed-month skip, the straddling week, a person who started this week, a missing person, and the fallback to the current week.
+- [x] Commit: `feat(TASK-524): open the timesheet on the earliest week needing input`
+
+**note:** not exercised in a browser — the local DB credentials are stale (memory `foundry_local_db_unreachable`), so this is typecheck, lint and 13 unit tests only.
+
+### Third part of the ask — already shipped
+The "just make available the projects open from the previous timesheet/week … rather than having every allocated project" half of TT's 2026-10-30 message is TASK-513, which landed on 2026-10-23. `getRangeForPerson` opens a sheet on the projects worked in the PREVIOUS period, falling back to allocations only when nothing was logged then (a new starter, or someone back from leave, who would otherwise get an empty grid and have to hunt through the picker). A project you stop logging to drops off by itself, because a zero-hour row leaves no `TimesheetEntry` behind. Re-adding one is the "— Add project row —" picker, which offers every active and archived project, not just allocations. Verified against the existing tests in `timesheet-carry-forward.test.ts`; TASK-525 closes the one gap the wording exposed.
+
+### TASK-525 — A 0-hour row doesn't carry to next week
+**status:** done
+
+**Gap (TT, 2026-10-30):** "if projects were removed **or have no hours**" — the carry-forward query filtered on archived projects and the date range, but not on hours, so a row logged at 0 would come back next week as a project to fill in.
+
+**acceptance:**
+- [x] `hours: { gt: 0 }` on the carry-forward read in `getRangeForPerson`.
+- [x] Test in `timesheet-carry-forward.test.ts`.
+- [x] Commit: `fix(TASK-525): don't carry a 0-hour row into next week`
+
+**note:** belt-and-braces in practice — `saveTimesheet` deletes rather than writing a 0-hour row, and the CSV importer skips `hours = 0` — so this guards an imported or legacy row. Put in the query anyway, because it is the rule TT asked for rather than a fact about today's writers.
+
 ---
 
 *End of TASKS.md. Start with TASK-001.*

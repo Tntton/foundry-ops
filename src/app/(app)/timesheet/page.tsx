@@ -13,11 +13,16 @@ import {
   getHourlyUtilisationForWeek,
   getApprovalHistoryForPerson,
   getQuarterSummaryForPerson,
+  getPeriodLocksForRange,
+  periodLockFor,
+  findEarliestWeekNeedingInput,
+  MAX_BACKFILL_LOOKBACK_WEEKS,
 } from '@/server/timesheet';
 import { prisma } from '@/server/db';
 import {
   addDays,
   addQuarters,
+  formatDayLabel,
   formatIsoDate,
   addMonths,
   formatMonthLabel,
@@ -175,7 +180,21 @@ export default async function TimesheetPage({
     }
   }
 
-  const anchor = parseIsoDate(searchParams.week);
+  // Where the tab opens when nothing in the URL says otherwise: the OLDEST
+  // week this person still owes hours for, not the current one (TASK-524).
+  // Someone two weeks behind had to notice that for themselves and click
+  // Previous twice. An explicit `?week=` always wins, so Prev / Next and
+  // every link in the app still land exactly where they say — this only
+  // decides the bare `/timesheet` case, and only in week view (month and
+  // quarter are period pickers; dropping someone into August there would
+  // fight the lodgement flow).
+  const backfill =
+    !searchParams.week && view === 'week'
+      ? await findEarliestWeekNeedingInput(target.id, todayInFirmTz())
+      : null;
+  const anchor = backfill
+    ? backfill.weekStart
+    : parseIsoDate(searchParams.week);
   // Month view is a REAL calendar month (28–31 days), not the old rolling
   // 28-day block — a lodgement period has to be nameable ("August") or a
   // contractor can't invoice for it (TASK-501). Quarter follows the calendar
@@ -241,6 +260,23 @@ export default async function TimesheetPage({
         : await getWeekForPerson(target.id, blockStart);
   const quarterSummary =
     view === 'quarter' ? await getQuarterSummaryForPerson(target.id, blockStart) : null;
+
+  // Month lock per day index, for the rows the BROWSER builds (add-row,
+  // copy-last-week, assistant prefill). The rows the server sends already
+  // carry it per cell; a row added client-side has no entry to read it from,
+  // and without this an invoiced month renders open inputs on its empty days
+  // (TASK-523).
+  const cellPeriodLocks =
+    cells.length === 0
+      ? []
+      : await (async () => {
+          const locks = await getPeriodLocksForRange(
+            target.id,
+            blockStart,
+            addDays(blockStart, cells.length),
+          );
+          return cells.map((d) => periodLockFor(locks, d));
+        })();
 
   // Previous week's rows feed the "Copy last week" quick action (week
   // view only) — a repeat week becomes two clicks instead of five
@@ -334,7 +370,13 @@ export default async function TimesheetPage({
     if (verify.ok) {
       const payloadCheck = TimesheetPrefillSchema.safeParse(verify.payload.payload);
       if (payloadCheck.success) {
-        const result = applyTimesheetPrefill(rows, payloadCheck.data, cells, allProjects);
+        const result = applyTimesheetPrefill(
+          rows,
+          payloadCheck.data,
+          cells,
+          allProjects,
+          cellPeriodLocks,
+        );
         enrichedRows = result.rows;
         prefillIgnored = result.ignored.length > 0 ? result.ignored : undefined;
         const appliedSummary = result.applied
@@ -532,8 +574,13 @@ export default async function TimesheetPage({
           <Button asChild variant="outline" size="sm">
             <Link href={buildLink({ week: prev })}>← Previous</Link>
           </Button>
+          {/* Explicit, not a bare `/timesheet` — that URL resolves to the
+              earliest week needing input, which is the opposite of "Now"
+              (TASK-524). */}
           <Button asChild variant="ghost" size="sm">
-            <Link href={buildLink({})}>Now</Link>
+            <Link href={buildLink({ week: formatIsoDate(currentWeekStart) })}>
+              Now
+            </Link>
           </Button>
           <Button asChild variant="outline" size="sm">
             <Link href={buildLink({ week: next })}>Next →</Link>
@@ -563,6 +610,28 @@ export default async function TimesheetPage({
           )}
         </div>
       </header>
+
+      {/* Landing silently two weeks back would read as a bug. Say which
+          week this is, why, and give a one-click way out (TASK-524). */}
+      {backfill && backfill.weekStart < currentWeekStart && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-status-amber/40 bg-status-amber-soft/40 px-3 py-2 text-xs text-status-amber">
+          <span>
+            Opened on <strong>w/c {formatDayLabel(backfill.weekStart)}</strong>{' '}
+            — the earliest week still missing hours ({backfill.missingDayCount}{' '}
+            weekday{backfill.missingDayCount === 1 ? '' : 's'} with nothing
+            logged
+            {backfill.cappedAtLookback
+              ? `, searching back ${MAX_BACKFILL_LOOKBACK_WEEKS} weeks`
+              : ''}
+            ).
+          </span>
+          <Button asChild variant="outline" size="sm">
+            <Link href={buildLink({ week: formatIsoDate(currentWeekStart) })}>
+              Go to this week
+            </Link>
+          </Button>
+        </div>
+      )}
 
       {view === 'quarter' && quarterSummary ? (
         <>
@@ -677,6 +746,7 @@ export default async function TimesheetPage({
             isSuperAdmin={isSuperAdmin}
             hourlyRateCents={hourlyRateCents}
             lastWeekRows={lastWeekRows}
+            cellPeriodLocks={cellPeriodLocks}
           />
         </>
       )}

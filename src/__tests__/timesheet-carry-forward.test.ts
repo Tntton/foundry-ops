@@ -15,6 +15,8 @@ import { monthStartFrom } from '@/lib/week';
 const db = vi.hoisted(() => ({
   timesheetEntry: { findMany: vi.fn() },
   projectTeam: { findMany: vi.fn() },
+  // Month-level lock lookup (TASK-523). Empty = every month still open.
+  timesheetPeriod: { findMany: vi.fn() },
 }));
 vi.mock('@/server/db', () => ({ prisma: db }));
 
@@ -47,6 +49,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   db.timesheetEntry.findMany.mockResolvedValue([]);
   db.projectTeam.findMany.mockResolvedValue([]);
+  db.timesheetPeriod.findMany.mockResolvedValue([]);
 });
 
 /** getRangeForPerson fires [current entries, allocations, previous entries]. */
@@ -95,6 +98,19 @@ describe('week view carries the previous week forward', () => {
     const rows = await getWeekForPerson('p1-person', WEEK);
 
     expect(rows.map((r) => r.projectCode).sort()).toEqual(['CAC002', 'NEW001']);
+  });
+
+  it('never carries a project that was logged with no hours', async () => {
+    // TT, 2026-10-30: "if projects were removed or have no hours [they] need
+    // to be added on into the timesheet". A 0-hour row is a project you
+    // didn't work on, so it should not be waiting for you next week.
+    mockReads({ previous: [entry('p2', 'CAC002', '2026-10-15')] });
+
+    await getWeekForPerson('p1-person', WEEK);
+
+    expect(db.timesheetEntry.findMany.mock.calls[1]![0].where.hours).toEqual({
+      gt: 0,
+    });
   });
 
   it('never carries a project that has since been archived', async () => {
